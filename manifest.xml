@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Manifest>
+  <ID>allow_unbind_key</ID>
+  <Name>允许绑定空按键 / Allow Unbind Key</Name>
+  <Author>Antigravity</Author>
+  <ModVersion>1.1.0</ModVersion>
+  <Description>解除按键绑定限制，允许将按键设为空/清除绑定。不仅支持原版设置界面，还全面兼容多吉改键器（Duoji Hotkey Manager）及各类工坊模组设置面板。在等待输入时按下 Backspace（退格键）或 Delete 键即可设为“无/None”，并修复多个空按键并存时的冲突误报 Bug。</Description>
+  <GameVersions>
+    <Version>0.46</Version>
+    <Version>0.46D</Version>
+  </GameVersions>
+  <Prerequisites />
+  <Assemblies>
+    <Assembly>AllowUnbindKey.dll</Assembly>
+  </Assemblies>
+  <Capabilities />
+</Manifest>
