@@ -29,6 +29,8 @@ namespace AllowUnbindKey
         {
             try
             {
+                GameOptionRegistry.RemoveBySource("allow_unbind_key");
+                ModCatalogCache.Invalidate();
                 workshopHarmony?.UnpatchAll("allow_unbind_key.workshop");
             }
             catch (Exception ex)
@@ -36,6 +38,47 @@ namespace AllowUnbindKey
                 log?.Warning($"Error unpatching workshop mods: {ex.Message}");
             }
             log?.Log("Disabled.");
+        }
+    }
+
+    // =========================================================================
+    // 0. 全新统一按键与模组设置中心 UI 挂接补丁
+    // =========================================================================
+
+    /// <summary>
+    /// 接管原版游戏设置窗口的打开流程，注入统一设置与改键中心
+    /// </summary>
+    [HarmonyPatch(typeof(GameOptionUIManager), nameof(GameOptionUIManager.OpenUI))]
+    public static class Patch_GameOptionUIManager_OpenUI
+    {
+        public static bool Prefix(GameOptionUIManager __instance)
+        {
+            try
+            {
+                UnifiedOptionUI.OpenEnhancedUI(__instance);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[AllowUnbindKey] Error in enhanced OpenUI, falling back to vanilla: {ex}");
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 驱动模组按键捕获逻辑
+    /// </summary>
+    [HarmonyPatch(typeof(GameOptionUIManager), "Update")]
+    public static class Patch_GameOptionUIManager_Update
+    {
+        public static void Postfix()
+        {
+            try
+            {
+                UnifiedOptionUI.TickCapture();
+            }
+            catch { }
         }
     }
 
