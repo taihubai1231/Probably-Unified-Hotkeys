@@ -6,43 +6,48 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>ProbablyUnifiedHotkeys</AssemblyName>
     <RootNamespace>ProbablyUnifiedHotkeys</RootNamespace>
+    <GameDir Condition="'$(GameDir)' == '' and Exists('..\..\Probably Stolen_Data\Managed\Assembly-CSharp.dll')">..\..</GameDir>
+    <GameDir Condition="'$(GameDir)' == '' and '$(PROBABLY_STOLEN_DIR)' != ''">$(PROBABLY_STOLEN_DIR)</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">E:\Program Files (x86)\steam\steamapps\common\Probably Stolen</GameDir>
+    <DeployToGame Condition="'$(DeployToGame)' == ''">true</DeployToGame>
+    <DeployDir>$(GameDir)\Mods\probably_unified_hotkeys</DeployDir>
   </PropertyGroup>
 
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
-      <HintPath>..\..\Probably Stolen_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="0Harmony">
-      <HintPath>..\..\Probably Stolen_Data\Managed\0Harmony.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\0Harmony.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>..\..\Probably Stolen_Data\Managed\UnityEngine.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\UnityEngine.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>..\..\Probably Stolen_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
-      <HintPath>..\..\Probably Stolen_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>..\..\Probably Stolen_Data\Managed\UnityEngine.UI.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\UnityEngine.UI.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UIModule">
-      <HintPath>..\..\Probably Stolen_Data\Managed\UnityEngine.UIModule.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\UnityEngine.UIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Unity.TextMeshPro">
-      <HintPath>..\..\Probably Stolen_Data\Managed\Unity.TextMeshPro.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\Unity.TextMeshPro.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>..\..\Probably Stolen_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
@@ -51,11 +56,11 @@
     <EmbeddedResource Include="pinyin.bin" />
   </ItemGroup>
 
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="..\..\Mods\probably_unified_hotkeys" />
-    <Copy SourceFiles="manifest.xml" DestinationFolder="..\..\Mods\probably_unified_hotkeys" />
-    <Copy SourceFiles="README.md" DestinationFolder="..\..\Mods\probably_unified_hotkeys" />
-    <Copy SourceFiles="preview.png" DestinationFolder="..\..\Mods\probably_unified_hotkeys" Condition="Exists('preview.png')" />
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(DeployToGame)' == 'true' and Exists('$(GameDir)\Probably Stolen_Data')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DeployDir)" />
+    <Copy SourceFiles="manifest.xml" DestinationFolder="$(DeployDir)" />
+    <Copy SourceFiles="README.md" DestinationFolder="$(DeployDir)" />
+    <Copy SourceFiles="preview.png" DestinationFolder="$(DeployDir)" Condition="Exists('preview.png')" />
   </Target>
 
 </Project>
