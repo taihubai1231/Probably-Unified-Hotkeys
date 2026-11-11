@@ -114,7 +114,13 @@ namespace ProbablyUnifiedHotkeys
                     foreach (var mod in mods)
                     {
                         if (mod?.Manifest == null) continue;
-                        sb.Append(mod.Manifest.ID).Append("@").Append(mod.Manifest.ModVersion).Append(";");
+                        string id = mod.Manifest.ID;
+                        bool enabled = ModLoader.IsModEnabled(id);
+                        ModConfig? cfg = ModConfig.Find(id);
+                        int cfgCount = cfg?.Entries != null ? cfg.Entries.Count : 0;
+                        sb.Append(id).Append("@").Append(mod.Manifest.ModVersion)
+                          .Append(enabled ? ":1:" : ":0:")
+                          .Append(cfgCount).Append(";");
                     }
                 }
 

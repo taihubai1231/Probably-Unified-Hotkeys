@@ -68,7 +68,8 @@
   - `ShowItemNames`（物品名称常显 —— 接管 `Mouse3~Mouse6`、组合键过滤与 `Esc` 设空持久化）
   - `ConflictScanner`（模组冲突检测器 —— 兼容 `Esc` 设空、侧键显示与组合键）
   - `FactionReputationExpansion`（势力声望扩展 —— 放行无绑定与 `Mouse3~Mouse6` 侧键持久化规则、手帐热键组合）
-  - `SmartInventoryArrange`（智能物品整理 —— 捕获面板放行 `Esc` 空键与功能开关聚合展示）
+  - `SmartInventoryArrange`（智能物品整理 —— 捕获面板放行 `Esc` 空键、修复开关误判并完整双向同步 `OpenSettingsHotkey` 等原生 `"Ctrl+X"` 组合热键串与默认值重置）
+  - `SpeedUp`（游戏加速 —— 完整解析并双向读写 `"Alt+Equals"`、`"Ctrl+Home"`、`"Ctrl+F8"` 等 9 组原生组合热键串，支持统一改键、冲突检测与恢复默认）
   - `DuojiHotkeyManager`（多吉改键器 —— 兼容空键显示保存、`Mouse3~Mouse6` 与 `Esc` 清空）
 - **已知官方扫描限制边界**：
   - `RealTimeClock`（现实时钟）：因该模组将 `ClockAlarm` 定义在全局无命名空间下，而游戏官方 `ModScanner` 静态策略会拒绝任何针对外部无点号类型名的反射调用。为保证本模组严格遵守官方安全规范通过加载扫描，已不对其挂载外部反射补丁——`RealTimeClock` 仍可正常在统一中心内管理、绑定单键、`Mouse3~Mouse6`、`Backspace`、`Delete` 与 `Esc` 解绑，唯独其闹钟开窗键若配置修饰组合键，受官方扫描限制暂无法做前提条件门控。
@@ -76,6 +77,17 @@
 ---
 
 ## 📝 更新日志
+
+### v1.4.1
+1. **深度扫描审计与第三方模组兼容性完善**：
+   - 修复 `ModOptionScanner.IsHotkeyEntry` 缺乏值类型约束导致布尔开关（如 `SmartInventoryArrange.ArrangeHotkeyEnabled`、`BetterBottlePrinter.show_keycard`、`Pen_mod_QoL_Tweaks.tab_switch_keys`）与逗号关键词字符串（如 `JacksonShopPages.machine_keywords / module_keywords`）被误判为按键按钮的问题。
+   - 新增原生 `"Ctrl/Shift/Alt+Key"` 组合热键串解析与双向写回（打通 `SpeedUp` 全部 9 组加速热键与 `SmartInventoryArrange` 3 组整理热键的读取、保存、恢复默认与冲突排查），同时保持单键词模组（如 `FactionReputationExpansion`）原有机制不变。
+   - 强化 `ModCatalogCache` 指纹维度，将各模组启用状态（`ModLoader.IsModEnabled`）与 `ModConfig` 条目数纳入缓存指纹，防止开关模组或延迟注册后命中过期目录缓存。
+2. **流畅度与生命周期边界再加固**：
+   - 将按键录入轮询 `TickCapture` 中的 `Enum.GetValues(typeof(KeyCode))` 提取为静态去重键值表 `BindableKeyboardKeys`，消除按帧录入期间的内存分配与重复枚举。
+   - 优化 `PinyinEngine` 全拼小写归一化与搜索词分词去分隔符匹配（修正中英混排全拼命中并加入有界归一化缓存，连续键入匹配耗时降至原先约 1/10），同步修复 `KnownModAdapters` 首轮反射引发程序集延迟加载时的 `epoch` 级联失效（二次开窗零重复全程序集扫描）。
+   - 为 `RefreshConflicts` 增加排序归一化冲突签名比对，并在未发生真实冲突增减时跳过 `[!] 仅看冲突` 视图冗余重建，连续切换视图响应零卡顿。
+   - 为 `FittedFontSizeCache` 增加上限保护（超过 `2,048` 条时自动清理），同时在 `ModEntry` 补挂 `Application.wantsToQuit` 钩子，确保通过 `Alt+F4` 或窗口右上角关闭时也能抢在 `ModLoader.OnApplicationQuit` 前安全保存并跳过冗余 `UnpatchAll`。
 
 ### v1.4.0
 1. **彻底优化「退出游戏」最大卡顿源**：在游戏退出前安全执行各模组 `OnDisable()` 落盘后跳过 `ModLoader.OnApplicationQuit` 触发的 40+ 次同步 `Harmony.UnpatchAll` 动态方法重编译卡顿，并跳过游戏暂停菜单在遥测关闭（`OVERWRITE_DISABLE_ANALYTICS == true`）状态下无意义空等 1 秒的 `QuitWithAnalytics` 协程，点击退出立即收尾。

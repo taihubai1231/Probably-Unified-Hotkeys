@@ -58,12 +58,25 @@ namespace ProbablyUnifiedHotkeys
         public static void TryAdaptKnownMods(List<ModOptionGroup> groups, HashSet<string> handledModIds)
         {
             EnsureAssemblyHook();
+            int entryEpoch = _assemblyEpoch;
             if (!handledModIds.Contains("ShowItemNames")) TryAdaptShowItemNames(groups, handledModIds);
             if (!handledModIds.Contains("conflict_scanner")) TryAdaptConflictScanner(groups, handledModIds);
             if (!handledModIds.Contains("faction_reputation_expansion")) TryAdaptFactionReputation(groups, handledModIds);
             if (!handledModIds.Contains("hollow.clientdemandhighlight")) TryAdaptClientDemandHighlight(groups, handledModIds);
             if (!handledModIds.Contains("Pen_mod_QoL_Tweaks")) TryAdaptPenQoL(groups, handledModIds);
             if (!handledModIds.Contains("smart_inventory_arrange")) TryAdaptSmartInventoryArrange(groups, handledModIds);
+
+            // 若扫描自身触发了框架程序集延迟加载导致 epoch 推进，同步本轮各适配器缓存版本号，避免下次重复扫描
+            int exitEpoch = _assemblyEpoch;
+            if (exitEpoch != entryEpoch)
+            {
+                if (_showItemEpoch >= entryEpoch) _showItemEpoch = exitEpoch;
+                if (_csEpoch >= entryEpoch) _csEpoch = exitEpoch;
+                if (_repEpoch >= entryEpoch) _repEpoch = exitEpoch;
+                if (_demandEpoch >= entryEpoch) _demandEpoch = exitEpoch;
+                if (_penQolEpoch >= entryEpoch) _penQolEpoch = exitEpoch;
+                if (_smartArrangeEpoch >= entryEpoch) _smartArrangeEpoch = exitEpoch;
+            }
         }
 
         // 1. 物品名称常显 (ShowItemNames)
@@ -72,7 +85,6 @@ namespace ProbablyUnifiedHotkeys
             int epoch = _assemblyEpoch;
             if (_showItemEpoch != epoch && _showItemHotkeyProp == null)
             {
-                _showItemEpoch = epoch;
                 Type? settingsType = AccessTools.TypeByName("ShowItemNames.Settings");
                 if (settingsType != null)
                 {
@@ -80,6 +92,7 @@ namespace ProbablyUnifiedHotkeys
                     _showItemSetMethod = AccessTools.Method(settingsType, "SetHotkey", new Type[] { typeof(KeyCode) });
                     _showItemCommitMethod = AccessTools.Method(settingsType, "Commit");
                 }
+                _showItemEpoch = _assemblyEpoch;
             }
 
             PropertyInfo? hotkeyProp = _showItemHotkeyProp;
@@ -133,13 +146,13 @@ namespace ProbablyUnifiedHotkeys
             int epoch = _assemblyEpoch;
             if (_csEpoch != epoch && _csKeyProp == null)
             {
-                _csEpoch = epoch;
                 Type? keybindType = AccessTools.TypeByName("ConflictScanner.Keybind");
                 if (keybindType != null)
                 {
                     _csKeyProp = AccessTools.Property(keybindType, "Key");
                     _csSaveMethod = AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) });
                 }
+                _csEpoch = _assemblyEpoch;
             }
 
             PropertyInfo? keyProp = _csKeyProp;
@@ -192,13 +205,13 @@ namespace ProbablyUnifiedHotkeys
             int epoch = _assemblyEpoch;
             if (_repEpoch != epoch && _repJournalProp == null)
             {
-                _repEpoch = epoch;
                 Type? repModType = AccessTools.TypeByName("FactionReputationExpansion.RepMod");
                 if (repModType != null)
                 {
                     _repJournalProp = AccessTools.Property(repModType, "JournalKey");
                     _repSetJournalMethod = AccessTools.Method(repModType, "SetJournalKey", new Type[] { typeof(KeyCode), typeof(bool) });
                 }
+                _repEpoch = _assemblyEpoch;
             }
 
             PropertyInfo? journalProp = _repJournalProp;
@@ -249,13 +262,13 @@ namespace ProbablyUnifiedHotkeys
             int epoch = _assemblyEpoch;
             if (_demandEpoch != epoch && _demandToggleProp == null && _demandToggleField == null)
             {
-                _demandEpoch = epoch;
                 Type? cfgType = AccessTools.TypeByName("ClientDemandHighlight.Config");
                 if (cfgType != null)
                 {
                     _demandToggleProp = AccessTools.Property(cfgType, "ToggleKey");
                     _demandToggleField = AccessTools.Field(cfgType, "_toggleKey");
                 }
+                _demandEpoch = _assemblyEpoch;
             }
 
             PropertyInfo? toggleProp = _demandToggleProp;
@@ -301,7 +314,6 @@ namespace ProbablyUnifiedHotkeys
             int epoch = _assemblyEpoch;
             if (_penQolEpoch != epoch && PenCachedProps[0] == null)
             {
-                _penQolEpoch = epoch;
                 Type? qolKeys = AccessTools.TypeByName("PenLabelerAssist.QoLKeyBindings");
                 if (qolKeys != null)
                 {
@@ -310,6 +322,7 @@ namespace ProbablyUnifiedHotkeys
                         PenCachedProps[i] = AccessTools.Property(qolKeys, PenPropNames[i]);
                     }
                 }
+                _penQolEpoch = _assemblyEpoch;
             }
 
             bool hasAny = false;
@@ -368,12 +381,12 @@ namespace ProbablyUnifiedHotkeys
             int epoch = _assemblyEpoch;
             if (_smartArrangeEpoch != epoch && _smartArrangeEnabledProp == null)
             {
-                _smartArrangeEpoch = epoch;
                 Type? runtimeType = AccessTools.TypeByName("SmartInventoryArrange.SettingsRuntime");
                 if (runtimeType != null)
                 {
                     _smartArrangeEnabledProp = AccessTools.Property(runtimeType, "ArrangeHotkeyEnabled");
                 }
+                _smartArrangeEpoch = _assemblyEpoch;
             }
 
             PropertyInfo? enabledProp = _smartArrangeEnabledProp;

@@ -23,6 +23,7 @@ namespace ProbablyUnifiedHotkeys
             if (!_quitHookRegistered)
             {
                 _quitHookRegistered = true;
+                Application.wantsToQuit += OnApplicationWantsToQuit;
                 Application.quitting += OnApplicationQuitting;
             }
 
@@ -37,6 +38,13 @@ namespace ProbablyUnifiedHotkeys
         internal static void MarkApplicationQuitting()
         {
             _isApplicationQuitting = true;
+        }
+
+        private static bool OnApplicationWantsToQuit()
+        {
+            _isApplicationQuitting = true;
+            PerformancePatches.PrepareFastQuit();
+            return true;
         }
 
         private static void OnApplicationQuitting()
@@ -68,6 +76,7 @@ namespace ProbablyUnifiedHotkeys
                 if (_quitHookRegistered)
                 {
                     _quitHookRegistered = false;
+                    Application.wantsToQuit -= OnApplicationWantsToQuit;
                     Application.quitting -= OnApplicationQuitting;
                 }
 

@@ -146,7 +146,7 @@ namespace ProbablyUnifiedHotkeys
                 ushort idx = _indices![code - CJK_START];
                 return Syllables[idx];
             }
-            return c.ToString();
+            return char.ToLowerInvariant(c).ToString();
         }
 
         /// <summary>
@@ -166,46 +166,108 @@ namespace ProbablyUnifiedHotkeys
         }
 
         /// <summary>
-        /// 将文本转换为无声调全拼字符串
+        /// 将文本转换为小写无声调全拼字符串（保留并小写化非汉字字符，避免逐字符拆箱分配）
         /// </summary>
         public static string ToFullPinyin(string text)
         {
             if (string.IsNullOrEmpty(text)) return string.Empty;
             EnsureInitialized();
+            ushort[] indices = _indices!;
             var sb = new StringBuilder(text.Length * 4);
             for (int i = 0; i < text.Length; i++)
             {
                 char c = text[i];
                 if (char.IsWhiteSpace(c) || char.IsPunctuation(c)) continue;
-                string py = GetPinyin(c);
-                sb.Append(py);
+                c = MapToSimplified(c);
+                int code = c;
+                if (code >= CJK_START && code <= CJK_END)
+                {
+                    sb.Append(Syllables[indices[code - CJK_START]]);
+                }
+                else
+                {
+                    sb.Append(char.ToLowerInvariant(c));
+                }
             }
             return sb.ToString();
         }
 
+        private static readonly Dictionary<string, (string lower, string initials, string fullPy)> _searchNormCache
+            = new Dictionary<string, (string, string, string)>(512, StringComparer.Ordinal);
+        private static readonly object _searchCacheLock = new object();
+
+        private static string StripSeparators(string text)
+        {
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (char.IsWhiteSpace(text[i]) || char.IsPunctuation(text[i]))
+                {
+                    var sb = new StringBuilder(text.Length);
+                    sb.Append(text, 0, i);
+                    for (int j = i + 1; j < text.Length; j++)
+                    {
+                        char c = text[j];
+                        if (!char.IsWhiteSpace(c) && !char.IsPunctuation(c))
+                        {
+                            sb.Append(c);
+                        }
+                    }
+                    return sb.ToString();
+                }
+            }
+            return text;
+        }
+
+        private static void GetNormalizedSearchForms(string targetText, out string targetLower, out string initials, out string fullPy)
+        {
+            lock (_searchCacheLock)
+            {
+                if (_searchNormCache.TryGetValue(targetText, out var cached))
+                {
+                    targetLower = cached.lower;
+                    initials = cached.initials;
+                    fullPy = cached.fullPy;
+                    return;
+                }
+            }
+
+            string simplified = ToSimplified(targetText);
+            targetLower = simplified.ToLowerInvariant();
+            initials = ToInitials(simplified);
+            fullPy = ToFullPinyin(simplified);
+
+            lock (_searchCacheLock)
+            {
+                if (_searchNormCache.Count >= 4096)
+                {
+                    _searchNormCache.Clear();
+                }
+                _searchNormCache[targetText] = (targetLower, initials, fullPy);
+            }
+        }
+
         /// <summary>
-        /// 综合检索匹配：检查目标文本是否匹配关键词（支持中文包含、英文包含、拼音首字母包含、全拼包含）
+        /// 综合检索匹配：检查目标文本是否匹配关键词（支持繁简中文、英文大小写、拼音首字母与全拼极速命中）
         /// </summary>
         public static bool Matches(string targetText, string query)
         {
             if (string.IsNullOrEmpty(query)) return true;
             if (string.IsNullOrEmpty(targetText)) return false;
 
-            query = ToSimplified(query.Trim()).ToLowerInvariant();
-            targetText = ToSimplified(targetText);
-            if (query.Length == 0) return true;
+            string normQuery = ToSimplified(query.Trim()).ToLowerInvariant();
+            if (normQuery.Length == 0) return true;
 
-            string targetLower = targetText.ToLowerInvariant();
+            GetNormalizedSearchForms(targetText, out string targetLower, out string initials, out string fullPy);
+
             // 1. 直接中英文字符串包含
-            if (targetLower.Contains(query)) return true;
+            if (targetLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0) return true;
 
-            // 2. 拼音首字母缩写匹配 (例如输入 "sp" 匹配 "商品详情")
-            string initials = ToInitials(targetText);
-            if (initials.Contains(query)) return true;
+            // 2. 拼音首字母与全拼包含
+            string compactQuery = StripSeparators(normQuery);
+            if (compactQuery.Length == 0) return true;
 
-            // 3. 全拼匹配 (例如输入 "shangpin" 匹配 "商品")
-            string fullPy = ToFullPinyin(targetText);
-            if (fullPy.Contains(query)) return true;
+            if (initials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0) return true;
+            if (fullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0) return true;
 
             return false;
         }

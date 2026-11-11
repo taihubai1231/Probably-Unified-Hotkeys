@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using HarmonyLib;
 using UnityEngine;
 
@@ -12,9 +13,19 @@ namespace ProbablyUnifiedHotkeys
     /// </summary>
     public static class ModOptionScanner
     {
-        private static readonly HashSet<string> HotkeyKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly HashSet<string> ExactHotkeyTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "Key", "Hotkey", "Shortcut", "Bind", "ToggleKey", "OpenKey", "TriggerKey", "按键", "快捷键", "热键"
+            "Key", "Hotkey", "Shortcut", "Keybind", "Bind", "ToggleKey", "OpenKey", "TriggerKey"
+        };
+
+        private static readonly string[] ChineseHotkeyKeywords =
+        {
+            "按键", "快捷键", "热键", "键位"
+        };
+
+        private static readonly string[] ExcludedNonHotkeyKeywords =
+        {
+            "keyword", "keycard", "key_card", "关键词", "关键字", "门禁卡", "房卡"
         };
 
         private static readonly MethodInfo? ApplyBoxedMethod = AccessTools.Method(typeof(ConfigEntry), "ApplyBoxed", new Type[] { typeof(object) });
@@ -260,7 +271,9 @@ namespace ProbablyUnifiedHotkeys
                     }
                     if (!InitialModifierSnapshots.TryGetValue(hk.Id, out KeyModifierMask initMods))
                     {
-                        initMods = ComboKeyStore.GetSavedModifiers(hk.Id, initKey);
+                        initMods = hk.GetExternalModifiers != null
+                            ? hk.GetExternalModifiers()
+                            : ComboKeyStore.GetSavedModifiers(hk.Id, initKey);
                         InitialModifierSnapshots[hk.Id] = initMods;
                     }
                     hk.SnapshotKey = initKey;
@@ -313,8 +326,16 @@ namespace ProbablyUnifiedHotkeys
                         hk.HasPendingChange = false;
                         hk.PendingModifiers = hk.ResetTargetModifiers;
                         hk.PendingKey = hk.ResetTargetKey;
-                        hk.SetKey?.Invoke(hk.ResetTargetKey);
-                        ComboKeyStore.SetSavedCombo(hk.Id, hk.ResetTargetModifiers, hk.ResetTargetKey);
+                        if (hk.SetCombo != null)
+                        {
+                            hk.SetCombo(hk.ResetTargetModifiers, hk.ResetTargetKey);
+                            ComboKeyStore.SetSavedCombo(hk.Id, KeyModifierMask.None, KeyCode.None);
+                        }
+                        else
+                        {
+                            hk.SetKey?.Invoke(hk.ResetTargetKey);
+                            ComboKeyStore.SetSavedCombo(hk.Id, hk.ResetTargetModifiers, hk.ResetTargetKey);
+                        }
                     }
                     ComboKeyStore.Save();
 
@@ -452,15 +473,26 @@ namespace ProbablyUnifiedHotkeys
             return list;
         }
 
-        private static bool IsHotkeyEntry(ConfigEntry entry)
+        private static bool ContainsNonHotkeyExclusion(string key, string label)
         {
-            if (entry.ValueType == typeof(KeyCode)) return true;
-
-            string key = entry.Key;
-            string label = entry.Label?.Invoke() ?? string.Empty;
-
-            foreach (var kw in HotkeyKeywords)
+            for (int i = 0; i < ExcludedNonHotkeyKeywords.Length; i++)
             {
+                string ex = ExcludedNonHotkeyKeywords[i];
+                if (key.IndexOf(ex, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    label.IndexOf(ex, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool HasHotkeyIdentifier(string key, string label)
+        {
+            // 中文标签关键词检查
+            for (int i = 0; i < ChineseHotkeyKeywords.Length; i++)
+            {
+                string kw = ChineseHotkeyKeywords[i];
                 if (key.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0 ||
                     label.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
@@ -468,36 +500,245 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
-            if (entry.Choices != null && entry.Choices.Length > 5)
+            return ContainsExactHotkeyToken(key) || ContainsExactHotkeyToken(label);
+        }
+
+        private static bool ContainsExactHotkeyToken(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+
+            int start = -1;
+            for (int i = 0; i <= text!.Length; i++)
             {
-                int validKeyCodes = 0;
-                foreach (var c in entry.Choices)
+                bool isEnd = i == text.Length;
+                char c = isEnd ? '\0' : text[i];
+                bool isWordChar = !isEnd && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'));
+
+                if (start >= 0)
                 {
-                    if (Enum.TryParse<KeyCode>(c, true, out _)) validKeyCodes++;
+                    bool camelBoundary = !isEnd && char.IsUpper(c) && i > start && char.IsLower(text[i - 1]);
+                    if (!isWordChar || camelBoundary)
+                    {
+                        string token = text.Substring(start, i - start);
+                        if (ExactHotkeyTokens.Contains(token))
+                        {
+                            return true;
+                        }
+                        start = isWordChar ? i : -1;
+                    }
                 }
-                if (validKeyCodes >= entry.Choices.Length / 2) return true;
+                else if (isWordChar)
+                {
+                    start = i;
+                }
             }
 
             return false;
         }
 
+        internal static bool TryParseComboString(object? boxed, out KeyModifierMask mods, out KeyCode key)
+        {
+            mods = KeyModifierMask.None;
+            key = KeyCode.None;
+            if (boxed == null) return false;
+
+            if (boxed is KeyCode kc)
+            {
+                key = kc;
+                return true;
+            }
+            if (boxed is int intVal)
+            {
+                if (Enum.IsDefined(typeof(KeyCode), intVal))
+                {
+                    key = (KeyCode)intVal;
+                    return true;
+                }
+                return false;
+            }
+            if (boxed is string raw)
+            {
+                string trimmed = raw.Trim();
+                if (trimmed.Length == 0 ||
+                    string.Equals(trimmed, "None", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed == "0")
+                {
+                    key = KeyCode.None;
+                    return true;
+                }
+
+                if (trimmed.IndexOf('+') < 0)
+                {
+                    if (char.IsDigit(trimmed[0])) return false;
+                    if (Enum.TryParse<KeyCode>(trimmed, true, out var singleKey) &&
+                        Enum.IsDefined(typeof(KeyCode), singleKey))
+                    {
+                        key = singleKey;
+                        return true;
+                    }
+                    return false;
+                }
+
+                string[] parts = trimmed.Split('+');
+                bool sawKey = false;
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string tok = parts[i].Trim();
+                    if (tok.Length == 0) return false;
+
+                    if (string.Equals(tok, "Ctrl", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(tok, "Control", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(tok, "LCtrl", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(tok, "RCtrl", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mods |= KeyModifierMask.Ctrl;
+                    }
+                    else if (string.Equals(tok, "Shift", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(tok, "LShift", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(tok, "RShift", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mods |= KeyModifierMask.Shift;
+                    }
+                    else if (string.Equals(tok, "Alt", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(tok, "LAlt", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(tok, "RAlt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mods |= KeyModifierMask.Alt;
+                    }
+                    else if (i == parts.Length - 1 &&
+                             !char.IsDigit(tok[0]) &&
+                             Enum.TryParse<KeyCode>(tok, true, out var parsedKey) &&
+                             Enum.IsDefined(typeof(KeyCode), parsedKey))
+                    {
+                        key = parsedKey;
+                        sawKey = true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+
+                if (!sawKey || key == KeyCode.None) return false;
+                mods &= ~ComboKeyStore.GetModifierBit(key);
+                return true;
+            }
+            return false;
+        }
+
+        internal static string FormatComboString(KeyModifierMask mods, KeyCode key)
+        {
+            if (key == KeyCode.None) return "None";
+            mods &= ~ComboKeyStore.GetModifierBit(key);
+            if (mods == KeyModifierMask.None) return key.ToString();
+
+            var sb = new StringBuilder(24);
+            if ((mods & KeyModifierMask.Ctrl) != 0) sb.Append("Ctrl+");
+            if ((mods & KeyModifierMask.Shift) != 0) sb.Append("Shift+");
+            if ((mods & KeyModifierMask.Alt) != 0) sb.Append("Alt+");
+            sb.Append(key.ToString());
+            return sb.ToString();
+        }
+
+        internal static bool IsHotkeyEntry(ConfigEntry entry)
+        {
+            if (entry.ValueType == typeof(KeyCode)) return true;
+
+            // 布尔开关、浮点滑块或有范围限制的数值条绝不是按键绑定
+            if (entry.ValueType == typeof(bool) ||
+                entry.ValueType == typeof(float) ||
+                entry.ValueType == typeof(double) ||
+                entry.HasRange)
+            {
+                return false;
+            }
+
+            if (entry.ValueType != typeof(string) && entry.ValueType != typeof(int))
+            {
+                return false;
+            }
+
+            string key = entry.Key ?? string.Empty;
+            string label = entry.Label?.Invoke() ?? string.Empty;
+
+            if (ContainsNonHotkeyExclusion(key, label))
+            {
+                return false;
+            }
+
+            if (entry.ValueType == typeof(string) && entry.Choices != null && entry.Choices.Length > 0)
+            {
+                if (entry.Choices.Length > 5)
+                {
+                    int validKeyCodes = 0;
+                    foreach (var c in entry.Choices)
+                    {
+                        if (Enum.TryParse<KeyCode>(c, true, out _)) validKeyCodes++;
+                    }
+                    if (validKeyCodes >= entry.Choices.Length / 2) return true;
+                }
+                return false;
+            }
+
+            if (entry.ValueType == typeof(int) && entry.Choices != null && entry.Choices.Length > 0)
+            {
+                return false;
+            }
+
+            if (entry.ValueType == typeof(string))
+            {
+                string? sDef = entry.BoxedDefault as string;
+                string? sVal = entry.BoxedValue as string;
+
+                if ((sDef != null && (sDef.IndexOf(',') >= 0 || sDef.IndexOf(';') >= 0)) ||
+                    (sVal != null && (sVal.IndexOf(',') >= 0 || sVal.IndexOf(';') >= 0)))
+                {
+                    return false;
+                }
+
+                bool hasNonEmptyDef = !string.IsNullOrWhiteSpace(sDef);
+                bool hasNonEmptyVal = !string.IsNullOrWhiteSpace(sVal);
+                KeyModifierMask defMods = KeyModifierMask.None;
+                KeyModifierMask valMods = KeyModifierMask.None;
+                bool defParses = hasNonEmptyDef && TryParseComboString(sDef, out defMods, out _);
+                bool valParses = hasNonEmptyVal && TryParseComboString(sVal, out valMods, out _);
+
+                if (hasNonEmptyVal && !valParses) return false;
+                if (hasNonEmptyDef && !defParses) return false;
+
+                if ((defParses && defMods != KeyModifierMask.None) || (valParses && valMods != KeyModifierMask.None))
+                {
+                    return true;
+                }
+
+                return HasHotkeyIdentifier(key, label);
+            }
+
+            return HasHotkeyIdentifier(key, label);
+        }
+
         private static ModHotkeyEntry? CreateHotkeyFromConfigEntry(ModOptionGroup group, ConfigEntry entry, string label, string tooltip)
         {
+            bool usesComboString = entry.ValueType == typeof(string) &&
+                (string.Equals(group.ModId, "nicokobo.speed-up", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(group.ModId, "smart_inventory_arrange", StringComparison.OrdinalIgnoreCase) ||
+                 (entry.BoxedDefault is string defS && defS.IndexOf('+') >= 0) ||
+                 (entry.BoxedValue is string valS && valS.IndexOf('+') >= 0));
+
             KeyCode ParseKey(object? boxed)
             {
-                if (boxed is KeyCode kc) return kc;
-                if (boxed is int i) return (KeyCode)i;
-                if (boxed is string s)
-                {
-                    if (string.Equals(s, "None", StringComparison.OrdinalIgnoreCase) || s == "0") return KeyCode.None;
-                    if (Enum.TryParse<KeyCode>(s, true, out var parsed)) return parsed;
-                }
-                return KeyCode.None;
+                return TryParseComboString(boxed, out _, out var parsed) ? parsed : KeyCode.None;
+            }
+
+            KeyModifierMask ParseModifiers(object? boxed)
+            {
+                return TryParseComboString(boxed, out var mods, out _) ? mods : KeyModifierMask.None;
             }
 
             KeyCode defaultKey = ParseKey(entry.BoxedDefault);
+            KeyModifierMask defaultMods = usesComboString ? ParseModifiers(entry.BoxedDefault) : KeyModifierMask.None;
 
-            return new ModHotkeyEntry
+            var hk = new ModHotkeyEntry
             {
                 Id = $"{group.ModId}.{entry.Key}",
                 ModId = group.ModId,
@@ -505,6 +746,7 @@ namespace ProbablyUnifiedHotkeys
                 DisplayName = label,
                 Tooltip = tooltip,
                 DefaultKey = defaultKey,
+                DefaultModifiers = defaultMods,
                 HasExplicitDefault = entry.BoxedDefault != null,
                 GetKey = () => ParseKey(entry.BoxedValue),
                 SetKey = (newKey) =>
@@ -523,6 +765,14 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
             };
+
+            if (usesComboString)
+            {
+                hk.GetExternalModifiers = () => ParseModifiers(entry.BoxedValue);
+                hk.SetCombo = (newMods, newKey) => SetEntryBoxed(entry, FormatComboString(newMods, newKey));
+            }
+
+            return hk;
         }
 
         private static ModGeneralEntry? CreateGeneralFromConfigEntry(ModOptionGroup group, ConfigEntry entry, string label, string tooltip)

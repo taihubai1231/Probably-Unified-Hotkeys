@@ -167,6 +167,8 @@ namespace ProbablyUnifiedHotkeys
 
         public Func<KeyCode>? GetKey { get; set; }
         public Action<KeyCode>? SetKey { get; set; }
+        public Func<KeyModifierMask>? GetExternalModifiers { get; set; }
+        public Action<KeyModifierMask, KeyCode>? SetCombo { get; set; }
 
         public KeyCode PendingKey { get; set; } = KeyCode.None;
         public KeyModifierMask PendingModifiers { get; set; } = KeyModifierMask.None;
@@ -185,7 +187,10 @@ namespace ProbablyUnifiedHotkeys
             {
                 KeyCode key = EffectiveKey;
                 if (key == KeyCode.None) return KeyModifierMask.None;
-                return (HasPendingChange ? PendingModifiers : ComboKeyStore.GetSavedModifiers(Id, key)) & ~ComboKeyStore.GetModifierBit(key);
+                KeyModifierMask mask = HasPendingChange
+                    ? PendingModifiers
+                    : (GetExternalModifiers != null ? GetExternalModifiers.Invoke() : ComboKeyStore.GetSavedModifiers(Id, key));
+                return mask & ~ComboKeyStore.GetModifierBit(key);
             }
         }
         public KeyCombo EffectiveCombo => new KeyCombo(EffectiveModifiers, EffectiveKey);

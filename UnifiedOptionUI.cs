@@ -89,6 +89,31 @@ namespace ProbablyUnifiedHotkeys
         private static readonly Stopwatch PrebuildStopwatch = new Stopwatch();
         private static bool _suppressRuleConflictRefresh = false;
         private static bool _conflictViewDirty = true;
+        private static string? _lastConflictSignature = null;
+        private static readonly KeyCode[] BindableKeyboardKeys = BuildBindableKeyboardKeys();
+
+        private static KeyCode[] BuildBindableKeyboardKeys()
+        {
+            var raw = (KeyCode[])Enum.GetValues(typeof(KeyCode));
+            var list = new List<KeyCode>(128);
+            var seen = new HashSet<int>();
+            for (int i = 0; i < raw.Length; i++)
+            {
+                KeyCode kc = raw[i];
+                if (kc == KeyCode.None || kc == KeyCode.Escape) continue;
+                if (kc >= KeyCode.Mouse0 && kc <= KeyCode.Mouse6) continue;
+                if ((int)kc >= (int)KeyCode.JoystickButton0) continue;
+                if (ComboKeyStore.IsModifierKey(kc)) continue;
+                if (kc == KeyCode.LeftWindows || kc == KeyCode.RightWindows ||
+                    kc == KeyCode.LeftCommand || kc == KeyCode.RightCommand ||
+                    kc == KeyCode.Menu || kc == KeyCode.SysReq || kc == KeyCode.Print) continue;
+                if (seen.Add((int)kc))
+                {
+                    list.Add(kc);
+                }
+            }
+            return list.ToArray();
+        }
 
         // 窗口开启后后台静默预建游标：按帧耗时预算(<=3.5ms)在折叠态(inactive)容器内批量静默预建，消除"全部展开"首帧卡顿
         private static int _openedFrameCount = -1;
@@ -178,6 +203,7 @@ namespace ProbablyUnifiedHotkeys
             _currentWindow = null;
             IsConflictViewActive = false;
             _conflictViewDirty = true;
+            _lastConflictSignature = null;
             _suppressRuleConflictRefresh = false;
             _searchQuery = string.Empty;
             _wasSearchNonEmpty = false;
@@ -1225,19 +1251,12 @@ namespace ProbablyUnifiedHotkeys
                 _hadMultipleModifiers = true;
             }
 
-            // 4. 常规非修饰键盘主键轮询（包含 Backspace、Delete、Space、F1~F12、字母与数字键等）
+            // 4. 常规非修饰键盘主键轮询（使用静态预筛选键值表，零 GC 分配）
             if (Input.anyKeyDown)
             {
-                foreach (KeyCode kc in Enum.GetValues(typeof(KeyCode)))
+                for (int i = 0; i < BindableKeyboardKeys.Length; i++)
                 {
-                    if (kc == KeyCode.None || kc == KeyCode.Escape) continue;
-                    if (kc >= KeyCode.Mouse0 && kc <= KeyCode.Mouse6) continue;
-                    if ((int)kc >= (int)KeyCode.JoystickButton0) continue;
-                    if (ComboKeyStore.IsModifierKey(kc)) continue;
-                    if (kc == KeyCode.LeftWindows || kc == KeyCode.RightWindows ||
-                        kc == KeyCode.LeftCommand || kc == KeyCode.RightCommand ||
-                        kc == KeyCode.Menu || kc == KeyCode.SysReq || kc == KeyCode.Print) continue;
-
+                    KeyCode kc = BindableKeyboardKeys[i];
                     if (Input.GetKeyDown(kc))
                     {
                         KeyModifierMask finalMods = ComboKeyStore.GetHeldModifiersMask(kc);
@@ -2006,12 +2025,44 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        private static string ComputeConflictSignature(Dictionary<KeyCombo, List<ModHotkeyEntry>> conflicts)
+        {
+            if (conflicts.Count == 0) return string.Empty;
+
+            var keys = new List<KeyCombo>(conflicts.Keys);
+            keys.Sort((a, b) =>
+            {
+                int m = ((int)a.Modifiers).CompareTo((int)b.Modifiers);
+                return m != 0 ? m : ((int)a.Key).CompareTo((int)b.Key);
+            });
+
+            var sb = new System.Text.StringBuilder(conflicts.Count * 48);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                KeyCombo combo = keys[i];
+                sb.Append((int)combo.Modifiers).Append(':').Append((int)combo.Key).Append('=');
+                List<ModHotkeyEntry> list = conflicts[combo];
+                for (int j = 0; j < list.Count; j++)
+                {
+                    if (j > 0) sb.Append(',');
+                    sb.Append(list[j].Id);
+                }
+                sb.Append(';');
+            }
+            return sb.ToString();
+        }
+
         private static void RefreshConflicts()
         {
             using (ComboKeyStore.EnterBypass())
             {
                 _conflicts = ConflictDetector.Analyze(_allHotkeys);
-                _conflictViewDirty = true;
+                string sig = ComputeConflictSignature(_conflicts);
+                if (!string.Equals(_lastConflictSignature, sig, StringComparison.Ordinal))
+                {
+                    _lastConflictSignature = sig;
+                    _conflictViewDirty = true;
+                }
 
                 // 1. 刷新所有模组卡片按键按钮与冲突标签
                 foreach (var g in _modGroups)
@@ -2257,6 +2308,10 @@ namespace ProbablyUnifiedHotkeys
                 {
                     float scaled = Mathf.Floor((spec.MaxFontSize * (spec.AvailWidth / pref.x)) * 10f) / 10f;
                     fitted = Mathf.Max(spec.MinFontSize, Mathf.Min(spec.MaxFontSize, scaled));
+                }
+                if (FittedFontSizeCache.Count >= 2048)
+                {
+                    FittedFontSizeCache.Clear();
                 }
                 FittedFontSizeCache[key] = fitted;
             }
@@ -2528,10 +2583,20 @@ namespace ProbablyUnifiedHotkeys
                 {
                     if (hotkey.HasPendingChange)
                     {
-                        hotkey.SetKey?.Invoke(hotkey.PendingKey);
-                        ComboKeyStore.SetSavedCombo(hotkey.Id, hotkey.PendingModifiers, hotkey.PendingKey);
-                        comboChanged = true;
+                        if (hotkey.SetCombo != null)
+                        {
+                            hotkey.SetCombo(hotkey.PendingModifiers, hotkey.PendingKey);
+                            ComboKeyStore.SetSavedCombo(hotkey.Id, KeyModifierMask.None, KeyCode.None);
+                            comboChanged = true;
+                        }
+                        else
+                        {
+                            hotkey.SetKey?.Invoke(hotkey.PendingKey);
+                            ComboKeyStore.SetSavedCombo(hotkey.Id, hotkey.PendingModifiers, hotkey.PendingKey);
+                            comboChanged = true;
+                        }
                         hotkey.PendingModifiers = KeyModifierMask.None;
+                        hotkey.PendingKey = KeyCode.None;
                         hotkey.HasPendingChange = false;
                         groupChanged = true;
                     }
