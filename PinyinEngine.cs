@@ -88,6 +88,11 @@ namespace ProbablyUnifiedHotkeys
         }
         private static readonly object _initLock = new object();
 
+        internal static void Prewarm()
+        {
+            EnsureInitialized();
+        }
+
         private static void EnsureInitialized()
         {
             if (_indices != null) return;

@@ -18,6 +18,14 @@ namespace ProbablyUnifiedHotkeys
         private static readonly object _lock = new object();
 
         /// <summary>
+        /// 在主菜单闲置帧预先暖机模组配置目录缓存
+        /// </summary>
+        internal static void Prewarm()
+        {
+            GetOrScanGroups(out _);
+        }
+
+        /// <summary>
         /// 获取当前生效的模组配置组列表（自动利用缓存）
         /// </summary>
         public static List<ModOptionGroup> GetOrScanGroups(out List<ModHotkeyEntry> allHotkeys)

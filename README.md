@@ -49,10 +49,12 @@
   - 同时支持英文原名、全拼、拼音首字母缩写（如 `sp` 搜 `商品`、`zyl` 搜 `主音量`、`xssz` 搜 `現實時鐘`），按键检索还会额外匹配组合键全称（如 `ctrl`、`侧键`、`无`）与 Unity 键码名。
 - **自动跳转视窗焦点与友好空状态**：输入关键字后自动退出冲突视图、隐藏未匹配区块标题、在挂起根容器布局下单帧同步展开命中卡片并滚动视窗定位至首个匹配项；清空搜索后自动恢复原始折叠态并回到顶部。
 
-### 8. 双懒加载、闲置静默预建、低退出开销与官方安全规范
-- **闲置静默预建 + 根布局挂起原子切换**：基于模组清单与注册表条目指纹缓存扫描目录；开启设置窗口后的空闲帧内，会在仍处于折叠隐藏（`inactive`）的容器内部逐帧静默预建未展开模组卡片，避免触发任何视觉动画或 `Canvas / Layout` 重建；当点击 **`全部展开` / `全部收起`** 或输入搜索过滤时，先临时挂起外层 `VerticalLayoutGroup / ContentSizeFitter`，单帧内一次性完成状态切换与脏状态守卫后再集中排布一次，实现 **零过渡动画、低卡顿瞬时切换**。
-- **快速低顿退出机制**：通过 `Application.quitting` 识别游戏进程退出周期，整款游戏关闭时跳过耗时的逐一 `UnpatchAll` 与线性注册表卸载；在游戏内手动开关禁用本模组时则依然完整执行无损清理。
-- **白名单高效监听 & `ModScanner` 全绿**：工坊程序集监听通过 `O(1)` 名称白名单过滤，不使用任何不透明二进制资源文件，通过游戏官方 `ModScanner` 静态扫描 **0 Findings / 0 Capabilities / 0 HardFlags / Refused: False**。
+### 8. 全链路流畅度重构（选项 / 全部展开 / 改造件 / 退出游戏）与官方安全规范
+- **闲置分帧预热与离线装配（「选项」开窗）**：主菜单启动后的 3 个空闲帧内单线程静默完成 `pinyin.bin` 词库（~20,902 字）、`ModCatalogCache` 配置目录及 `ModUIManager` 界面骨架预热；开启「选项」时先隐藏窗口根节点完成全量原版/模组卡片离线装配与原版规则同步后再一次性激活展示，配合 `ButtonTextColor` / `FittedFontSizeCache` 组件与字号缓存、适配器 `epoch` 反射缓存与零分配委托归属检测，大幅削减首次与重复打开耗散。
+- **单次字体测量 + 帧预算预建 + 全层级布局挂起（「全部展开 / 收起」）**：全面移除 50~100+ 颗按键与 `恢复默认` 按钮上的 `TMP_Text.enableAutoSizing` 多次二分测量循环，改为基于 `GetPreferredValues` 结果缓存的单次字号自适应；闲置帧预建以约 `3.5ms/帧` 预算连续完成多张折叠卡片构建；一键展开/收起同步挂起外层容器、Viewport 及所有卡片标题行 `LayoutGroup` / `ContentSizeFitter` 并差分刷新状态，单帧无过渡瞬间切换。
+- **列表对象池化与 O(1) 依赖索引（「改造件」面板）**：在 `ModUIManager.PopulateLayoutList` 引入按模组 ID 复用的 `Row` 对象池，避免每次开关面板销毁并重建 40+ 个模组条目（120+ 个子对象）；在 `RefreshRowIssues` / `GetModIssue` 期间建立前置依赖 O(1) 查找字典以消除 `ModLoader.Mods.Find` 带来的 O(N²) 列表拷贝分配，并保持与第三方改造件面板钩子（如 `ConflictScanner`）的 Postfix 完全兼容。
+- **秒级退出流程（「退出游戏」）**：主菜单退出、暂停菜单退出与窗口关闭前统一安全触发各模组 `OnDisable()` 以保存配置，随后清空已卸载模组持有的一次性 `HarmonyInstance` 引用以跳过 `ModLoader.OnApplicationQuit()` 在进程销毁前的 40+ 次同步 `UnpatchAll` 动态方法重编译；同时在游戏禁用遥测（`OVERWRITE_DISABLE_ANALYTICS == true`）时跳过暂停菜单 `QuitWithAnalytics()` 无意义的 1 秒固定空等，实现流畅秒退。
+- **白名单高效监听 & `ModScanner` 全绿**：工坊程序集监听通过 `O(1)` 名称白名单过滤，零后台线程/零越界反射，通过游戏官方 `ModScanner` 静态扫描 **0 Findings / 0 Capabilities / 0 HardFlags / Refused: False**。
 
 ---
 
@@ -74,6 +76,12 @@
 ---
 
 ## 📝 更新日志
+
+### v1.4.0
+1. **彻底优化「退出游戏」最大卡顿源**：在游戏退出前安全执行各模组 `OnDisable()` 落盘后跳过 `ModLoader.OnApplicationQuit` 触发的 40+ 次同步 `Harmony.UnpatchAll` 动态方法重编译卡顿，并跳过游戏暂停菜单在遥测关闭（`OVERWRITE_DISABLE_ANALYTICS == true`）状态下无意义空等 1 秒的 `QuitWithAnalytics` 协程，点击退出立即收尾。
+2. **深度优化「改造件 / 模组」面板开启响应（「改造件」卡顿）**：新增 `PerformancePatches.cs`，在 `ModUIManager` 中实施 `Row` 行对象池化复用与变更差分更新，消除每次打开销毁重造 40+ 个条目（120+ 子对象）开销；将前置依赖检查升级为 O(1) 哈希索引以消除 `ModLoader.Mods.Find` O(N²) 列表复制与卡顿；并在主菜单空闲帧静默预建未激活面板骨架与行池（完全兼容第三方冲突检测插件 Postfix）。
+3. **重做「全部展开 / 全部收起」与按键排版耗时源**：移除全页 50~100+ 颗按键及 `恢复默认` 按钮的 `TMP_Text.enableAutoSizing` 多轮二分排版循环，替换为带全局结果缓存的 `GetPreferredValues` 单次拟合算法；将后台折叠卡片预建升级为 `3.5ms/帧` 预算调度；并将卡片标题行 `HorizontalLayoutGroup`、`Viewport` 与外层滚动容器一并纳入单帧挂起重排，视觉无过渡动画且瞬时齐位。
+4. **优化「选项」开窗构建与反射/查表热路径**：主菜单空闲分帧预先暖机 `PinyinEngine` 与 `ModCatalogCache`；开窗时按视图层级（`menu / meta`）仅首开抓取一次按钮主题后立即隐藏根窗口完成离线控件装配；引入 `ButtonTextColor` / `FittedFontSizeCache` 缓存、差异渲染守卫、`KnownModAdapters` 按程序集加载 epoch 缓存以及零数组分配的 `ModOptionScanner.GetEntryExternalAssembly`。
 
 ### v1.3.3
 1. **消除「全部展开 / 全部收起」滚动过渡动画并大幅降低卡顿**：移除多帧逐卡弹出的 `PendingCardTasks` 动画队列，改为“闲置帧静默预建（在 `inactive` 折叠容器内逐卡构建，零画面变动）+ 批处理挂起根布局（`WithSuspendedRootLayout`）+ 卡片状态幂等守卫”；点击 `全部展开` / `全部收起` 立即单帧整齐到位，既无多余过渡动画也显著减轻卡顿。
@@ -147,8 +155,9 @@
 
 - **适用游戏版本**：*Probably Stolen*（深空当铺）`0.46` / `0.46D` 及后续版本。
 - **核心代码模块**：
-  - `ModEntry.cs`：模组入口、生命周期/退出加速优化、`KeyBindHelper` 与工坊程序集 Harmony 补丁中枢。
-  - `UnifiedOptionUI.cs` & `ModModel.cs`：原生选项页接管、原版与模组统一折叠卡片接口及「恢复默认」、闲置静默预建与挂起根布局瞬时切换、全范围四档搜索、原生统一按钮规范与 `ButtonTextColor` 色彩同步。
+  - `ModEntry.cs`：模组入口、生命周期/快速退出状态管理、`KeyBindHelper` 与工坊程序集 Harmony 补丁中枢。
+  - `PerformancePatches.cs`：v1.4.0 退出秒退、主菜单分帧闲置预热、`ModUIManager` 行池化及 O(1) 依赖索引底层优化模块。
+  - `UnifiedOptionUI.cs` & `ModModel.cs`：原生选项页接管、离线构建、单次字体尺寸适配、按帧预算静默预建、挂起根布局瞬时切换、全范围四档搜索与 `ButtonTextColor` 色彩缓存同步。
   - `ComboKeyStore.cs`：组合键持久化、修饰键掩码校验、侧键命名格式化与运行时隔离抑制引擎。
   - `ModOptionScanner.cs` & `KnownModAdapters.cs` & `ModCatalogCache.cs`：全渠道设置收集、委托来源防重识别、会话启动快照与指纹缓存。
   - `ConflictDetector.cs`：修饰键+主键精确判重与冲突提示生成。

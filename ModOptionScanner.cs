@@ -20,6 +20,7 @@ namespace ProbablyUnifiedHotkeys
         private static readonly MethodInfo? ApplyBoxedMethod = AccessTools.Method(typeof(ConfigEntry), "ApplyBoxed", new Type[] { typeof(object) });
         private static readonly Assembly VanillaAssembly = typeof(GameOptionRegistry).Assembly;
         private static readonly Assembly SelfAssembly = typeof(ModOptionScanner).Assembly;
+        private static readonly Dictionary<Assembly, bool> SystemOrEngineAsmCache = new Dictionary<Assembly, bool>();
 
         // 会话级首次启动快照，确保所有无显式默认值的模组条目都能拥有稳定的“恢复”目标
         private static readonly Dictionary<string, KeyCode> InitialKeySnapshots = new Dictionary<string, KeyCode>(StringComparer.Ordinal);
@@ -36,12 +37,38 @@ namespace ProbablyUnifiedHotkeys
 
         private static bool IsSystemOrEngineAssembly(Assembly asm)
         {
+            if (SystemOrEngineAsmCache.TryGetValue(asm, out bool cached))
+            {
+                return cached;
+            }
+
             string name = asm.GetName().Name ?? string.Empty;
-            return name.StartsWith("System", StringComparison.OrdinalIgnoreCase) ||
-                   name.StartsWith("mscorlib", StringComparison.OrdinalIgnoreCase) ||
-                   name.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase) ||
-                   name.StartsWith("Unity", StringComparison.OrdinalIgnoreCase) ||
-                   name.StartsWith("Mono.", StringComparison.OrdinalIgnoreCase);
+            bool result = name.StartsWith("System", StringComparison.OrdinalIgnoreCase) ||
+                          name.StartsWith("mscorlib", StringComparison.OrdinalIgnoreCase) ||
+                          name.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase) ||
+                          name.StartsWith("Unity", StringComparison.OrdinalIgnoreCase) ||
+                          name.StartsWith("Mono.", StringComparison.OrdinalIgnoreCase);
+            SystemOrEngineAsmCache[asm] = result;
+            return result;
+        }
+
+        private static Assembly? CheckDelegateExternalAssembly(Delegate? d)
+        {
+            if (d == null) return null;
+            var asm = d.Method?.DeclaringType?.Assembly;
+            if (asm != null && asm != VanillaAssembly && !IsSystemOrEngineAssembly(asm))
+            {
+                return asm;
+            }
+            if (d.Target != null)
+            {
+                var targetAsm = d.Target.GetType().Assembly;
+                if (targetAsm != null && targetAsm != VanillaAssembly && !IsSystemOrEngineAssembly(targetAsm))
+                {
+                    return targetAsm;
+                }
+            }
+            return null;
         }
 
         /// <summary>
@@ -51,35 +78,20 @@ namespace ProbablyUnifiedHotkeys
         {
             if (entry == null) return null;
 
-            Delegate?[] delegates = new Delegate?[]
-            {
-                entry.getKey, entry.setKey,
-                entry.getBool, entry.setBool,
-                entry.getFloat, entry.setFloat,
-                entry.getIndex, entry.setIndex,
-                entry.label, entry.tooltip,
-                entry.options, entry.valueText,
-                entry.interactable, entry.overrideOptions
-            };
-
-            foreach (var d in delegates)
-            {
-                if (d == null) continue;
-                var asm = d.Method?.DeclaringType?.Assembly;
-                if (asm != null && asm != VanillaAssembly && !IsSystemOrEngineAssembly(asm))
-                {
-                    return asm;
-                }
-                if (d.Target != null)
-                {
-                    var targetAsm = d.Target.GetType().Assembly;
-                    if (targetAsm != null && targetAsm != VanillaAssembly && !IsSystemOrEngineAssembly(targetAsm))
-                    {
-                        return targetAsm;
-                    }
-                }
-            }
-            return null;
+            return CheckDelegateExternalAssembly(entry.getKey)
+                ?? CheckDelegateExternalAssembly(entry.setKey)
+                ?? CheckDelegateExternalAssembly(entry.getBool)
+                ?? CheckDelegateExternalAssembly(entry.setBool)
+                ?? CheckDelegateExternalAssembly(entry.getFloat)
+                ?? CheckDelegateExternalAssembly(entry.setFloat)
+                ?? CheckDelegateExternalAssembly(entry.getIndex)
+                ?? CheckDelegateExternalAssembly(entry.setIndex)
+                ?? CheckDelegateExternalAssembly(entry.label)
+                ?? CheckDelegateExternalAssembly(entry.tooltip)
+                ?? CheckDelegateExternalAssembly(entry.options)
+                ?? CheckDelegateExternalAssembly(entry.valueText)
+                ?? CheckDelegateExternalAssembly(entry.interactable)
+                ?? CheckDelegateExternalAssembly(entry.overrideOptions);
         }
 
         /// <summary>
@@ -586,6 +598,26 @@ namespace ProbablyUnifiedHotkeys
                 if (sections == null) return;
 
                 var loadedMods = ModLoader.Mods;
+                Dictionary<string, LoadedMod>? modById = null;
+                Dictionary<Assembly, LoadedMod>? modByAsm = null;
+                if (loadedMods != null)
+                {
+                    modById = new Dictionary<string, LoadedMod>(loadedMods.Count, StringComparer.OrdinalIgnoreCase);
+                    modByAsm = new Dictionary<Assembly, LoadedMod>(loadedMods.Count);
+                    for (int i = 0; i < loadedMods.Count; i++)
+                    {
+                        var lm = loadedMods[i];
+                        if (lm?.Manifest == null) continue;
+                        if (!string.IsNullOrEmpty(lm.Manifest.ID) && !modById.ContainsKey(lm.Manifest.ID))
+                        {
+                            modById[lm.Manifest.ID] = lm;
+                        }
+                        if (lm.Assembly != null && !modByAsm.ContainsKey(lm.Assembly))
+                        {
+                            modByAsm[lm.Assembly] = lm;
+                        }
+                    }
+                }
 
                 foreach (var sec in sections)
                 {
@@ -606,14 +638,9 @@ namespace ProbablyUnifiedHotkeys
                         if (!string.IsNullOrEmpty(source))
                         {
                             if (IsSelfModId(source)) continue;
-                            if (loadedMods != null)
+                            if (modById != null && modById.TryGetValue(source, out var m) && m?.Manifest != null && !string.IsNullOrEmpty(m.Manifest.Name))
                             {
-                                var m = loadedMods.FirstOrDefault(x => x?.Manifest != null &&
-                                    string.Equals(x.Manifest.ID, source, StringComparison.OrdinalIgnoreCase));
-                                if (m?.Manifest != null && !string.IsNullOrEmpty(m.Manifest.Name))
-                                {
-                                    disp = m.Manifest.Name;
-                                }
+                                disp = m.Manifest.Name;
                             }
                         }
                         else
@@ -621,14 +648,10 @@ namespace ProbablyUnifiedHotkeys
                             Assembly? extAsm = GetEntryExternalAssembly(entry);
                             if (extAsm == SelfAssembly) continue;
 
-                            if (extAsm != null && loadedMods != null)
+                            if (extAsm != null && modByAsm != null && modByAsm.TryGetValue(extAsm, out var m) && m?.Manifest != null)
                             {
-                                var m = loadedMods.FirstOrDefault(x => x != null && x.Assembly == extAsm && x.Manifest != null);
-                                if (m?.Manifest != null)
-                                {
-                                    source = m.Manifest.ID;
-                                    disp = m.Manifest.Name;
-                                }
+                                source = m.Manifest.ID;
+                                disp = m.Manifest.Name;
                             }
 
                             if (string.IsNullOrEmpty(source) && extAsm != null)

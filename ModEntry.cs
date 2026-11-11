@@ -13,9 +13,13 @@ namespace ProbablyUnifiedHotkeys
         private static volatile bool _isApplicationQuitting = false;
         private static bool _quitHookRegistered = false;
 
+        private static bool _disabledDuringQuit = false;
+
         public void Init(ModManifest manifest)
         {
             _isApplicationQuitting = false;
+            _disabledDuringQuit = false;
+            PerformancePatches.ResetSessionState();
             if (!_quitHookRegistered)
             {
                 _quitHookRegistered = true;
@@ -30,9 +34,15 @@ namespace ProbablyUnifiedHotkeys
             WorkshopModPatcher.Apply(workshopHarmony, log);
         }
 
+        internal static void MarkApplicationQuitting()
+        {
+            _isApplicationQuitting = true;
+        }
+
         private static void OnApplicationQuitting()
         {
             _isApplicationQuitting = true;
+            PerformancePatches.PrepareFastQuit();
         }
 
         public void OnEnable()
@@ -42,16 +52,30 @@ namespace ProbablyUnifiedHotkeys
 
         public void OnDisable()
         {
+            if (_isApplicationQuitting && _disabledDuringQuit)
+            {
+                return;
+            }
+
             try
             {
-                ModCatalogCache.Invalidate();
-                // 进程退出时 ModLoader 已在统一卸载所有模组并销毁进程，跳过耗时的逐个 UnpatchAll 与线性注册表清理以消除退出卡顿
-                if (!_isApplicationQuitting)
+                if (_isApplicationQuitting)
                 {
-                    GameOptionRegistry.RemoveBySource("probably_unified_hotkeys");
-                    GameOptionRegistry.RemoveBySource("allow_unbind_key");
-                    workshopHarmony?.UnpatchAll("probably_unified_hotkeys.workshop");
+                    _disabledDuringQuit = true;
+                    return;
                 }
+
+                if (_quitHookRegistered)
+                {
+                    _quitHookRegistered = false;
+                    Application.quitting -= OnApplicationQuitting;
+                }
+
+                PerformancePatches.ResetSessionState();
+                ModCatalogCache.Invalidate();
+                GameOptionRegistry.RemoveBySource("probably_unified_hotkeys");
+                GameOptionRegistry.RemoveBySource("allow_unbind_key");
+                workshopHarmony?.UnpatchAll("probably_unified_hotkeys.workshop");
             }
             catch (Exception ex)
             {

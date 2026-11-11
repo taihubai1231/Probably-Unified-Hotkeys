@@ -70,7 +70,27 @@ namespace ProbablyUnifiedHotkeys
         private static readonly Dictionary<ModOptionGroup, (GameObject? hkHeader, GameObject? genHeader, GameObject? midSep)> CardParts
             = new Dictionary<ModOptionGroup, (GameObject?, GameObject?, GameObject?)>();
 
-        // 窗口开启后后台静默预建游标：在处于折叠态(inactive)的容器内每帧预建 1 张未展开卡片，零过渡动画且大幅降低“全部展开”卡顿
+        // UI 元素级高性能缓存（窗口关闭时清理）
+        private struct ButtonFitSpec
+        {
+            public float AvailWidth;
+            public float MaxFontSize;
+            public float MinFontSize;
+        }
+
+        private static readonly Dictionary<int, ButtonTextColor?> ButtonTextColorCache = new Dictionary<int, ButtonTextColor?>(128);
+        private static readonly Dictionary<int, Color> AppliedButtonNormalColorCache = new Dictionary<int, Color>(128);
+        private static readonly Dictionary<int, ButtonFitSpec> ButtonFitSpecCache = new Dictionary<int, ButtonFitSpec>(128);
+
+        // 跨打开会话可复用的单次字体缩放尺寸缓存 (fontInstanceId, availWidth*10, maxFontSize*10, text) -> fittedFontSize
+        private static readonly Dictionary<(int fontId, int widthTenths, int maxSizeTenths, string text), float> FittedFontSizeCache
+            = new Dictionary<(int, int, int, string), float>(256);
+
+        private static readonly Stopwatch PrebuildStopwatch = new Stopwatch();
+        private static bool _suppressRuleConflictRefresh = false;
+        private static bool _conflictViewDirty = true;
+
+        // 窗口开启后后台静默预建游标：按帧耗时预算(<=3.5ms)在折叠态(inactive)容器内批量静默预建，消除"全部展开"首帧卡顿
         private static int _openedFrameCount = -1;
         private static int _prebuildModIndex = 0;
 
@@ -105,6 +125,7 @@ namespace ProbablyUnifiedHotkeys
         private static bool _hasBaseButtonMargin = false;
         private static bool _hasDefaultButtonTextColor = false;
         private static bool _hasDefaultButtonTheme = false;
+        private static string? _capturedThemeLayer = null;
 
         // 各种容器与控件引用
         private static ScrollRect? _scrollRect;
@@ -143,10 +164,21 @@ namespace ProbablyUnifiedHotkeys
         /// <summary>
         /// 打开全新统一设置面板
         /// </summary>
+        private static void ClearSessionUiCaches()
+        {
+            ButtonTextColorCache.Clear();
+            AppliedButtonNormalColorCache.Clear();
+            ButtonFitSpecCache.Clear();
+            CardParts.Clear();
+        }
+
         public static void OpenEnhancedUI(GameOptionUIManager manager)
         {
             _currentManager = manager;
+            _currentWindow = null;
             IsConflictViewActive = false;
+            _conflictViewDirty = true;
+            _suppressRuleConflictRefresh = false;
             _searchQuery = string.Empty;
             _wasSearchNonEmpty = false;
             _pendingScrollTarget = null;
@@ -168,7 +200,7 @@ namespace ProbablyUnifiedHotkeys
             _emptySearchLabelRow = null;
             _openedFrameCount = Time.frameCount;
             _prebuildModIndex = 0;
-            CardParts.Clear();
+            ClearSessionUiCaches();
             ComboKeyStore.EnsureLoaded();
 
             // 1. 初始化原版环境
@@ -212,6 +244,14 @@ namespace ProbablyUnifiedHotkeys
                 CustomUIManager.Style.Auto
             );
 
+            // 若已完成当前视图层级(menu/meta)的原生按钮主题抓取，立即隐藏根对象完成离线构建，避免每生成一个控件就触发 Canvas/Layout 重算
+            bool hasThemeForLayer = _hasDefaultButtonTheme && string.Equals(_capturedThemeLayer, layer, StringComparison.Ordinal);
+            GameObject? windowRoot = builder.Handle?.root;
+            if (hasThemeForLayer && windowRoot != null && windowRoot.activeSelf)
+            {
+                windowRoot.SetActive(false);
+            }
+
             builder.SetCloseOnEscape(!isStoreUi);
             builder.OnClose(() =>
             {
@@ -227,7 +267,7 @@ namespace ProbablyUnifiedHotkeys
                 _vanillaHotkeyByRawId.Clear();
                 _openedFrameCount = -1;
                 _prebuildModIndex = 0;
-                CardParts.Clear();
+                ClearSessionUiCaches();
             });
 
             // =================================================================
@@ -280,8 +320,18 @@ namespace ProbablyUnifiedHotkeys
             builder.AddButton(_allExpanded ? "全部收起" : "全部展开", ToggleExpandAll, "btn_expand_all");
             _expandToggleBtn = builder.Last;
 
-            // 优先抓取原生 ButtonTextColor 默认字色、高亮色、按下色与原始字号
-            CaptureDefaultButtonTheme(_expandToggleBtn);
+            // 优先抓取原生 ButtonTextColor 默认字色、高亮色、按下色与原始字号（每个层级 menu/meta 仅需首开抓取一次）
+            if (!hasThemeForLayer)
+            {
+                CaptureDefaultButtonTheme(_expandToggleBtn, forceRefresh: true);
+                _capturedThemeLayer = layer;
+            }
+
+            // 抓取完成后即关闭根节点激活态，确保整页百余个原版与模组控件在离线非激活状态一次性装配完毕
+            if (windowRoot != null && windowRoot.activeSelf)
+            {
+                windowRoot.SetActive(false);
+            }
 
             StyleActionButton(_conflictToggleBtn, 226f, 38f, lrMargin: 14f, tbMargin: 4f, fontScale: 0.88f);
             StyleActionButton(_expandToggleBtn, 144f, 38f, lrMargin: 14f, tbMargin: 4f, fontScale: 0.88f);
@@ -382,19 +432,26 @@ namespace ProbablyUnifiedHotkeys
             builder.AddSpace(10f);
             builder.End();
 
-            // 7. 展示窗口并同步记忆的展开态、原版规则与按键视觉一致性
+            // 7. 仍在离线非激活态下同步记忆展开态、样式、原版待定键值与冲突色彩，再一次性激活展示并仅做单次布局刷新
+            _currentWindow = builder.Handle;
+            RestoreSavedExpandedModCards();
             RefreshExpandAllButtonState();
+            StyleVanillaKeyButtons();
+            SyncVanillaPendingFromManager();
+            RefreshConflicts();
+
             _currentWindow = builder.Show();
             WindowField?.SetValue(manager, _currentWindow);
-            WithSuspendedRootLayout(() =>
+            _suppressRuleConflictRefresh = true;
+            try
             {
                 RefreshRulesMethod?.Invoke(manager, null);
-                StyleVanillaKeyButtons();
-                RefreshConflicts();
-
-                // 若上次关闭时保留有处于展开态的模组卡片，在禁用根容器重排下同步完成还原（无过渡动画）
-                RestoreSavedExpandedModCards();
-            });
+            }
+            finally
+            {
+                _suppressRuleConflictRefresh = false;
+            }
+            _openedFrameCount = Time.frameCount;
         }
 
         private static GameObject? GetLastChildGameObject(RectTransform? container)
@@ -851,6 +908,11 @@ namespace ProbablyUnifiedHotkeys
             var rt = _conflictContentRoot.GetComponent<RectTransform>();
             if (rt == null) return;
 
+            if (!_conflictViewDirty && rt.childCount > 0)
+            {
+                return;
+            }
+
             foreach (var hk in _allHotkeys)
             {
                 hk.ConflictButtonElement = null;
@@ -866,6 +928,7 @@ namespace ProbablyUnifiedHotkeys
                 var conflictBuilder = new CustomUIBuilder(CustomUIManager.Instance, _currentWindow, rt);
                 BuildConflictViewContent(conflictBuilder);
             }
+            _conflictViewDirty = false;
             LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
         }
 
@@ -988,12 +1051,12 @@ namespace ProbablyUnifiedHotkeys
         {
             if (entry.ButtonElement != null)
             {
-                entry.ButtonElement.SetText(text);
+                SetButtonTextFast(entry.ButtonElement, text);
                 ApplyButtonTextTheme(entry.ButtonElement, CapturePromptColor);
             }
             if (entry.ConflictButtonElement != null)
             {
-                entry.ConflictButtonElement.SetText(text);
+                SetButtonTextFast(entry.ConflictButtonElement, text);
                 ApplyButtonTextTheme(entry.ConflictButtonElement, CapturePromptColor);
             }
             if (entry.ModId == "vanilla" && !string.IsNullOrEmpty(entry.RawOptionId))
@@ -1001,15 +1064,15 @@ namespace ProbablyUnifiedHotkeys
                 var vanillaEl = _currentWindow?.Get(entry.RawOptionId);
                 if (vanillaEl != null)
                 {
-                    vanillaEl.SetText(text);
+                    SetButtonTextFast(vanillaEl, text);
                     ApplyButtonTextTheme(vanillaEl, CapturePromptColor);
                 }
             }
         }
 
         /// <summary>
-        /// 窗口开启后的后台静默预建：每帧在仍处于折叠态(inactive)的容器内预构建 1 张模组卡片，
-        /// 不触发任何可见动画、Canvas 或 Layout 重建，使后续点击“全部展开”或搜索秒开且无卡顿。
+        /// 窗口开启后的按帧预算后台静默预建：在约 3.5ms/帧 的平滑预算内于折叠态(inactive)容器连续构建多张卡片，
+        /// 既不在开启首帧产生压力，又能极快地预热全量卡片，使“全部展开”与搜索秒开且完全无过渡动画。
         /// </summary>
         private static void PrebuildNextCollapsedModCard()
         {
@@ -1017,11 +1080,12 @@ namespace ProbablyUnifiedHotkeys
             {
                 return;
             }
-            if (_openedFrameCount < 0 || Time.frameCount <= _openedFrameCount + 1)
+            if (_openedFrameCount < 0 || Time.frameCount <= _openedFrameCount)
             {
                 return;
             }
 
+            PrebuildStopwatch.Restart();
             while (_prebuildModIndex < _modGroups.Count)
             {
                 var group = _modGroups[_prebuildModIndex++];
@@ -1031,7 +1095,11 @@ namespace ProbablyUnifiedHotkeys
                 }
 
                 EnsureGroupContentBuilt(group);
-                break;
+
+                if (PrebuildStopwatch.Elapsed.TotalMilliseconds >= 3.5)
+                {
+                    break;
+                }
             }
         }
 
@@ -1615,13 +1683,13 @@ namespace ProbablyUnifiedHotkeys
 
             if (IsConflictViewActive)
             {
-                _conflictToggleBtn.SetText("返回完整设置");
+                SetButtonTextFast(_conflictToggleBtn, "返回完整设置");
                 ApplyButtonTextTheme(_conflictToggleBtn, Color.white, useDefaultTheme: true);
             }
             else
             {
                 string text = _conflicts.Count > 0 ? $"[!] 仅看冲突 ({_conflicts.Count} 组)" : "[!] 仅看冲突";
-                _conflictToggleBtn.SetText(text);
+                SetButtonTextFast(_conflictToggleBtn, text);
                 if (_conflicts.Count > 0)
                 {
                     ApplyButtonTextTheme(_conflictToggleBtn, ConflictDetector.ConflictColor);
@@ -1657,7 +1725,7 @@ namespace ProbablyUnifiedHotkeys
         private static void RefreshExpandAllButtonState()
         {
             _allExpanded = AllVisibleCardsExpanded();
-            _expandToggleBtn?.SetText(_allExpanded ? "全部收起" : "全部展开");
+            SetButtonTextFast(_expandToggleBtn, _allExpanded ? "全部收起" : "全部展开");
         }
 
         private static void ToggleExpandAll()
@@ -1668,11 +1736,11 @@ namespace ProbablyUnifiedHotkeys
             }
 
             _allExpanded = !_allExpanded;
-            _expandToggleBtn?.SetText(_allExpanded ? "全部收起" : "全部展开");
+            SetButtonTextFast(_expandToggleBtn, _allExpanded ? "全部收起" : "全部展开");
 
             bool hasQuery = !string.IsNullOrWhiteSpace(_searchQuery);
 
-            // 临时挂起外层 VerticalLayoutGroup 与 ContentSizeFitter，确保全部卡片在单帧内无任何过渡动画整齐到位，且仅触发 1 次集中排布
+            // 临时挂起外层容器、Viewport 及卡片标题栏 LayoutGroup，确保全部卡片在单帧内零过渡动画瞬间切换完毕，仅触发 1 次集中排布
             WithSuspendedRootLayout(() =>
             {
                 using (ComboKeyStore.EnterBypass())
@@ -1695,11 +1763,38 @@ namespace ProbablyUnifiedHotkeys
 
         private static void WithSuspendedRootLayout(Action action)
         {
-            var disabledLayouts = new List<Behaviour>();
+            var disabledLayouts = new List<Behaviour>(64);
             DisableContainerLayouts(_normalContentRoot, disabledLayouts);
-            if (_scrollRect != null && _scrollRect.content != null && _scrollRect.content.gameObject != _normalContentRoot)
+            if (_scrollRect != null)
             {
-                DisableContainerLayouts(_scrollRect.content.gameObject, disabledLayouts);
+                if (_scrollRect.content != null && _scrollRect.content.gameObject != _normalContentRoot)
+                {
+                    DisableContainerLayouts(_scrollRect.content.gameObject, disabledLayouts);
+                }
+                if (_scrollRect.viewport != null &&
+                    _scrollRect.viewport.gameObject != _normalContentRoot &&
+                    (_scrollRect.content == null || _scrollRect.viewport.gameObject != _scrollRect.content.gameObject))
+                {
+                    DisableContainerLayouts(_scrollRect.viewport.gameObject, disabledLayouts);
+                }
+            }
+
+            // 挂起各卡片标题行 HorizontalLayoutGroup，防止“恢复默认”按钮批量显隐期间逐行触发水平排版
+            for (int i = 0; i < _vanillaCards.Count; i++)
+            {
+                var vc = _vanillaCards[i];
+                if (vc.ResetButtonElement != null)
+                {
+                    DisableContainerLayouts(vc.HeaderRowObject, disabledLayouts);
+                }
+            }
+            for (int i = 0; i < _modGroups.Count; i++)
+            {
+                var mg = _modGroups[i];
+                if (mg.ResetButtonElement != null)
+                {
+                    DisableContainerLayouts(mg.HeaderRowObject, disabledLayouts);
+                }
             }
 
             try
@@ -1873,7 +1968,7 @@ namespace ProbablyUnifiedHotkeys
 
         public static void OnVanillaRulesRefreshed()
         {
-            if (_currentWindow == null || _isApplyingSettings) return;
+            if (_currentWindow == null || _isApplyingSettings || _suppressRuleConflictRefresh) return;
             SyncVanillaPendingFromManager();
             RefreshConflicts();
         }
@@ -1916,6 +2011,7 @@ namespace ProbablyUnifiedHotkeys
             using (ComboKeyStore.EnterBypass())
             {
                 _conflicts = ConflictDetector.Analyze(_allHotkeys);
+                _conflictViewDirty = true;
 
                 // 1. 刷新所有模组卡片按键按钮与冲突标签
                 foreach (var g in _modGroups)
@@ -1945,13 +2041,13 @@ namespace ProbablyUnifiedHotkeys
                 var uiEl = _currentWindow.Get(hk.RawOptionId);
                 if (uiEl != null && _capturingEntry != hk)
                 {
-                    uiEl.SetText(FormatHotkeyComboText(hk));
+                    SetButtonTextFast(uiEl, FormatHotkeyComboText(hk));
                     ApplySingleButtonColor(uiEl, hk.EffectiveCombo);
                 }
 
                 if (hk.ConflictButtonElement != null && _capturingEntry != hk)
                 {
-                    hk.ConflictButtonElement.SetText(FormatHotkeyComboText(hk));
+                    SetButtonTextFast(hk.ConflictButtonElement, FormatHotkeyComboText(hk));
                     ApplySingleButtonColor(hk.ConflictButtonElement, hk.EffectiveCombo);
                 }
             }
@@ -1960,33 +2056,47 @@ namespace ProbablyUnifiedHotkeys
         private static ButtonTextColor? FindButtonTextColorComponent(CustomUIElement? btn)
         {
             if (btn == null) return null;
+            int cacheKey = btn.root != null ? btn.root.GetInstanceID() : btn.GetHashCode();
+            if (ButtonTextColorCache.TryGetValue(cacheKey, out ButtonTextColor? cached))
+            {
+                return cached;
+            }
+
+            ButtonTextColor? comp = null;
             if (btn.root != null)
             {
-                var comp = btn.root.GetComponent<ButtonTextColor>();
-                if (comp != null) return comp;
+                comp = btn.root.GetComponent<ButtonTextColor>();
             }
-            if (btn.button != null)
+            if (comp == null && btn.button != null)
             {
-                var comp = btn.button.GetComponent<ButtonTextColor>();
-                if (comp != null) return comp;
+                comp = btn.button.GetComponent<ButtonTextColor>();
             }
-            if (btn.root != null)
+            if (comp == null && btn.root != null)
             {
-                return btn.root.GetComponentInChildren<ButtonTextColor>(true);
+                comp = btn.root.GetComponentInChildren<ButtonTextColor>(true);
             }
-            return btn.text != null ? btn.text.GetComponentInParent<ButtonTextColor>() : null;
+            if (comp == null && btn.text != null)
+            {
+                comp = btn.text.GetComponentInParent<ButtonTextColor>();
+            }
+
+            ButtonTextColorCache[cacheKey] = comp;
+            return comp;
         }
 
-        private static void CaptureDefaultButtonTheme(CustomUIElement? btn)
+        private static void CaptureDefaultButtonTheme(CustomUIElement? btn, bool forceRefresh = false)
         {
-            if (btn == null) return;
+            if (btn == null || (!forceRefresh && _hasDefaultButtonTheme && _baseButtonFontSize > 0f && _hasBaseButtonMargin))
+            {
+                return;
+            }
             if (btn.text != null)
             {
-                if (_baseButtonFontSize <= 0f)
+                if (forceRefresh || _baseButtonFontSize <= 0f)
                 {
                     _baseButtonFontSize = btn.text.fontSize;
                 }
-                if (!_hasBaseButtonMargin)
+                if (forceRefresh || !_hasBaseButtonMargin)
                 {
                     _baseButtonMargin = btn.text.margin;
                     _hasBaseButtonMargin = true;
@@ -2025,6 +2135,18 @@ namespace ProbablyUnifiedHotkeys
             if (btn == null) return;
 
             Color targetNormal = (useDefaultTheme && _hasDefaultButtonTextColor) ? _defaultButtonTextColor : normalColor;
+            int cacheKey = btn.root != null ? btn.root.GetInstanceID() : btn.GetHashCode();
+
+            var comp = FindButtonTextColorComponent(btn);
+            if (AppliedButtonNormalColorCache.TryGetValue(cacheKey, out Color lastApplied) && lastApplied == targetNormal)
+            {
+                bool compMatches = comp == null || BtcIsHoveredField == null || !(bool)BtcIsHoveredField.GetValue(comp);
+                if (compMatches && (btn.text == null || btn.text.color == targetNormal))
+                {
+                    return;
+                }
+            }
+
             Color targetHighlight = (useDefaultTheme && _hasDefaultButtonTheme)
                 ? _defaultHighlightColor
                 : Color.Lerp(targetNormal, Color.white, 0.35f);
@@ -2033,7 +2155,6 @@ namespace ProbablyUnifiedHotkeys
                 : Color.Lerp(targetNormal, Color.black, 0.25f);
 
             bool isHovered = false;
-            var comp = FindButtonTextColorComponent(btn);
             if (comp != null)
             {
                 BtcNormalField?.SetValue(comp, targetNormal);
@@ -2045,25 +2166,131 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
-            btn.SetTextColor(isHovered ? targetHighlight : targetNormal);
+            AppliedButtonNormalColorCache[cacheKey] = targetNormal;
+
+            Color wantTextColor = isHovered ? targetHighlight : targetNormal;
+            if (btn.text != null && btn.text.color != wantTextColor)
+            {
+                btn.text.color = wantTextColor;
+            }
         }
 
-        private static void StyleButtonTypography(CustomUIElement? btn, float lrMargin, float tbMargin, float fontScale, bool allowAutoShrink = false)
+        private static void SetTextIfChanged(CustomUIElement? el, string value)
+        {
+            if (el == null) return;
+            if (el.text != null)
+            {
+                if (!string.Equals(el.text.text, value, StringComparison.Ordinal))
+                {
+                    el.text.text = value;
+                }
+            }
+            else
+            {
+                el.SetText(value);
+            }
+        }
+
+        private static void SetButtonTextFast(CustomUIElement? btn, string value)
+        {
+            if (btn == null) return;
+            if (btn.text == null)
+            {
+                btn.SetText(value);
+                return;
+            }
+
+            if (btn.text.enableAutoSizing)
+            {
+                btn.text.enableAutoSizing = false;
+            }
+
+            bool textChanged = !string.Equals(btn.text.text, value, StringComparison.Ordinal);
+            if (textChanged)
+            {
+                btn.text.text = value;
+            }
+
+            int cacheKey = btn.root != null ? btn.root.GetInstanceID() : btn.GetHashCode();
+            if (ButtonFitSpecCache.TryGetValue(cacheKey, out ButtonFitSpec spec))
+            {
+                ApplySinglePassFontSize(btn.text, value, spec);
+            }
+        }
+
+        private static void ApplySinglePassFontSize(TextMeshProUGUI tmp, string? text, ButtonFitSpec spec)
+        {
+            if (tmp.enableAutoSizing)
+            {
+                tmp.enableAutoSizing = false;
+            }
+
+            if (string.IsNullOrEmpty(text))
+            {
+                if (!Mathf.Approximately(tmp.fontSize, spec.MaxFontSize))
+                {
+                    tmp.fontSize = spec.MaxFontSize;
+                }
+                return;
+            }
+
+            int fontId = tmp.font != null ? tmp.font.GetInstanceID() : 0;
+            if (fontId == 0)
+            {
+                if (!Mathf.Approximately(tmp.fontSize, spec.MaxFontSize))
+                {
+                    tmp.fontSize = spec.MaxFontSize;
+                }
+                return;
+            }
+
+            int widthTenths = Mathf.RoundToInt(spec.AvailWidth * 10f);
+            int maxSizeTenths = Mathf.RoundToInt(spec.MaxFontSize * 10f);
+            var key = (fontId, widthTenths, maxSizeTenths, text!);
+
+            if (!FittedFontSizeCache.TryGetValue(key, out float fitted))
+            {
+                tmp.fontSize = spec.MaxFontSize;
+                Vector2 pref = tmp.GetPreferredValues(text, float.PositiveInfinity, 0f);
+                fitted = spec.MaxFontSize;
+                if (pref.x > spec.AvailWidth && pref.x > 0.01f)
+                {
+                    float scaled = Mathf.Floor((spec.MaxFontSize * (spec.AvailWidth / pref.x)) * 10f) / 10f;
+                    fitted = Mathf.Max(spec.MinFontSize, Mathf.Min(spec.MaxFontSize, scaled));
+                }
+                FittedFontSizeCache[key] = fitted;
+            }
+
+            if (!Mathf.Approximately(tmp.fontSize, fitted))
+            {
+                tmp.fontSize = fitted;
+            }
+        }
+
+        private static void StyleButtonTypography(CustomUIElement? btn, float lrMargin, float tbMargin, float fontScale, float buttonWidth = -1f, bool allowAutoShrink = false)
         {
             if (btn == null || btn.text == null) return;
             float baseSize = _baseButtonFontSize > 0f ? _baseButtonFontSize : btn.text.fontSize;
             float targetSize = Mathf.Max(11f, Mathf.Round(baseSize * fontScale * 10f) / 10f);
             btn.text.margin = new Vector4(lrMargin, tbMargin, lrMargin, tbMargin);
-            if (allowAutoShrink)
+            btn.text.enableAutoSizing = false;
+            btn.text.enableWordWrapping = false;
+            btn.text.overflowMode = TextOverflowModes.Ellipsis;
+
+            if (allowAutoShrink && buttonWidth > 0f)
             {
-                btn.text.enableAutoSizing = true;
-                btn.text.fontSizeMin = 10.5f;
-                btn.text.fontSizeMax = targetSize;
-                btn.text.fontSize = targetSize;
+                var spec = new ButtonFitSpec
+                {
+                    AvailWidth = Mathf.Max(20f, buttonWidth - lrMargin * 2f - 4f),
+                    MaxFontSize = targetSize,
+                    MinFontSize = 10.5f
+                };
+                int cacheKey = btn.root != null ? btn.root.GetInstanceID() : btn.GetHashCode();
+                ButtonFitSpecCache[cacheKey] = spec;
+                ApplySinglePassFontSize(btn.text, btn.text.text, spec);
             }
             else
             {
-                btn.text.enableAutoSizing = false;
                 btn.text.fontSize = targetSize;
             }
         }
@@ -2076,18 +2303,22 @@ namespace ProbablyUnifiedHotkeys
             {
                 float targetSize = _baseButtonFontSize > 0f ? _baseButtonFontSize : btn.text.fontSize;
                 Vector4 baseMargin = _hasBaseButtonMargin ? _baseButtonMargin : btn.text.margin;
-                btn.text.margin = new Vector4(
-                    Mathf.Max(baseMargin.x, 8f),
-                    baseMargin.y,
-                    Mathf.Max(baseMargin.z, 8f),
-                    baseMargin.w
-                );
+                float leftMargin = Mathf.Max(baseMargin.x, 8f);
+                float rightMargin = Mathf.Max(baseMargin.z, 8f);
+                btn.text.margin = new Vector4(leftMargin, baseMargin.y, rightMargin, baseMargin.w);
                 btn.text.enableWordWrapping = false;
                 btn.text.overflowMode = TextOverflowModes.Ellipsis;
-                btn.text.enableAutoSizing = true;
-                btn.text.fontSizeMin = 10.5f;
-                btn.text.fontSizeMax = targetSize;
-                btn.text.fontSize = targetSize;
+                btn.text.enableAutoSizing = false;
+
+                var spec = new ButtonFitSpec
+                {
+                    AvailWidth = Mathf.Max(20f, width - leftMargin - rightMargin - 4f),
+                    MaxFontSize = targetSize,
+                    MinFontSize = 10.5f
+                };
+                int cacheKey = btn.root != null ? btn.root.GetInstanceID() : btn.GetHashCode();
+                ButtonFitSpecCache[cacheKey] = spec;
+                ApplySinglePassFontSize(btn.text, btn.text.text, spec);
             }
         }
 
@@ -2102,7 +2333,7 @@ namespace ProbablyUnifiedHotkeys
             btn.SetFixedWidth(width);
             btn.SetPreferredSize(width, height);
             btn.SetFlexible(0f, 0f);
-            StyleButtonTypography(btn, lrMargin, tbMargin, fontScale, allowAutoShrink: true);
+            StyleButtonTypography(btn, lrMargin, tbMargin, fontScale, width, allowAutoShrink: true);
         }
 
         private static void StyleFoldButton(CustomUIElement? btn, float size)
@@ -2152,20 +2383,20 @@ namespace ProbablyUnifiedHotkeys
         {
             if (hotkey.LabelElement != null)
             {
-                hotkey.LabelElement.SetText(BuildHotkeyLabelText(hotkey));
+                SetTextIfChanged(hotkey.LabelElement, BuildHotkeyLabelText(hotkey));
             }
 
             string formatted = FormatHotkeyComboText(hotkey);
 
             if (hotkey.ButtonElement != null && _capturingEntry != hotkey)
             {
-                hotkey.ButtonElement.SetText(formatted);
+                SetButtonTextFast(hotkey.ButtonElement, formatted);
                 ApplySingleButtonColor(hotkey.ButtonElement, hotkey.EffectiveCombo);
             }
 
             if (hotkey.ConflictButtonElement != null && _capturingEntry != hotkey)
             {
-                hotkey.ConflictButtonElement.SetText(formatted);
+                SetButtonTextFast(hotkey.ConflictButtonElement, formatted);
                 ApplySingleButtonColor(hotkey.ConflictButtonElement, hotkey.EffectiveCombo);
             }
         }
