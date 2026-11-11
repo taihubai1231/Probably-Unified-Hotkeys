@@ -22,9 +22,67 @@ namespace ProbablyUnifiedHotkeys
     }
 
     /// <summary>
+    /// 统一可折叠配置卡片接口（供原版官方区块与创意工坊模组卡片共用）
+    /// </summary>
+    public interface ICollapsibleOptionCard
+    {
+        bool IsExpanded { get; }
+        GameObject? HeaderRowObject { get; }
+        GameObject? ContentContainerObject { get; }
+        GameObject? OuterSeparatorObject { get; }
+        CustomUIElement? FoldArrowElement { get; }
+        void SetExpanded(bool expanded);
+    }
+
+    /// <summary>
+    /// 原版官方设置分组内的单条原生配置项引用（供搜索过滤与联动色彩刷新）
+    /// </summary>
+    public class VanillaOptionItem
+    {
+        public GameOptionRegistry.Entry Entry { get; set; } = null!;
+        public string DisplayName { get; set; } = string.Empty;
+        public bool IsKeyBind { get; set; }
+        public ModHotkeyEntry? LinkedHotkey { get; set; }
+        public List<GameObject> RowObjects { get; } = new List<GameObject>();
+    }
+
+    /// <summary>
+    /// 代表一个可折叠的原版官方设置区块卡片
+    /// </summary>
+    public class VanillaSectionCard : ICollapsibleOptionCard
+    {
+        public string SectionId { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public GameOptionRegistry.Section Section { get; set; } = null!;
+        public bool IsExpanded { get; set; } = true;
+        public int HotkeyCount { get; set; }
+        public int GeneralCount { get; set; }
+
+        public List<VanillaOptionItem> Entries { get; } = new List<VanillaOptionItem>();
+
+        public GameObject? HeaderRowObject { get; set; }
+        public GameObject? ContentContainerObject { get; set; }
+        public GameObject? OuterSeparatorObject { get; set; }
+        public CustomUIElement? FoldArrowElement { get; set; }
+
+        public void SetExpanded(bool expanded)
+        {
+            IsExpanded = expanded;
+            if (ContentContainerObject != null)
+            {
+                ContentContainerObject.SetActive(expanded);
+            }
+            if (FoldArrowElement != null)
+            {
+                FoldArrowElement.SetText(expanded ? "▼" : "▶");
+            }
+        }
+    }
+
+    /// <summary>
     /// 代表一个模组的配置与快捷键聚合组
     /// </summary>
-    public class ModOptionGroup
+    public class ModOptionGroup : ICollapsibleOptionCard
     {
         public string ModId { get; set; } = string.Empty;
         public string DisplayName { get; set; } = string.Empty;

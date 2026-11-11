@@ -3,16 +3,16 @@
   <ID>probably_unified_hotkeys</ID>
   <Name>可能是按键统一优化</Name>
   <Author>Antigravity &amp; taihubai1231</Author>
-  <ModVersion>1.3.1</ModVersion>
-  <Description>将所有模组的快捷键与常规设置统一整合进官方 ESC「选项」页，彻底告别设置散乱与上下重复。
+  <ModVersion>1.3.2</ModVersion>
+  <Description>将原版与所有模组的快捷键与常规设置统一整合进官方 ESC「选项」页，彻底告别设置散乱与上下重复。
 
 【能做什么】
-• 统一整理：上方保留纯净原版设置，下方卡片分区管理模组热键与常规项（展开支持一键「恢复」）
+• 统一整理：上方纯净原版区块与下方模组卡片均支持折叠收纳与拼音搜索（模组展开支持一键「恢复」）
 • 按键增强：支持 Shift / Ctrl / Alt 组合键、鼠标组合/侧键，按 Esc 即可解绑为「无」
 • 搜索排重：支持简繁中文、英文与拼音搜索定位，自带 [!] 仅看冲突集中排查与防误触
 
 【怎么使用】
-按 ESC 打开「选项」→ 顶部搜索或展开下方模组卡片 → 点击按键直接录入（按 Esc 清空，左/右键取消）→ 点击底部「应用设置」保存生效。</Description>
+按 ESC 打开「选项」→ 顶部搜索或展开/收起任意分区卡片 → 点击按键直接录入（按 Esc 清空，左/右键取消）→ 点击底部「应用设置」保存生效。</Description>
   <GameVersions>
     <Version>0.46</Version>
     <Version>0.46D</Version>
