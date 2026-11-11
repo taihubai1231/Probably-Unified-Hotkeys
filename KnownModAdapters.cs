@@ -15,25 +15,46 @@ namespace ProbablyUnifiedHotkeys
         private static int _assemblyEpoch = 1;
         private static bool _assemblyHooked = false;
 
+        private static T? CreateStaticDelegate<T>(MethodInfo? method) where T : Delegate
+        {
+            if (method == null) return null;
+            try
+            {
+                return (T)Delegate.CreateDelegate(typeof(T), method);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         // 1. ShowItemNames 缓存
         private static int _showItemEpoch = -1;
         private static PropertyInfo? _showItemHotkeyProp;
-        private static MethodInfo? _showItemSetMethod;
-        private static MethodInfo? _showItemCommitMethod;
+        private static Func<KeyCode>? _showItemGetHotkeyFn;
+        private static Action<KeyCode>? _showItemSetHotkeyPropFn;
+        private static Action<KeyCode>? _showItemSetMethodFn;
+        private static Action? _showItemCommitFn;
 
         // 2. ConflictScanner 缓存
         private static int _csEpoch = -1;
         private static PropertyInfo? _csKeyProp;
-        private static MethodInfo? _csSaveMethod;
+        private static Func<KeyCode>? _csGetKeyFn;
+        private static Action<KeyCode>? _csSetKeyPropFn;
+        private static Action<KeyCode>? _csSaveMethodFn;
 
         // 3. FactionReputationExpansion 缓存
         private static int _repEpoch = -1;
         private static PropertyInfo? _repJournalProp;
-        private static MethodInfo? _repSetJournalMethod;
+        private static Func<KeyCode>? _repGetJournalFn;
+        private static Action<KeyCode>? _repSetJournalPropFn;
+        private static Action<KeyCode, bool>? _repSetJournalMethodFn;
 
         // 4. ClientDemandHighlight 缓存
         private static int _demandEpoch = -1;
         private static PropertyInfo? _demandToggleProp;
+        private static Func<KeyCode>? _demandGetToggleFn;
+        private static Action<KeyCode>? _demandSetToggleFn;
         private static FieldInfo? _demandToggleField;
 
         // 5. Pen_mod_QoL_Tweaks 缓存
@@ -89,8 +110,10 @@ namespace ProbablyUnifiedHotkeys
                 if (settingsType != null)
                 {
                     _showItemHotkeyProp = AccessTools.Property(settingsType, "Hotkey");
-                    _showItemSetMethod = AccessTools.Method(settingsType, "SetHotkey", new Type[] { typeof(KeyCode) });
-                    _showItemCommitMethod = AccessTools.Method(settingsType, "Commit");
+                    _showItemGetHotkeyFn = CreateStaticDelegate<Func<KeyCode>>(_showItemHotkeyProp?.GetGetMethod(true));
+                    _showItemSetHotkeyPropFn = CreateStaticDelegate<Action<KeyCode>>(_showItemHotkeyProp?.GetSetMethod(true));
+                    _showItemSetMethodFn = CreateStaticDelegate<Action<KeyCode>>(AccessTools.Method(settingsType, "SetHotkey", new Type[] { typeof(KeyCode) }));
+                    _showItemCommitFn = CreateStaticDelegate<Action>(AccessTools.Method(settingsType, "Commit"));
                 }
                 _showItemEpoch = _assemblyEpoch;
             }
@@ -98,8 +121,10 @@ namespace ProbablyUnifiedHotkeys
             PropertyInfo? hotkeyProp = _showItemHotkeyProp;
             if (hotkeyProp == null) return;
 
-            MethodInfo? setHotkey = _showItemSetMethod;
-            MethodInfo? commit = _showItemCommitMethod;
+            Func<KeyCode>? getHotkey = _showItemGetHotkeyFn;
+            Action<KeyCode>? setHotkeyProp = _showItemSetHotkeyPropFn;
+            Action<KeyCode>? setHotkey = _showItemSetMethodFn;
+            Action? commit = _showItemCommitFn;
 
             var group = new ModOptionGroup
             {
@@ -117,18 +142,19 @@ namespace ProbablyUnifiedHotkeys
                 Tooltip = "按压或按下该快捷键以切换物品名称常显",
                 DefaultKey = KeyCode.LeftAlt,
                 HasExplicitDefault = true,
-                GetKey = () => (KeyCode)(hotkeyProp.GetValue(null) ?? KeyCode.None),
+                GetKey = () => getHotkey != null ? getHotkey() : (KeyCode)(hotkeyProp.GetValue(null) ?? KeyCode.None),
                 SetKey = (key) =>
                 {
                     if (setHotkey != null)
                     {
-                        setHotkey.Invoke(null, new object[] { key });
+                        setHotkey(key);
                     }
                     else
                     {
-                        hotkeyProp.SetValue(null, key);
+                        if (setHotkeyProp != null) setHotkeyProp(key);
+                        else hotkeyProp.SetValue(null, key);
                         PlayerPrefs.SetInt("snd.hotkey", (int)key);
-                        commit?.Invoke(null, null);
+                        commit?.Invoke();
                     }
                 }
             });
@@ -150,7 +176,9 @@ namespace ProbablyUnifiedHotkeys
                 if (keybindType != null)
                 {
                     _csKeyProp = AccessTools.Property(keybindType, "Key");
-                    _csSaveMethod = AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) });
+                    _csGetKeyFn = CreateStaticDelegate<Func<KeyCode>>(_csKeyProp?.GetGetMethod(true));
+                    _csSetKeyPropFn = CreateStaticDelegate<Action<KeyCode>>(_csKeyProp?.GetSetMethod(true));
+                    _csSaveMethodFn = CreateStaticDelegate<Action<KeyCode>>(AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) }));
                 }
                 _csEpoch = _assemblyEpoch;
             }
@@ -158,7 +186,9 @@ namespace ProbablyUnifiedHotkeys
             PropertyInfo? keyProp = _csKeyProp;
             if (keyProp == null) return;
 
-            MethodInfo? saveMethod = _csSaveMethod;
+            Func<KeyCode>? getKey = _csGetKeyFn;
+            Action<KeyCode>? setKeyProp = _csSetKeyPropFn;
+            Action<KeyCode>? saveMethod = _csSaveMethodFn;
 
             var group = new ModOptionGroup
             {
@@ -176,16 +206,17 @@ namespace ProbablyUnifiedHotkeys
                 Tooltip = "按下后呼出模组冲突检测器诊断面板",
                 DefaultKey = KeyCode.F8,
                 HasExplicitDefault = true,
-                GetKey = () => (KeyCode)(keyProp.GetValue(null) ?? KeyCode.None),
+                GetKey = () => getKey != null ? getKey() : (KeyCode)(keyProp.GetValue(null) ?? KeyCode.None),
                 SetKey = (key) =>
                 {
                     if (saveMethod != null)
                     {
-                        saveMethod.Invoke(null, new object[] { key });
+                        saveMethod(key);
                     }
                     else
                     {
-                        keyProp.SetValue(null, key);
+                        if (setKeyProp != null) setKeyProp(key);
+                        else keyProp.SetValue(null, key);
                         PlayerPrefs.SetString("conflict_scanner.report_key", key.ToString());
                         PlayerPrefs.Save();
                     }
@@ -209,7 +240,9 @@ namespace ProbablyUnifiedHotkeys
                 if (repModType != null)
                 {
                     _repJournalProp = AccessTools.Property(repModType, "JournalKey");
-                    _repSetJournalMethod = AccessTools.Method(repModType, "SetJournalKey", new Type[] { typeof(KeyCode), typeof(bool) });
+                    _repGetJournalFn = CreateStaticDelegate<Func<KeyCode>>(_repJournalProp?.GetGetMethod(true));
+                    _repSetJournalPropFn = CreateStaticDelegate<Action<KeyCode>>(_repJournalProp?.GetSetMethod(true));
+                    _repSetJournalMethodFn = CreateStaticDelegate<Action<KeyCode, bool>>(AccessTools.Method(repModType, "SetJournalKey", new Type[] { typeof(KeyCode), typeof(bool) }));
                 }
                 _repEpoch = _assemblyEpoch;
             }
@@ -217,7 +250,9 @@ namespace ProbablyUnifiedHotkeys
             PropertyInfo? journalProp = _repJournalProp;
             if (journalProp == null) return;
 
-            MethodInfo? setJournalKey = _repSetJournalMethod;
+            Func<KeyCode>? getJournalKey = _repGetJournalFn;
+            Action<KeyCode>? setJournalProp = _repSetJournalPropFn;
+            Action<KeyCode, bool>? setJournalKey = _repSetJournalMethodFn;
 
             var group = new ModOptionGroup
             {
@@ -235,12 +270,16 @@ namespace ProbablyUnifiedHotkeys
                 Tooltip = "按此键在游戏中打开或关闭各势力声望详情界面",
                 DefaultKey = KeyCode.J,
                 HasExplicitDefault = true,
-                GetKey = () => (KeyCode)(journalProp.GetValue(null) ?? KeyCode.None),
+                GetKey = () => getJournalKey != null ? getJournalKey() : (KeyCode)(journalProp.GetValue(null) ?? KeyCode.None),
                 SetKey = (key) =>
                 {
                     if (setJournalKey != null)
                     {
-                        setJournalKey.Invoke(null, new object[] { key, false });
+                        setJournalKey(key, false);
+                    }
+                    else if (setJournalProp != null)
+                    {
+                        setJournalProp(key);
                     }
                     else
                     {
@@ -266,12 +305,16 @@ namespace ProbablyUnifiedHotkeys
                 if (cfgType != null)
                 {
                     _demandToggleProp = AccessTools.Property(cfgType, "ToggleKey");
+                    _demandGetToggleFn = CreateStaticDelegate<Func<KeyCode>>(_demandToggleProp?.GetGetMethod(true));
+                    _demandSetToggleFn = CreateStaticDelegate<Action<KeyCode>>(_demandToggleProp?.GetSetMethod(true));
                     _demandToggleField = AccessTools.Field(cfgType, "_toggleKey");
                 }
                 _demandEpoch = _assemblyEpoch;
             }
 
             PropertyInfo? toggleProp = _demandToggleProp;
+            Func<KeyCode>? getToggle = _demandGetToggleFn;
+            Action<KeyCode>? setToggle = _demandSetToggleFn;
             FieldInfo? toggleField = _demandToggleField;
             if (toggleProp == null && toggleField == null) return;
 
@@ -291,10 +334,11 @@ namespace ProbablyUnifiedHotkeys
                 Tooltip = "按此键切换是否高亮当前顾客需求的特殊物品",
                 DefaultKey = KeyCode.H,
                 HasExplicitDefault = true,
-                GetKey = () => (KeyCode)((toggleProp?.GetValue(null) ?? toggleField?.GetValue(null)) ?? KeyCode.None),
+                GetKey = () => getToggle != null ? getToggle() : (KeyCode)((toggleProp?.GetValue(null) ?? toggleField?.GetValue(null)) ?? KeyCode.None),
                 SetKey = (key) =>
                 {
-                    if (toggleProp != null && toggleProp.CanWrite) toggleProp.SetValue(null, key);
+                    if (setToggle != null) setToggle(key);
+                    else if (toggleProp != null && toggleProp.CanWrite) toggleProp.SetValue(null, key);
                     else toggleField?.SetValue(null, key);
                     PlayerPrefs.SetInt("clientdemandhighlight.key", (int)key);
                     PlayerPrefs.Save();

@@ -29,6 +29,15 @@ namespace ProbablyUnifiedHotkeys
         };
 
         private static readonly MethodInfo? ApplyBoxedMethod = AccessTools.Method(typeof(ConfigEntry), "ApplyBoxed", new Type[] { typeof(object) });
+        private static readonly Func<ConfigEntry, object, bool>? ApplyBoxedDelegate =
+            ApplyBoxedMethod != null ? CreateOpenDelegate<Func<ConfigEntry, object, bool>>(ApplyBoxedMethod) : null;
+
+        private static T? CreateOpenDelegate<T>(MethodInfo? method) where T : Delegate
+        {
+            if (method == null) return null;
+            try { return (T)Delegate.CreateDelegate(typeof(T), method); }
+            catch { return null; }
+        }
         private static readonly Assembly VanillaAssembly = typeof(GameOptionRegistry).Assembly;
         private static readonly Assembly SelfAssembly = typeof(ModOptionScanner).Assembly;
         private static readonly Dictionary<Assembly, bool> SystemOrEngineAsmCache = new Dictionary<Assembly, bool>();
@@ -137,7 +146,8 @@ namespace ProbablyUnifiedHotkeys
         {
             try
             {
-                ApplyBoxedMethod?.Invoke(entry, new object[] { value });
+                if (ApplyBoxedDelegate != null) ApplyBoxedDelegate(entry, value);
+                else ApplyBoxedMethod?.Invoke(entry, new object[] { value });
                 entry.Config?.Save();
             }
             catch (Exception ex)
@@ -152,7 +162,8 @@ namespace ProbablyUnifiedHotkeys
             {
                 if (entry.BoxedDefault != null)
                 {
-                    ApplyBoxedMethod?.Invoke(entry, new object[] { entry.BoxedDefault });
+                    if (ApplyBoxedDelegate != null) ApplyBoxedDelegate(entry, entry.BoxedDefault);
+                    else ApplyBoxedMethod?.Invoke(entry, new object[] { entry.BoxedDefault });
                     entry.Config?.Save();
                 }
             }

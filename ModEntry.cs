@@ -148,11 +148,19 @@ namespace ProbablyUnifiedHotkeys
     }
 
     /// <summary>
-    /// 同步原版按键显示色与全局冲突指示（防止原版改键/重置后颜色或冲突标记过期）
+    /// 同步原版按键显示色与全局冲突指示（防止原版改键/重置后颜色或冲突标记过期），并在规则刷新期间接管缺失模组备注告警
     /// </summary>
     [HarmonyPatch(typeof(GameOptionUIManager), "RefreshRules")]
     public static class Patch_GameOptionUIManager_RefreshRules
     {
+        public static void Prefix()
+        {
+            if (UnifiedOptionUI.IsEnhancedWindowOpen)
+            {
+                UnifiedOptionUI._inEnhancedRefreshRules = true;
+            }
+        }
+
         public static void Postfix()
         {
             try
@@ -160,6 +168,11 @@ namespace ProbablyUnifiedHotkeys
                 UnifiedOptionUI.OnVanillaRulesRefreshed();
             }
             catch { }
+        }
+
+        public static void Finalizer()
+        {
+            UnifiedOptionUI._inEnhancedRefreshRules = false;
         }
     }
 
@@ -437,6 +450,7 @@ namespace ProbablyUnifiedHotkeys
                 else if (name == "ConflictScanner")
                 {
                     PatchConflictScanner(harmony, log);
+                    ConflictScannerPerfHelper.Bind(assembly, harmony, log);
                 }
                 else if (name == "ShowItemNames")
                 {
@@ -469,12 +483,31 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        private static T? CreateDelegateSafe<T>(MethodInfo? method) where T : Delegate
+        {
+            if (method == null) return null;
+            try
+            {
+                return (T)Delegate.CreateDelegate(typeof(T), method);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         // --- 多吉改键器 (DuojiHotkeyManager) ---
+        private static Func<List<KeyCode>?>? _duojiGetToggleKeysFn;
+        private static Action<string, KeyCode>? _duojiFinishCaptureFn;
+
         private static void PatchDuojiHotkeyManager(Harmony harmony, ModLog? log)
         {
             Type? hotkeyMgrType = AccessTools.TypeByName("DuojiHotkeyManager.HotkeyManager");
             if (hotkeyMgrType != null)
             {
+                _duojiFinishCaptureFn = CreateDelegateSafe<Action<string, KeyCode>>(
+                    AccessTools.Method(hotkeyMgrType, "FinishCapture", new Type[] { typeof(string), typeof(KeyCode) }));
+
                 MethodInfo? tickCapture = AccessTools.Method(hotkeyMgrType, "TickCapture");
                 if (tickCapture != null)
                 {
@@ -490,12 +523,13 @@ namespace ProbablyUnifiedHotkeys
                     harmony.Patch(getCaptureText, postfix: new HarmonyMethod(postfix));
                 }
 
-                _duojiGetToggleKeysMethod = AccessTools.PropertyGetter(hotkeyMgrType, "ToggleKeys");
+                _duojiGetToggleKeysFn = CreateDelegateSafe<Func<List<KeyCode>?>>(
+                    AccessTools.PropertyGetter(hotkeyMgrType, "ToggleKeys"));
                 MethodInfo? toggleAnyDown = AccessTools.Method(
                     hotkeyMgrType,
                     "ToggleAnyDown",
                     new Type[] { typeof(KeyCode).MakeByRefType(), typeof(bool).MakeByRefType() });
-                if (toggleAnyDown != null && _duojiGetToggleKeysMethod != null)
+                if (toggleAnyDown != null && _duojiGetToggleKeysFn != null)
                 {
                     MethodInfo prefix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(Duoji_ToggleAnyDown_Prefix));
                     harmony.Patch(toggleAnyDown, prefix: new HarmonyMethod(prefix));
@@ -516,19 +550,18 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
-        private static MethodInfo? _duojiGetToggleKeysMethod;
-
         public static bool Duoji_ToggleAnyDown_Prefix(ref KeyCode which, ref bool isFallback, ref bool __result)
         {
             which = KeyCode.None;
             isFallback = false;
 
-            if (_duojiGetToggleKeysMethod == null)
+            if (_duojiGetToggleKeysFn == null)
             {
                 return true;
             }
 
-            if (_duojiGetToggleKeysMethod.Invoke(null, null) is List<KeyCode> keys && keys.Count > 0)
+            List<KeyCode>? keys = _duojiGetToggleKeysFn();
+            if (keys != null && keys.Count > 0)
             {
                 ComboKeyStore.EnsureLoaded();
                 for (int i = 0; i < keys.Count; i++)
@@ -562,15 +595,10 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool Duoji_TickCapture_Prefix()
         {
-            if (Input.GetKeyDown(KeyCode.Escape))
+            if (Input.GetKeyDown(KeyCode.Escape) && _duojiFinishCaptureFn != null)
             {
-                Type? hotkeyMgrType = AccessTools.TypeByName("DuojiHotkeyManager.HotkeyManager");
-                if (hotkeyMgrType != null)
-                {
-                    MethodInfo? finishCapture = AccessTools.Method(hotkeyMgrType, "FinishCapture", new Type[] { typeof(string), typeof(KeyCode) });
-                    finishCapture?.Invoke(null, new object[] { "None", KeyCode.None });
-                    return false;
-                }
+                _duojiFinishCaptureFn("None", KeyCode.None);
+                return false;
             }
             return true;
         }
@@ -594,11 +622,19 @@ namespace ProbablyUnifiedHotkeys
         }
 
         // --- 快捷键冲突扫描 (ConflictScanner) ---
+        private static FieldInfo? _csUiCapturingField;
+        private static Action<KeyCode>? _csKeybindSaveFn;
+        private static Action? _csReportWindowShowFn;
+        private static FieldInfo? _csKeybindKeyField;
+        private static FieldInfo? _csKeybindLoadedField;
+
         private static void PatchConflictScanner(Harmony harmony, ModLog? log)
         {
             Type? uiType = AccessTools.TypeByName("ConflictScanner.KeybindUi");
             if (uiType != null)
             {
+                _csUiCapturingField = AccessTools.Field(uiType, "_capturing");
+
                 MethodInfo? poll = AccessTools.Method(uiType, "Poll");
                 if (poll != null)
                 {
@@ -611,7 +647,11 @@ namespace ProbablyUnifiedHotkeys
             Type? keybindType = AccessTools.TypeByName("ConflictScanner.Keybind");
             if (keybindType != null)
             {
+                _csKeybindKeyField = AccessTools.Field(keybindType, "_key");
+                _csKeybindLoadedField = AccessTools.Field(keybindType, "_loaded");
+
                 MethodInfo? save = AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) });
+                _csKeybindSaveFn = CreateDelegateSafe<Action<KeyCode>>(save);
                 if (save != null)
                 {
                     MethodInfo prefix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ConflictScanner_Save_Prefix));
@@ -632,6 +672,12 @@ namespace ProbablyUnifiedHotkeys
                     harmony.Patch(getKey, postfix: new HarmonyMethod(postfix));
                 }
             }
+
+            Type? reportWindowType = AccessTools.TypeByName("ConflictScanner.ReportWindow");
+            if (reportWindowType != null)
+            {
+                _csReportWindowShowFn = CreateDelegateSafe<Action>(AccessTools.Method(reportWindowType, "Show"));
+            }
         }
 
         public static void ConflictScanner_GetKey_Postfix(ref KeyCode __result)
@@ -643,11 +689,9 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool ConflictScanner_Poll_Prefix()
         {
-            Type? uiType = AccessTools.TypeByName("ConflictScanner.KeybindUi");
-            if (uiType == null) return true;
+            if (_csUiCapturingField == null) return true;
 
-            FieldInfo? capturingField = AccessTools.Field(uiType, "_capturing");
-            bool isCapturing = (bool)(capturingField?.GetValue(null) ?? false);
+            bool isCapturing = (bool)(_csUiCapturingField.GetValue(null) ?? false);
             if (!isCapturing) return true;
 
             KeyCode? targetKey = null;
@@ -662,20 +706,10 @@ namespace ProbablyUnifiedHotkeys
 
             if (targetKey.HasValue)
             {
-                capturingField?.SetValue(null, false);
-
-                Type? keybindType = AccessTools.TypeByName("ConflictScanner.Keybind");
-                if (keybindType != null)
-                {
-                    MethodInfo? save = AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) });
-                    save?.Invoke(null, new object[] { targetKey.Value });
-                }
-
+                _csUiCapturingField.SetValue(null, false);
+                _csKeybindSaveFn?.Invoke(targetKey.Value);
                 CustomUIManager.Instance?.GetWindow("conflict_scanner.rebind")?.Close();
-
-                Type? reportWindowType = AccessTools.TypeByName("ConflictScanner.ReportWindow");
-                MethodInfo? show = AccessTools.Method(reportWindowType, "Show");
-                show?.Invoke(null, null);
+                _csReportWindowShowFn?.Invoke();
 
                 return false;
             }
@@ -686,18 +720,14 @@ namespace ProbablyUnifiedHotkeys
         {
             if (key == KeyCode.None)
             {
-                Type? keybindType = AccessTools.TypeByName("ConflictScanner.Keybind");
-                if (keybindType != null)
+                _csKeybindKeyField?.SetValue(null, KeyCode.None);
+                _csKeybindLoadedField?.SetValue(null, true);
+                try
                 {
-                    AccessTools.Field(keybindType, "_key")?.SetValue(null, KeyCode.None);
-                    AccessTools.Field(keybindType, "_loaded")?.SetValue(null, true);
-                    try
-                    {
-                        PlayerPrefs.SetString("conflict_scanner.report_key", "None");
-                        PlayerPrefs.Save();
-                    }
-                    catch { }
+                    PlayerPrefs.SetString("conflict_scanner.report_key", "None");
+                    PlayerPrefs.Save();
                 }
+                catch { }
                 return false;
             }
             return true;
@@ -719,11 +749,21 @@ namespace ProbablyUnifiedHotkeys
         }
 
         // --- 物品名称常显 (ShowItemNames) ---
+        private static FieldInfo? _sinWindowCapturingField;
+        private static Action? _sinWindowRequestRebuildFn;
+        private static Action<KeyCode>? _sinSettingsSetHotkeyFn;
+        private static PropertyInfo? _sinSettingsHotkeyProp;
+        private static Action<KeyCode>? _sinSettingsSetHotkeyPropFn;
+        private static Action? _sinSettingsCommitFn;
+
         private static void PatchShowItemNames(Harmony harmony, ModLog? log)
         {
             Type? windowType = AccessTools.TypeByName("ShowItemNames.SettingsWindow");
             if (windowType != null)
             {
+                _sinWindowCapturingField = AccessTools.Field(windowType, "_capturing");
+                _sinWindowRequestRebuildFn = CreateDelegateSafe<Action>(AccessTools.Method(windowType, "RequestRebuild"));
+
                 MethodInfo? poll = AccessTools.Method(windowType, "PollCapture");
                 if (poll != null)
                 {
@@ -736,7 +776,12 @@ namespace ProbablyUnifiedHotkeys
             Type? settingsType = AccessTools.TypeByName("ShowItemNames.Settings");
             if (settingsType != null)
             {
+                _sinSettingsHotkeyProp = AccessTools.Property(settingsType, "Hotkey");
+                _sinSettingsSetHotkeyPropFn = CreateDelegateSafe<Action<KeyCode>>(_sinSettingsHotkeyProp?.GetSetMethod(true));
+                _sinSettingsCommitFn = CreateDelegateSafe<Action>(AccessTools.Method(settingsType, "Commit"));
+
                 MethodInfo? setHotkey = AccessTools.Method(settingsType, "SetHotkey", new Type[] { typeof(KeyCode) });
+                _sinSettingsSetHotkeyFn = CreateDelegateSafe<Action<KeyCode>>(setHotkey);
                 if (setHotkey != null)
                 {
                     MethodInfo prefix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ShowItemNames_SetHotkey_Prefix));
@@ -761,11 +806,9 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool ShowItemNames_PollCapture_Prefix(ref bool __result)
         {
-            Type? windowType = AccessTools.TypeByName("ShowItemNames.SettingsWindow");
-            if (windowType == null) return true;
+            if (_sinWindowCapturingField == null) return true;
 
-            FieldInfo? capturingField = AccessTools.Field(windowType, "_capturing");
-            bool isCapturing = (bool)(capturingField?.GetValue(null) ?? false);
+            bool isCapturing = (bool)(_sinWindowCapturingField.GetValue(null) ?? false);
             if (!isCapturing) return true;
 
             KeyCode? captured = null;
@@ -780,17 +823,9 @@ namespace ProbablyUnifiedHotkeys
 
             if (captured.HasValue)
             {
-                capturingField?.SetValue(null, false);
-
-                Type? settingsType = AccessTools.TypeByName("ShowItemNames.Settings");
-                if (settingsType != null)
-                {
-                    MethodInfo? setHotkey = AccessTools.Method(settingsType, "SetHotkey", new Type[] { typeof(KeyCode) });
-                    setHotkey?.Invoke(null, new object[] { captured.Value });
-                }
-
-                MethodInfo? requestRebuild = AccessTools.Method(windowType, "RequestRebuild");
-                requestRebuild?.Invoke(null, null);
+                _sinWindowCapturingField.SetValue(null, false);
+                _sinSettingsSetHotkeyFn?.Invoke(captured.Value);
+                _sinWindowRequestRebuildFn?.Invoke();
 
                 __result = true;
                 return false;
@@ -802,26 +837,44 @@ namespace ProbablyUnifiedHotkeys
         {
             if (key == KeyCode.None)
             {
-                Type? settingsType = AccessTools.TypeByName("ShowItemNames.Settings");
-                if (settingsType != null)
-                {
-                    PropertyInfo? hotkeyProp = AccessTools.Property(settingsType, "Hotkey");
-                    hotkeyProp?.SetValue(null, KeyCode.None);
-                    PlayerPrefs.SetInt("snd.hotkey", 0);
-                    MethodInfo? commitMethod = AccessTools.Method(settingsType, "Commit");
-                    commitMethod?.Invoke(null, null);
-                }
+                if (_sinSettingsSetHotkeyPropFn != null) _sinSettingsSetHotkeyPropFn(KeyCode.None);
+                else _sinSettingsHotkeyProp?.SetValue(null, KeyCode.None);
+                PlayerPrefs.SetInt("snd.hotkey", 0);
+                _sinSettingsCommitFn?.Invoke();
                 return false;
             }
             return true;
         }
 
         // --- 智能物品整理 (SmartInventoryArrange) ---
+        private static FieldInfo? _siaModelField;
+        private static PropertyInfo? _siaCaptureProp;
+        private static object? _siaNoneKeyValue;
+        private static MethodInfo? _siaBindMethod;
+
         private static void PatchSmartInventoryArrange(Harmony harmony, ModLog? log)
         {
             Type? guiType = AccessTools.TypeByName("SmartInventoryArrange.UnifiedSettingsGui");
+            Type? modelType = AccessTools.TypeByName("SmartInventoryArrange.SettingsHotkeys");
+            Type? settingsBindingType = AccessTools.TypeByName("SmartInventoryArrange.SettingsBinding");
+            Type? settingsHotkeyType = AccessTools.TypeByName("SmartInventoryArrange.SettingsHotkey");
+
             if (guiType != null)
             {
+                _siaModelField = AccessTools.Field(guiType, "Model");
+                if (modelType != null)
+                {
+                    _siaCaptureProp = AccessTools.Property(modelType, "Capture");
+                }
+                if (settingsHotkeyType != null)
+                {
+                    _siaNoneKeyValue = AccessTools.Field(settingsHotkeyType, "None")?.GetValue(null);
+                }
+                if (settingsBindingType != null && settingsHotkeyType != null)
+                {
+                    _siaBindMethod = AccessTools.Method(guiType, "Bind", new Type[] { settingsBindingType, settingsHotkeyType });
+                }
+
                 MethodInfo? captureKey = AccessTools.Method(guiType, "CaptureKey");
                 if (captureKey != null)
                 {
@@ -834,30 +887,16 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool SmartInventoryArrange_CaptureKey_Prefix(object __instance)
         {
-            if (Input.GetKeyDown(KeyCode.Escape))
+            if (Input.GetKeyDown(KeyCode.Escape) && _siaModelField != null && _siaCaptureProp != null && _siaBindMethod != null && _siaNoneKeyValue != null)
             {
-                Type? guiType = AccessTools.TypeByName("SmartInventoryArrange.UnifiedSettingsGui");
-                Type? modelType = AccessTools.TypeByName("SmartInventoryArrange.SettingsHotkeys");
-                Type? settingsBindingType = AccessTools.TypeByName("SmartInventoryArrange.SettingsBinding");
-                Type? settingsHotkeyType = AccessTools.TypeByName("SmartInventoryArrange.SettingsHotkey");
-
-                if (guiType != null && modelType != null && settingsBindingType != null && settingsHotkeyType != null)
+                object? model = _siaModelField.GetValue(__instance);
+                if (model != null)
                 {
-                    FieldInfo? modelField = AccessTools.Field(guiType, "Model");
-                    object? model = modelField?.GetValue(__instance);
-                    if (model != null)
+                    object? currentBinding = _siaCaptureProp.GetValue(model);
+                    if (currentBinding != null)
                     {
-                        PropertyInfo? captureProp = AccessTools.Property(modelType, "Capture");
-                        object? currentBinding = captureProp?.GetValue(model);
-                        if (currentBinding != null)
-                        {
-                            FieldInfo? noneField = AccessTools.Field(settingsHotkeyType, "None");
-                            object? noneKey = noneField?.GetValue(null);
-
-                            MethodInfo? bindMethod = AccessTools.Method(guiType, "Bind", new Type[] { settingsBindingType, settingsHotkeyType });
-                            bindMethod?.Invoke(__instance, new object[] { currentBinding, noneKey! });
-                            return false;
-                        }
+                        _siaBindMethod.Invoke(__instance, new object[] { currentBinding, _siaNoneKeyValue });
+                        return false;
                     }
                 }
             }
@@ -865,11 +904,18 @@ namespace ProbablyUnifiedHotkeys
         }
 
         // --- 势力声望拓展 (FactionReputationExpansion) ---
+        private static Func<bool>? _repCapturingFn;
+        private static Action<KeyCode, bool>? _repSetJournalKeyFn;
+
         private static void PatchFactionReputationExpansion(Harmony harmony, ModLog? log)
         {
             Type? repModType = AccessTools.TypeByName("FactionReputationExpansion.RepMod");
             if (repModType != null)
             {
+                _repCapturingFn = CreateDelegateSafe<Func<bool>>(AccessTools.PropertyGetter(repModType, "CapturingHotkey"));
+                _repSetJournalKeyFn = CreateDelegateSafe<Action<KeyCode, bool>>(
+                    AccessTools.Method(repModType, "SetJournalKey", new Type[] { typeof(KeyCode), typeof(bool) }));
+
                 MethodInfo? tick = AccessTools.Method(repModType, "Tick");
                 if (tick != null)
                 {
@@ -908,12 +954,9 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool FactionReputation_Tick_Prefix()
         {
-            Type? repModType = AccessTools.TypeByName("FactionReputationExpansion.RepMod");
-            if (repModType == null) return true;
+            if (_repCapturingFn == null) return true;
 
-            PropertyInfo? capturingProp = AccessTools.Property(repModType, "CapturingHotkey");
-            bool capturing = (bool)(capturingProp?.GetValue(null) ?? false);
-            if (!capturing) return true;
+            if (!_repCapturingFn()) return true;
 
             KeyCode? captured = null;
             if (KeyBindRuntimeHelper.TryPollSideMouseButton(out KeyCode sideBtn))
@@ -927,8 +970,7 @@ namespace ProbablyUnifiedHotkeys
 
             if (captured.HasValue)
             {
-                MethodInfo? setJournalKey = AccessTools.Method(repModType, "SetJournalKey", new Type[] { typeof(KeyCode), typeof(bool) });
-                setJournalKey?.Invoke(null, new object[] { captured.Value, false });
+                _repSetJournalKeyFn?.Invoke(captured.Value, false);
                 return false;
             }
             return true;

@@ -92,6 +92,10 @@ namespace ProbablyUnifiedHotkeys
                 {
                     ResetButtonElement.SetVisible(shouldShowReset);
                 }
+                if (shouldShowReset)
+                {
+                    UnifiedOptionUI.SyncCompactActionButton(ResetButtonElement);
+                }
             }
         }
     }
@@ -142,6 +146,10 @@ namespace ProbablyUnifiedHotkeys
                 if (ResetButtonElement.root == null || ResetButtonElement.root.activeSelf != shouldShowReset)
                 {
                     ResetButtonElement.SetVisible(shouldShowReset);
+                }
+                if (shouldShowReset)
+                {
+                    UnifiedOptionUI.SyncCompactActionButton(ResetButtonElement);
                 }
             }
         }

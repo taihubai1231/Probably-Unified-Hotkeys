@@ -12,10 +12,10 @@
 - **来源委托级重复拦截**：不仅检查配置段与条目的 `source` 标识，还会追溯其底层读写回调委托（`Delegate`）所属的程序集来源；即便第三方模组直接向原版分区注入设置项，也会自动从上方原版区剔除并收编到下方专属卡片，彻底避免上下重复。
 
 ### 2. 统一折叠卡片、原版/模组「恢复默认」与原生视觉一致性
-- **原版与模组统一折叠体系**：无论是上方 **原版官方分区** 还是下方 **创意工坊模组卡片**，头部均配备统一的 `34×34` 方形折叠按钮（居中缩小比例 `▶` / `▼` 图标）以及条目计数徽章 `(按键: X | 常规: Y)`；顶部 **`全部展开` / `全部收起`** 可单帧无过渡动画一键同步切换全页（含原版与模组）。
+- **原版与模组统一折叠体系**：无论是上方 **原版官方分区** 还是下方 **创意工坊模组卡片**，头部均配备统一的 `36×36` 方形折叠按钮（零内外边距压缩、居中 `▶` / `▼` 图标）以及条目计数徽章 `(按键: X | 常规: Y)`；顶部 **`全部展开` / `全部收起`** 可单帧无过渡动画一键同步切换全页（含原版与模组）。
 - **原生按键按钮质感对齐**：卡片内部、`[!] 仅看冲突` 视图与上方原版设置共用统一 `StyleHotkeyButton` 规范（对齐官方原生高度、原生字号及左右 `160px` 宽度），既保留原版精致外观，又能在录入超长组合键（如 `Ctrl+Shift+Alt+鼠标侧键1`）时自适应微缩防裁切。
 - **垂直双区分段**：模组卡片展开后内部采用「上半截快捷键 + 下半截常规设置」垂直分隔结构（开关、滑动条、下拉框），原版区块同样保持 `24px / 16px` 对称内缩进对齐。
-- **全卡片统一按需「恢复默认」**：原版官方分区（`游戏` / `音频` / `显示` / `对话` / `按键绑定`）与创意工坊模组卡片均在展开后于卡片右上角提供统一的 **`恢复默认`** 按钮（折叠时自动隐藏）；原版区块按游戏官方出厂默认值还原（含 `display` 非 16:9 显示器 `fullscreen -> resolution` 规则重算、`dialogue_bubble_scale = 10` 及原版按键 `KeyBindHelper.GetDefault` 与组合键修饰重置，点击底部「应用设置」统一生效），未提供显式默认值的第三方模组则通过**会话启动快照**兜底恢复。
+- **全卡片统一按需「恢复默认」**：原版官方分区（`游戏` / `音频` / `显示` / `对话` / `按键绑定`）与创意工坊模组卡片均在展开后于卡片右上角提供统一的 **`恢复默认`** 按钮（`112×36`，折叠时自动隐藏）；原版区块按游戏官方出厂默认值还原（含 `display` 非 16:9 显示器 `fullscreen -> resolution` 规则重算、`dialogue_bubble_scale = 10` 及原版按键 `KeyBindHelper.GetDefault` 与组合键修饰重置，点击底部「应用设置」统一生效），未提供显式默认值的第三方模组则通过**会话启动快照**兜底恢复。
 
 ### 3. `Shift / Ctrl / Alt` 全覆盖组合键与鼠标组合
 - **原版与模组统一支持**：上方原版快捷键、官方 `ModConfig`（`ConfigEntry<KeyCode>`）、`GameOptionRegistry` 注册项及主流创意工坊模组均可绑定单修饰或多重修饰组合键（如 `Ctrl + C`、`Ctrl + 0`、`Ctrl+Shift+Alt+E`）。
@@ -46,15 +46,15 @@
 - **多维度智能匹配**：
   - 内置 **20,902 字** CJK 全字符集拼音引擎与 **2,473 组**纯代码繁简汉字对照表；
   - 简体输入（如 `现实时钟`、`店铺升级`、`主音量`、`全屏`）可直接命中原版或繁/简体模组设置；
-  - 同时支持英文原名、全拼、拼音首字母缩写（如 `sp` 搜 `商品`、`zyl` 搜 `主音量`、`xssz` 搜 `現實時鐘`），按键检索还会额外匹配组合键全称（如 `ctrl`、`侧键`、`无`）与 Unity 键码名。
+  - 同时支持英文原名、全拼、拼音首字母缩写（如 `sp` 搜 `商品`、`zyl` 搜 `主音量`、`xssz` 搜 `現實時鐘`），按键检索还会额外匹配组合键全称（如 `ctrl`、`侧键`、`无`）与键码词元前缀（如 `keypad6`、`kp6`、`numpad 6`，避免词中子串误匹配）。
 - **自动跳转视窗焦点与友好空状态**：输入关键字后自动退出冲突视图、隐藏未匹配区块标题、在挂起根容器布局下单帧同步展开命中卡片并滚动视窗定位至首个匹配项；清空搜索后自动恢复原始折叠态并回到顶部。
 
 ### 8. 全链路流畅度重构（选项 / 全部展开 / 改造件 / 退出游戏）与官方安全规范
-- **闲置分帧预热与离线装配（「选项」开窗）**：主菜单启动后的 3 个空闲帧内单线程静默完成 `pinyin.bin` 词库（~20,902 字）、`ModCatalogCache` 配置目录及 `ModUIManager` 界面骨架预热；开启「选项」时先隐藏窗口根节点完成全量原版/模组卡片离线装配与原版规则同步后再一次性激活展示，配合 `ButtonTextColor` / `FittedFontSizeCache` 组件与字号缓存、适配器 `epoch` 反射缓存与零分配委托归属检测，大幅削减首次与重复打开耗散。
-- **单次字体测量 + 帧预算预建 + 全层级布局挂起（「全部展开 / 收起」）**：全面移除 50~100+ 颗按键与 `恢复默认` 按钮上的 `TMP_Text.enableAutoSizing` 多次二分测量循环，改为基于 `GetPreferredValues` 结果缓存的单次字号自适应；闲置帧预建以约 `3.5ms/帧` 预算连续完成多张折叠卡片构建；一键展开/收起同步挂起外层容器、Viewport 及所有卡片标题行 `LayoutGroup` / `ContentSizeFitter` 并差分刷新状态，单帧无过渡瞬间切换。
-- **列表对象池化与 O(1) 依赖索引（「改造件」面板）**：在 `ModUIManager.PopulateLayoutList` 引入按模组 ID 复用的 `Row` 对象池，避免每次开关面板销毁并重建 40+ 个模组条目（120+ 个子对象）；在 `RefreshRowIssues` / `GetModIssue` 期间建立前置依赖 O(1) 查找字典以消除 `ModLoader.Mods.Find` 带来的 O(N²) 列表拷贝分配，并保持与第三方改造件面板钩子（如 `ConflictScanner`）的 Postfix 完全兼容。
+- **闲置分帧预热与离线装配（「选项」开窗）**：主菜单启动后的空闲帧内单线程静默完成 `pinyin.bin` 词库（~20,902 字）、`ModCatalogCache` 配置目录、`ModUIManager` 界面骨架与 `ConflictScanner` 冲突缓存预热；开启「选项」时先隐藏窗口根节点完成全量原版/模组卡片离线装配与原版规则同步，并在 `Show()` 激活后做轻量按钮排版校准，配合 `ButtonTextColor` / `FittedFontSizeCache` 组件与字号缓存、适配器 `epoch` 反射缓存与零分配委托归属检测，大幅削减首次与重复打开耗时，并抑制第三方模组未展开区段的 `[CustomUI]` 缺失备注告警。
+- **单次宽高双重字体测量 + 缓存挂起布局（「全部展开 / 收起」）**：全面移除 50~100+ 颗按键与 `恢复默认` 按钮上的 `TMP_Text.enableAutoSizing` 多次二分测量循环，改为基于 `GetPreferredValues` 宽高双约束结果缓存与 `HorizontalLayoutGroup` 内边距精确控制的单次字号自适应；闲置帧预建以约 `7.5ms/帧` 预算连续完成多张折叠卡片构建；一键展开/收起直接复用已缓存的各级容器/标题行/内容容器 `LayoutGroup` / `ContentSizeFitter` 列表进行单帧无过渡瞬间切换，零每点击 `GetComponents` 扫描。
+- **列表对象池化、O(1) 依赖索引与冲突引擎去重（「改造件」面板）**：在 `ModUIManager.PopulateLayoutList` 引入按模组 ID 复用的 `Row` 对象池，避免每次开关面板销毁并重建 40+ 个模组条目（120+ 个子对象）；在 `RefreshRowIssues` / `GetModIssue` 期间建立前置依赖 O(1) 查找字典以消除 `ModLoader.Mods.Find` 带来的 O(N²) 列表拷贝分配；对同时装有 `ConflictScanner` 的环境消除 `OpenPanel` 期间两次重复 `ConflictEngine.Invalidate + EnsureBuilt(true)`（全量 40+ DLL 的 `DseCecil` 同步解析）并以内存模组状态签名跨次开窗缓存。
 - **秒级退出流程（「退出游戏」）**：主菜单退出、暂停菜单退出与窗口关闭前统一安全触发各模组 `OnDisable()` 以保存配置，随后清空已卸载模组持有的一次性 `HarmonyInstance` 引用以跳过 `ModLoader.OnApplicationQuit()` 在进程销毁前的 40+ 次同步 `UnpatchAll` 动态方法重编译；同时在游戏禁用遥测（`OVERWRITE_DISABLE_ANALYTICS == true`）时跳过暂停菜单 `QuitWithAnalytics()` 无意义的 1 秒固定空等，实现流畅秒退。
-- **白名单高效监听 & `ModScanner` 全绿**：工坊程序集监听通过 `O(1)` 名称白名单过滤，零后台线程/零越界反射，通过游戏官方 `ModScanner` 静态扫描 **0 Findings / 0 Capabilities / 0 HardFlags / Refused: False**。
+- **全面委托化热点钩子 & `ModScanner` 全绿**：全代码库零 `FindObjectsOfType` / `GameObject.Find`，所有 `AccessTools.TypeByName` 与热点 `MethodInfo` 均在启动/epoch 初始化阶段一次性绑定为静态 `Delegate.CreateDelegate` 强类型委托，消除每帧与热路径反射查找；工坊程序集监听通过 `O(1)` 名称白名单过滤，严格遵守官方 `ModScanner` 静态扫描 **0 Findings / 0 Capabilities / 0 HardFlags / Refused: False**。
 
 ---
 
@@ -77,6 +77,21 @@
 ---
 
 ## 📝 更新日志
+
+### v1.4.2
+1. **彻底修复四大核心按钮文字空白（`[!] 仅看冲突`、`全部展开`、`▶/▼` 折叠按钮、`恢复默认`）**：
+   - 定位 `Meta_Button` 预制体自带 `HorizontalLayoutGroup.padding = (16, 16, 4, 4)` 与 `childForceExpand = false` 在 `34×34` 折叠按钮上将内部 `Text (TMP)` 矩形压缩至仅 `2px` 宽的根因，并在紧凑型动作按钮（`228×40` / `146×40` / `112×36`）上改由 `HorizontalLayoutGroup` 接管唯一内边距（消除 `TMP.margin` 二次累加导致的垂直高度溢出与 `Ellipsis` 零字符裁切）。
+   - 修复离线装配阶段（`windowRoot.SetActive(false)` 后）因 `TMPLocalizer` 尚未运行导致测量与 `Lubrifont` 运行时字体不一致、以及 `builder.Show()` / `SetVisible(true)` 首次激活时可能触发组件重置的问题：捕获活跃层 `_activeButtonFont` 预先参与测量、`ApplySinglePassFontSize` 同时校验安全宽高与二次微调，并在窗口 `Show()` 及卡片 `SetExpanded(true)` 后同步刷新按钮字体、主题色与排布。
+2. **修复“整体搜索 `yp` 误匹配 `ConflictScanner` 冲突报告窗口快捷键”的根源逻辑**：
+   - 因 `conflict_scanner.ReportKey`（当前绑定显示为 `Numpad 6`）对应的 Unity 枚举名 `KeyCode.Keypad6` 中恰包含词中子串 `"yp"`（`Ke[yp]ad6`），原 `PinyinEngine.Matches(hotkey.EffectiveKey.ToString(), query)` 会产生反直觉误命中。
+   - 新增 `MatchesKeyCodeSearchToken` 与格式化键名边界匹配 `MatchesFormattedKeyText`（支持 `keypad6`、`kp6`、`numpad 6`、`num6`、`小键盘6`、`xjp6`、`ctrl+c` 等词元起点与别名匹配，同时禁止英文按键文本内部的 `"yp"` / `"ow"` / `"on"` / `"ne"` / `"mp"` 词中子串误触发）。
+3. **重度解决「改造件」与「全部展开」卡顿并消除 `[CustomUI]` 警告**：
+   - 在 `ModUIManager.OpenPanel` 期间注入 `ConflictScannerPerfHelper` 作用域去重与环境指纹缓存：消除每次点开「改造件」触发 `ConflictScanner.PatchPopulateLayoutList` + `PatchOpenPanel` 连续执行 **两次全量 40+ DLL 的 `DseCecil` 同步解析**，并在 `IdleWarmupRunner` 主菜单闲置阶段静默预热，同时完整编码 `LoadedMod.IsEnabled` 与 `ModLoader.IsModEnabled` 双状态位及模组列表中增删改动以按需失效重建，零 `System.IO` 越界保持 `ModScanner` 全绿。
+   - 缓存 `WithSuspendedRootLayout`（含各卡片 `ContentContainerObject`）与 `ModUIManager` 容器 `LayoutGroup` / `ContentSizeFitter` 引用列表，消除「全部展开 / 收起」及列表筛选期间反复调用 `GetComponents` 与堆列表分配，并将折叠卡片后台预建预算提升至 `7.5ms/帧`（仍保持零过渡动画瞬间切换）。
+   - 通过 `Patch_GameOptionUIManager_RefreshRules` + `Patch_CustomUIWindow_Get` 在增强版选项规则刷新期间优雅静默未实例化/无独立面板注记的模组段（如 `note_user.realtimeclock:clock`），清除 `Player.log` 冗余警告日志。
+4. **全代码库反射与遍历规范审计优化**：
+   - 清理 `ModEntry` 中此前在每帧钩子（`Duoji_ToggleAnyDown_Prefix`、`ConflictScanner_Poll_Prefix`、`ShowItemNames_PollCapture_Prefix`、`FactionReputation_Tick_Prefix`）及捕获保存路径中反复执行的 `AccessTools.TypeByName` 与 `MethodInfo.Invoke`，全面升级为补丁安装/类型加载时一次性绑定的 `Delegate.CreateDelegate` 强类型委托与静态字段句柄。
+   - 将 `UnifiedOptionUI`（`BuildEntry` / `NoteId` / `OnApplySetting` / `RefreshRules` / `SetKeyBindStatus` / `FireOnModConfigApplied`）、`ModOptionScanner.ApplyBoxed`、`KnownModAdapters` 及 `PerformancePatches.ModUIManagerPerfHelper` 中可委托化成员全部迁移为强类型委托调用，全库零 `FindObjectsOfType` / `GameObject.Find`。
 
 ### v1.4.1
 1. **深度扫描审计与第三方模组兼容性完善**：

@@ -74,6 +74,7 @@ namespace ProbablyUnifiedHotkeys
         private struct ButtonFitSpec
         {
             public float AvailWidth;
+            public float AvailHeight;
             public float MaxFontSize;
             public float MinFontSize;
         }
@@ -82,9 +83,16 @@ namespace ProbablyUnifiedHotkeys
         private static readonly Dictionary<int, Color> AppliedButtonNormalColorCache = new Dictionary<int, Color>(128);
         private static readonly Dictionary<int, ButtonFitSpec> ButtonFitSpecCache = new Dictionary<int, ButtonFitSpec>(128);
 
-        // 跨打开会话可复用的单次字体缩放尺寸缓存 (fontInstanceId, availWidth*10, maxFontSize*10, text) -> fittedFontSize
-        private static readonly Dictionary<(int fontId, int widthTenths, int maxSizeTenths, string text), float> FittedFontSizeCache
-            = new Dictionary<(int, int, int, string), float>(256);
+        // 跨打开会话可复用的单次字体缩放尺寸缓存 (fontInstanceId, availWidth*10, availHeight*10, maxFontSize*10, text) -> fittedFontSize
+        private static readonly Dictionary<(int fontId, int widthTenths, int heightTenths, int maxSizeTenths, string text), float> FittedFontSizeCache
+            = new Dictionary<(int, int, int, int, string), float>(256);
+
+        private static TMP_FontAsset? _activeButtonFont = null;
+        private static List<Behaviour>? _cachedSuspendableLayouts = null;
+        private static bool _cachedSuspendableLayoutsDirty = true;
+        private static Dictionary<string, CustomUIElement>? _currentWindowElements = null;
+        internal static bool _inEnhancedRefreshRules = false;
+        private static readonly FieldInfo? CustomWindowElementsField = AccessTools.Field(typeof(CustomUIWindow), "elements");
 
         private static readonly Stopwatch PrebuildStopwatch = new Stopwatch();
         private static bool _suppressRuleConflictRefresh = false;
@@ -175,16 +183,60 @@ namespace ProbablyUnifiedHotkeys
         private static readonly FieldInfo? BtcIsHoveredField = AccessTools.Field(typeof(ButtonTextColor), "isHovered");
 
         // 反射缓存原版 GameOptionUIManager 私有成员
-        private static readonly MethodInfo? BuildEntryMethod = AccessTools.Method(typeof(GameOptionUIManager), "BuildEntry");
-        private static readonly MethodInfo? NoteIdMethod = AccessTools.Method(typeof(GameOptionUIManager), "NoteId");
-        private static readonly MethodInfo? OriginalApplySettingMethod = AccessTools.Method(typeof(GameOptionUIManager), "OnApplySetting");
-        private static readonly MethodInfo? RefreshRulesMethod = AccessTools.Method(typeof(GameOptionUIManager), "RefreshRules");
-        private static readonly MethodInfo? SetKeyBindStatusMethod = AccessTools.Method(typeof(GameOptionUIManager), "SetKeyBindStatus");
-        private static readonly MethodInfo? FireModConfigAppliedMethod = AccessTools.Method(typeof(ModHook), "FireOnModConfigApplied", new Type[] { typeof(string) });
+        private static T? CreateMethodDelegate<T>(MethodInfo? method) where T : Delegate
+        {
+            if (method == null) return null;
+            try
+            {
+                return (T)Delegate.CreateDelegate(typeof(T), method);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static readonly Action<GameOptionUIManager, CustomUIBuilder, GameOptionRegistry.Entry>? BuildEntryDelegate =
+            CreateMethodDelegate<Action<GameOptionUIManager, CustomUIBuilder, GameOptionRegistry.Entry>>(AccessTools.Method(typeof(GameOptionUIManager), "BuildEntry"));
+        private static readonly Func<GameOptionRegistry.Section, string>? NoteIdDelegate =
+            CreateMethodDelegate<Func<GameOptionRegistry.Section, string>>(AccessTools.Method(typeof(GameOptionUIManager), "NoteId"));
+        private static readonly Action<GameOptionUIManager>? OriginalApplySettingDelegate =
+            CreateMethodDelegate<Action<GameOptionUIManager>>(AccessTools.Method(typeof(GameOptionUIManager), "OnApplySetting"));
+        private static readonly Action<GameOptionUIManager>? RefreshRulesDelegate =
+            CreateMethodDelegate<Action<GameOptionUIManager>>(AccessTools.Method(typeof(GameOptionUIManager), "RefreshRules"));
+        private static readonly Action<GameOptionUIManager, string>? SetKeyBindStatusDelegate =
+            CreateMethodDelegate<Action<GameOptionUIManager, string>>(AccessTools.Method(typeof(GameOptionUIManager), "SetKeyBindStatus", new Type[] { typeof(string) }));
+        private static readonly Action<string>? FireModConfigAppliedDelegate =
+            CreateMethodDelegate<Action<string>>(AccessTools.Method(typeof(ModHook), "FireOnModConfigApplied", new Type[] { typeof(string) }));
         private static readonly FieldInfo? PendingKeysField = AccessTools.Field(typeof(GameOptionUIManager), "pendingKeys");
         private static readonly FieldInfo? OverriddenDropdownsField = AccessTools.Field(typeof(GameOptionUIManager), "overriddenDropdowns");
         private static readonly FieldInfo? WindowField = AccessTools.Field(typeof(GameOptionUIManager), "window");
         private static readonly FieldInfo? ConsumedEscapeFrameField = AccessTools.Field(typeof(GameOptionUIManager), "consumedEscapeFrame");
+
+        internal static void InvokeRefreshRulesSafe(GameOptionUIManager? manager)
+        {
+            if (manager == null || RefreshRulesDelegate == null) return;
+            _inEnhancedRefreshRules = true;
+            try
+            {
+                RefreshRulesDelegate.Invoke(manager);
+            }
+            finally
+            {
+                _inEnhancedRefreshRules = false;
+            }
+        }
+
+        internal static bool ShouldSilenceMissingElementWarning(CustomUIWindow? window, string id, out CustomUIElement? element)
+        {
+            element = null;
+            if (!_inEnhancedRefreshRules || window == null || window != _currentWindow || _currentWindowElements == null || string.IsNullOrEmpty(id))
+            {
+                return false;
+            }
+            _currentWindowElements.TryGetValue(id, out element);
+            return true;
+        }
 
         /// <summary>
         /// 打开全新统一设置面板
@@ -242,7 +294,7 @@ namespace ProbablyUnifiedHotkeys
             pendingKeys?.Clear();
             var overriddenDropdowns = OverriddenDropdownsField?.GetValue(manager) as System.Collections.IDictionary;
             overriddenDropdowns?.Clear();
-            SetKeyBindStatusMethod?.Invoke(manager, new object[] { string.Empty });
+            SetKeyBindStatusDelegate?.Invoke(manager, string.Empty);
 
             // 2. 加载全量模组配置并分析按键冲突
             _modGroups = ModCatalogCache.GetOrScanGroups(out _allHotkeys);
@@ -346,11 +398,15 @@ namespace ProbablyUnifiedHotkeys
             builder.AddButton(_allExpanded ? "全部收起" : "全部展开", ToggleExpandAll, "btn_expand_all");
             _expandToggleBtn = builder.Last;
 
-            // 优先抓取原生 ButtonTextColor 默认字色、高亮色、按下色与原始字号（每个层级 menu/meta 仅需首开抓取一次）
+            // 优先抓取原生 ButtonTextColor 默认字色、高亮色、按下色、激活字体与原始字号（每个层级 menu/meta 仅需首开抓取一次）
             if (!hasThemeForLayer)
             {
                 CaptureDefaultButtonTheme(_expandToggleBtn, forceRefresh: true);
                 _capturedThemeLayer = layer;
+            }
+            if (_expandToggleBtn?.text?.font != null)
+            {
+                _activeButtonFont = _expandToggleBtn.text.font;
             }
 
             // 抓取完成后即关闭根节点激活态，确保整页百余个原版与模组控件在离线非激活状态一次性装配完毕
@@ -359,8 +415,8 @@ namespace ProbablyUnifiedHotkeys
                 windowRoot.SetActive(false);
             }
 
-            StyleActionButton(_conflictToggleBtn, 226f, 38f, lrMargin: 14f, tbMargin: 4f, fontScale: 0.88f);
-            StyleActionButton(_expandToggleBtn, 144f, 38f, lrMargin: 14f, tbMargin: 4f, fontScale: 0.88f);
+            StyleActionButton(_conflictToggleBtn, 228f, 40f, lrMargin: 10f, tbMargin: 3f, fontScale: 0.88f);
+            StyleActionButton(_expandToggleBtn, 146f, 40f, lrMargin: 10f, tbMargin: 3f, fontScale: 0.88f);
 
             UpdateConflictToggleButtonAppearance();
 
@@ -467,11 +523,15 @@ namespace ProbablyUnifiedHotkeys
             RefreshConflicts();
 
             _currentWindow = builder.Show();
+            _currentWindowElements = CustomWindowElementsField?.GetValue(_currentWindow) as Dictionary<string, CustomUIElement>;
+            _cachedSuspendableLayouts = null;
+            _cachedSuspendableLayoutsDirty = true;
             WindowField?.SetValue(manager, _currentWindow);
+            SyncActionButtonsAfterShow();
             _suppressRuleConflictRefresh = true;
             try
             {
-                RefreshRulesMethod?.Invoke(manager, null);
+                InvokeRefreshRulesSafe(manager);
             }
             finally
             {
@@ -522,7 +582,7 @@ namespace ProbablyUnifiedHotkeys
 
             builder.AddButton(initialExpanded ? "▼" : "▶", onFoldClicked, foldButtonId);
             foldBtn = builder.Last;
-            StyleFoldButton(foldBtn, 34f);
+            StyleFoldButton(foldBtn, 36f);
 
             string badge = $"<color=#99a3b0>(按键: {hotkeyCount} | 常规: {generalCount})</color>";
             builder.AddLabel($"<b>{title}</b> {badge}", labelId);
@@ -542,7 +602,7 @@ namespace ProbablyUnifiedHotkeys
                     onResetClicked();
                 }, resetButtonId);
                 card.ResetButtonElement = builder.Last;
-                StyleActionButton(card.ResetButtonElement, 112f, 34f, lrMargin: 10f, tbMargin: 3f, fontScale: 0.86f);
+                StyleActionButton(card.ResetButtonElement, 112f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.86f);
                 card.ResetButtonElement.SetVisible(initialExpanded && card.ResetToDefaultsAction != null);
             }
 
@@ -591,7 +651,7 @@ namespace ProbablyUnifiedHotkeys
             };
             card.ResetToDefaultsAction = () => ResetVanillaSectionToDefaults(manager, card);
 
-            string noteId = NoteIdMethod?.Invoke(null, new object[] { section }) as string ?? ("note_" + section.id);
+            string noteId = NoteIdDelegate != null ? NoteIdDelegate(section) : ("note_" + section.id);
             BuildCardHeaderRow(
                 builder,
                 card,
@@ -630,7 +690,7 @@ namespace ProbablyUnifiedHotkeys
             foreach (var entry in filteredEntries)
             {
                 int childBefore = entriesColumnRt.childCount;
-                BuildEntryMethod?.Invoke(manager, new object[] { builder, entry });
+                BuildEntryDelegate?.Invoke(manager, builder, entry);
 
                 ModHotkeyEntry? linked = null;
                 if (entry.kind == GameOptionRegistry.Kind.KeyBind)
@@ -1065,10 +1125,13 @@ namespace ProbablyUnifiedHotkeys
 
             SetCapturingEntryDisplayText(entry, CapturePrompt);
 
-            SetKeyBindStatusMethod?.Invoke(
-                _currentManager,
-                new object[] { $"正在为 [{entry.ModDisplayName}: {entry.DisplayName}] 绑定按键 (支持组合键与鼠标侧键；按 Esc 设为空，左键取消)" }
-            );
+            if (_currentManager != null)
+            {
+                SetKeyBindStatusDelegate?.Invoke(
+                    _currentManager,
+                    $"正在为 [{entry.ModDisplayName}: {entry.DisplayName}] 绑定按键 (支持组合键与鼠标侧键；按 Esc 设为空，左键取消)"
+                );
+            }
         }
 
         private static readonly Color CapturePromptColor = new Color(0.4f, 0.8f, 1f, 1f);
@@ -1097,8 +1160,8 @@ namespace ProbablyUnifiedHotkeys
         }
 
         /// <summary>
-        /// 窗口开启后的按帧预算后台静默预建：在约 3.5ms/帧 的平滑预算内于折叠态(inactive)容器连续构建多张卡片，
-        /// 既不在开启首帧产生压力，又能极快地预热全量卡片，使“全部展开”与搜索秒开且完全无过渡动画。
+        /// 窗口开启后的按帧预算后台静默预建：在约 7.5ms/帧 的平滑预算内于折叠态(inactive)容器连续构建多张卡片，
+        /// 既不在开启首帧产生压力，又能更快预热全量卡片，使“全部展开”与搜索秒开且完全无过渡动画。
         /// </summary>
         private static void PrebuildNextCollapsedModCard()
         {
@@ -1122,7 +1185,7 @@ namespace ProbablyUnifiedHotkeys
 
                 EnsureGroupContentBuilt(group);
 
-                if (PrebuildStopwatch.Elapsed.TotalMilliseconds >= 3.5)
+                if (PrebuildStopwatch.Elapsed.TotalMilliseconds >= 7.5)
                 {
                     break;
                 }
@@ -1323,7 +1386,10 @@ namespace ProbablyUnifiedHotkeys
                 UpdateHotkeyButtonVisual(entry);
                 SyncVanillaKeyButtonColors();
             }
-            SetKeyBindStatusMethod?.Invoke(_currentManager, new object[] { string.Empty });
+            if (_currentManager != null)
+            {
+                SetKeyBindStatusDelegate?.Invoke(_currentManager, string.Empty);
+            }
         }
 
         private static void FinishCapture(KeyModifierMask newMods, KeyCode newKey, bool fromMouseClick)
@@ -1358,7 +1424,10 @@ namespace ProbablyUnifiedHotkeys
 
             RefreshConflicts();
             UpdateHotkeyButtonVisual(entry);
-            SetKeyBindStatusMethod?.Invoke(_currentManager, new object[] { string.Empty });
+            if (_currentManager != null)
+            {
+                SetKeyBindStatusDelegate?.Invoke(_currentManager, string.Empty);
+            }
         }
 
         // =====================================================================
@@ -1395,12 +1464,346 @@ namespace ProbablyUnifiedHotkeys
 
         private static GameObject? _lastSearchScrollTarget;
 
+        private static readonly List<string> _searchKeyTokensScratch = new List<string>(8);
+        private static readonly List<string> _searchQueryTokensScratch = new List<string>(8);
+        private static readonly System.Text.StringBuilder _searchConcatScratch = new System.Text.StringBuilder(32);
+
         private static bool IsHotkeyMatchQuery(ModHotkeyEntry hotkey, string query)
         {
-            return PinyinEngine.Matches(hotkey.DisplayName, query) ||
-                   PinyinEngine.Matches(FormatHotkeyComboText(hotkey), query) ||
-                   PinyinEngine.Matches(KeyBindHelper.KeyName(hotkey.EffectiveKey), query) ||
-                   PinyinEngine.Matches(hotkey.EffectiveKey.ToString(), query);
+            if (PinyinEngine.Matches(hotkey.DisplayName, query))
+            {
+                return true;
+            }
+
+            KeyCode effKey = hotkey.EffectiveKey;
+            if (effKey == KeyCode.None)
+            {
+                return MatchesFormattedKeyText(FormatHotkeyComboText(hotkey), query);
+            }
+
+            if (MatchesKeyCodeSearchToken(effKey, query))
+            {
+                return true;
+            }
+
+            string comboText = FormatHotkeyComboText(hotkey);
+            if (MatchesFormattedKeyText(comboText, query))
+            {
+                return true;
+            }
+
+            if (hotkey.EffectiveModifiers != KeyModifierMask.None &&
+                MatchesFormattedKeyText(KeyBindHelper.KeyName(effKey), query))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 对格式化按键文本执行词元边界前缀/完整组合匹配（中文走拼音匹配，英文/数字禁止词中子串如 "ow"->"Arrow" / "on"->"None" 误命中）
+        /// </summary>
+        private static bool MatchesFormattedKeyText(string? keyText, string query)
+        {
+            if (string.IsNullOrWhiteSpace(keyText))
+            {
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return true;
+            }
+
+            string qTrim = query.Trim();
+            bool keyHasNonAscii = false;
+            System.Text.StringBuilder? cjkOnly = null;
+            for (int i = 0; i < keyText.Length; i++)
+            {
+                char ch = keyText[i];
+                if (ch > 127)
+                {
+                    keyHasNonAscii = true;
+                    cjkOnly ??= new System.Text.StringBuilder(keyText.Length);
+                    cjkOnly.Append(ch);
+                }
+            }
+
+            if (keyHasNonAscii)
+            {
+                // 仅将非 ASCII/中文部分送入拼音子串匹配，防止 "Ctrl + 小键盘6" 中的 ASCII 词中子串误触发
+                if (cjkOnly != null && PinyinEngine.Matches(cjkOnly.ToString(), qTrim))
+                {
+                    return true;
+                }
+                if (PinyinEngine.Matches(keyText, qTrim) && qTrim.IndexOf(' ') >= 0)
+                {
+                    return true;
+                }
+            }
+
+            TokenizeAsciiSearchTokens(keyText, _searchKeyTokensScratch);
+            TokenizeAsciiSearchTokens(qTrim, _searchQueryTokensScratch);
+
+            if (_searchKeyTokensScratch.Count == 0 || _searchQueryTokensScratch.Count == 0)
+            {
+                return string.Equals(keyText.Trim(), qTrim, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (_searchQueryTokensScratch.Count == 1)
+            {
+                string qt = _searchQueryTokensScratch[0];
+                for (int i = 0; i < _searchKeyTokensScratch.Count; i++)
+                {
+                    string kt = _searchKeyTokensScratch[i];
+                    if (qt.Length == 1)
+                    {
+                        if (string.Equals(kt, qt, StringComparison.Ordinal))
+                        {
+                            return true;
+                        }
+                    }
+                    else if (kt.StartsWith(qt, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+
+                // 允许如 "numpad6" / "downarrow" / "mouse1" 从词元起点连写命中 "Numpad 6" / "Down Arrow" / "Mouse 1"
+                if (qt.Length >= 2)
+                {
+                    return MatchesConcatenatedFromTokenBoundary(_searchKeyTokensScratch, qt);
+                }
+                return false;
+            }
+
+            // 多词元组合查询（如 "ctrl+c" / "numpad 6" / "left ctrl"）
+            int qCount = _searchQueryTokensScratch.Count;
+            int kCount = _searchKeyTokensScratch.Count;
+            for (int start = 0; start <= kCount - qCount; start++)
+            {
+                bool matched = true;
+                for (int j = 0; j < qCount; j++)
+                {
+                    string kt = _searchKeyTokensScratch[start + j];
+                    string qt = _searchQueryTokensScratch[j];
+                    bool isLast = j == qCount - 1;
+                    bool ok = isLast && qt.Length >= 2
+                        ? kt.StartsWith(qt, StringComparison.Ordinal)
+                        : string.Equals(kt, qt, StringComparison.Ordinal);
+                    if (!ok)
+                    {
+                        matched = false;
+                        break;
+                    }
+                }
+                if (matched)
+                {
+                    return true;
+                }
+            }
+
+            string compactQuery = string.Concat(_searchQueryTokensScratch);
+            return MatchesConcatenatedFromTokenBoundary(_searchKeyTokensScratch, compactQuery);
+        }
+
+        private static bool MatchesConcatenatedFromTokenBoundary(List<string> kTokens, string compactQuery)
+        {
+            if (string.IsNullOrEmpty(compactQuery))
+            {
+                return false;
+            }
+            var sb = _searchConcatScratch;
+            for (int start = 0; start < kTokens.Count; start++)
+            {
+                sb.Length = 0;
+                for (int end = start; end < kTokens.Count; end++)
+                {
+                    sb.Append(kTokens[end]);
+                    if (sb.Length >= compactQuery.Length)
+                    {
+                        break;
+                    }
+                }
+                if (sb.Length >= compactQuery.Length)
+                {
+                    string joined = sb.ToString();
+                    if (compactQuery.Length == 1
+                        ? string.Equals(joined, compactQuery, StringComparison.Ordinal)
+                        : joined.StartsWith(compactQuery, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static void TokenizeAsciiSearchTokens(string text, List<string> output)
+        {
+            output.Clear();
+            int len = text.Length;
+            int tokenStart = -1;
+
+            for (int i = 0; i < len; i++)
+            {
+                char ch = text[i];
+                bool isAlpha = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+                bool isDigit = ch >= '0' && ch <= '9';
+                bool isWordChar = isAlpha || isDigit;
+
+                if (!isWordChar)
+                {
+                    if (tokenStart >= 0)
+                    {
+                        output.Add(text.Substring(tokenStart, i - tokenStart).ToLowerInvariant());
+                        tokenStart = -1;
+                    }
+                    // 对孤立运算符号（如 "Numpad +" 的末尾 '+'），保留为词元；跳过组合键中的 " + "
+                    if ((ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '.') &&
+                        (i == 0 || char.IsWhiteSpace(text[i - 1])) &&
+                        i == len - 1)
+                    {
+                        output.Add(ch.ToString());
+                    }
+                    continue;
+                }
+
+                if (tokenStart < 0)
+                {
+                    tokenStart = i;
+                    continue;
+                }
+
+                char prev = text[i - 1];
+                bool prevLower = prev >= 'a' && prev <= 'z';
+                bool curUpper = ch >= 'A' && ch <= 'Z';
+                if (prevLower && curUpper)
+                {
+                    output.Add(text.Substring(tokenStart, i - tokenStart).ToLowerInvariant());
+                    tokenStart = i;
+                }
+            }
+
+            if (tokenStart >= 0)
+            {
+                output.Add(text.Substring(tokenStart, len - tokenStart).ToLowerInvariant());
+            }
+        }
+
+        /// <summary>
+        /// 按键枚举名词根前缀 / 常用别名精确匹配，避免 KeyCode.Keypad6 等原始枚举名被 "yp" 等词中子串误命中
+        /// </summary>
+        private static bool MatchesKeyCodeSearchToken(KeyCode key, string query)
+        {
+            if (key == KeyCode.None || string.IsNullOrWhiteSpace(query))
+            {
+                return false;
+            }
+
+            string q = query.Trim();
+
+            // 1. 常用玩家可读别名（小键盘 / 侧键 / 修饰键简称）
+            if (key >= KeyCode.Keypad0 && key <= KeyCode.Keypad9)
+            {
+                int digit = (int)key - (int)KeyCode.Keypad0;
+                if (IsQueryPrefixOrAlias(q, "keypad" + digit) ||
+                    IsQueryPrefixOrAlias(q, "kp" + digit) ||
+                    IsQueryPrefixOrAlias(q, "numpad" + digit) ||
+                    IsQueryPrefixOrAlias(q, "numpad " + digit) ||
+                    IsQueryPrefixOrAlias(q, "num" + digit) ||
+                    IsQueryPrefixOrAlias(q, "小键盘" + digit) ||
+                    IsQueryPrefixOrAlias(q, "xjp" + digit))
+                {
+                    return true;
+                }
+            }
+            else if (key >= KeyCode.KeypadPeriod && key <= KeyCode.KeypadEquals)
+            {
+                if (IsQueryPrefixOrAlias(q, "keypad") ||
+                    IsQueryPrefixOrAlias(q, "kp") ||
+                    IsQueryPrefixOrAlias(q, "numpad") ||
+                    IsQueryPrefixOrAlias(q, "小键盘") ||
+                    IsQueryPrefixOrAlias(q, "xjp"))
+                {
+                    return true;
+                }
+            }
+            else if (ComboKeyStore.IsMouseSideButton(key))
+            {
+                int sideIndex = (int)key - (int)KeyCode.Mouse3 + 1;
+                if (IsQueryPrefixOrAlias(q, "mouse" + ((int)key - (int)KeyCode.Mouse0)) ||
+                    IsQueryPrefixOrAlias(q, "鼠标侧键" + sideIndex) ||
+                    IsQueryPrefixOrAlias(q, "侧键" + sideIndex))
+                {
+                    return true;
+                }
+            }
+            else if (key == KeyCode.LeftControl || key == KeyCode.RightControl)
+            {
+                if (IsQueryPrefixOrAlias(q, "ctrl") ||
+                    IsQueryPrefixOrAlias(q, key == KeyCode.LeftControl ? "lctrl" : "rctrl"))
+                {
+                    return true;
+                }
+            }
+            else if (key == KeyCode.LeftShift || key == KeyCode.RightShift)
+            {
+                if (IsQueryPrefixOrAlias(q, "shift") ||
+                    IsQueryPrefixOrAlias(q, key == KeyCode.LeftShift ? "lshift" : "rshift"))
+                {
+                    return true;
+                }
+            }
+            else if (key == KeyCode.LeftAlt || key == KeyCode.RightAlt)
+            {
+                if (IsQueryPrefixOrAlias(q, "alt") ||
+                    IsQueryPrefixOrAlias(q, key == KeyCode.LeftAlt ? "lalt" : "ralt"))
+                {
+                    return true;
+                }
+            }
+
+            // 2. 原始枚举名仅允许从开头或 PascalCase/数字词元起点匹配（>=2 字符允许前缀，单字符需精准匹配完整词元）
+            string raw = key.ToString();
+            if (q.Length >= 2 && raw.StartsWith(q, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            int tokenStart = 0;
+            for (int i = 1; i <= raw.Length; i++)
+            {
+                bool atBoundary = i == raw.Length ||
+                                  char.IsUpper(raw[i]) ||
+                                  (char.IsDigit(raw[i]) != char.IsDigit(raw[i - 1]));
+                if (!atBoundary) continue;
+
+                int tokenLen = i - tokenStart;
+                if (tokenLen > 0)
+                {
+                    bool matched = q.Length >= 2
+                        ? (tokenLen >= q.Length && string.Compare(raw, tokenStart, q, 0, q.Length, StringComparison.OrdinalIgnoreCase) == 0)
+                        : (tokenLen == 1 && char.ToUpperInvariant(raw[tokenStart]) == char.ToUpperInvariant(q[0]));
+                    if (matched)
+                    {
+                        return true;
+                    }
+                }
+                tokenStart = i;
+            }
+
+            return false;
+        }
+
+        private static bool IsQueryPrefixOrAlias(string query, string alias)
+        {
+            if (query.Length >= 2)
+            {
+                return alias.StartsWith(query, StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(query, alias, StringComparison.OrdinalIgnoreCase);
+            }
+            return string.Equals(query, alias, StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsGeneralMatchQuery(ModGeneralEntry gen, string query)
@@ -1769,50 +2172,81 @@ namespace ProbablyUnifiedHotkeys
                         if (hasQuery && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
                         c.SetExpanded(_allExpanded);
                         VanillaExpandedStates[c.SectionId] = _allExpanded;
+                        if (_allExpanded) SyncCompactActionButton(c.ResetButtonElement);
                     }
 
                     foreach (var g in _modGroups)
                     {
                         if (hasQuery && (g.HeaderRowObject == null || !g.HeaderRowObject.activeSelf)) continue;
                         SetGroupExpanded(g, _allExpanded);
+                        if (_allExpanded) SyncCompactActionButton(g.ResetButtonElement);
                     }
                 }
             });
         }
 
-        private static void WithSuspendedRootLayout(Action action)
+        private static readonly List<Behaviour> SuspendedLayoutScratch = new List<Behaviour>(96);
+
+        private static void EnsureCachedSuspendableLayouts()
         {
-            var disabledLayouts = new List<Behaviour>(64);
-            DisableContainerLayouts(_normalContentRoot, disabledLayouts);
+            if (!_cachedSuspendableLayoutsDirty && _cachedSuspendableLayouts != null)
+            {
+                return;
+            }
+
+            _cachedSuspendableLayouts ??= new List<Behaviour>(96);
+            _cachedSuspendableLayouts.Clear();
+
+            CollectContainerLayouts(_normalContentRoot, _cachedSuspendableLayouts);
             if (_scrollRect != null)
             {
                 if (_scrollRect.content != null && _scrollRect.content.gameObject != _normalContentRoot)
                 {
-                    DisableContainerLayouts(_scrollRect.content.gameObject, disabledLayouts);
+                    CollectContainerLayouts(_scrollRect.content.gameObject, _cachedSuspendableLayouts);
                 }
                 if (_scrollRect.viewport != null &&
                     _scrollRect.viewport.gameObject != _normalContentRoot &&
                     (_scrollRect.content == null || _scrollRect.viewport.gameObject != _scrollRect.content.gameObject))
                 {
-                    DisableContainerLayouts(_scrollRect.viewport.gameObject, disabledLayouts);
+                    CollectContainerLayouts(_scrollRect.viewport.gameObject, _cachedSuspendableLayouts);
                 }
             }
 
-            // 挂起各卡片标题行 HorizontalLayoutGroup，防止“恢复默认”按钮批量显隐期间逐行触发水平排版
             for (int i = 0; i < _vanillaCards.Count; i++)
             {
                 var vc = _vanillaCards[i];
                 if (vc.ResetButtonElement != null)
                 {
-                    DisableContainerLayouts(vc.HeaderRowObject, disabledLayouts);
+                    CollectContainerLayouts(vc.HeaderRowObject, _cachedSuspendableLayouts);
                 }
+                CollectContainerLayouts(vc.ContentContainerObject, _cachedSuspendableLayouts);
             }
             for (int i = 0; i < _modGroups.Count; i++)
             {
                 var mg = _modGroups[i];
                 if (mg.ResetButtonElement != null)
                 {
-                    DisableContainerLayouts(mg.HeaderRowObject, disabledLayouts);
+                    CollectContainerLayouts(mg.HeaderRowObject, _cachedSuspendableLayouts);
+                }
+                CollectContainerLayouts(mg.ContentContainerObject, _cachedSuspendableLayouts);
+            }
+
+            _cachedSuspendableLayoutsDirty = false;
+        }
+
+        private static void WithSuspendedRootLayout(Action action)
+        {
+            EnsureCachedSuspendableLayouts();
+            SuspendedLayoutScratch.Clear();
+
+            var cached = _cachedSuspendableLayouts!;
+            for (int i = 0; i < cached.Count; i++)
+            {
+                var b = cached[i];
+                if (b != null && b.enabled)
+                {
+                    b.enabled = false;
+                    SuspendedLayoutScratch.Add(b);
                 }
             }
 
@@ -1822,13 +2256,14 @@ namespace ProbablyUnifiedHotkeys
             }
             finally
             {
-                for (int i = disabledLayouts.Count - 1; i >= 0; i--)
+                for (int i = SuspendedLayoutScratch.Count - 1; i >= 0; i--)
                 {
-                    if (disabledLayouts[i] != null)
+                    if (SuspendedLayoutScratch[i] != null)
                     {
-                        disabledLayouts[i].enabled = true;
+                        SuspendedLayoutScratch[i].enabled = true;
                     }
                 }
+                SuspendedLayoutScratch.Clear();
 
                 if (_normalContentRoot != null)
                 {
@@ -1842,23 +2277,21 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
-        private static void DisableContainerLayouts(GameObject? container, List<Behaviour> disabledLayouts)
+        private static void CollectContainerLayouts(GameObject? container, List<Behaviour> targetList)
         {
             if (container == null) return;
             foreach (var lg in container.GetComponents<LayoutGroup>())
             {
-                if (lg != null && lg.enabled)
+                if (lg != null)
                 {
-                    lg.enabled = false;
-                    disabledLayouts.Add(lg);
+                    targetList.Add(lg);
                 }
             }
             foreach (var fitter in container.GetComponents<ContentSizeFitter>())
             {
-                if (fitter != null && fitter.enabled)
+                if (fitter != null)
                 {
-                    fitter.enabled = false;
-                    disabledLayouts.Add(fitter);
+                    targetList.Add(fitter);
                 }
             }
         }
@@ -1947,7 +2380,7 @@ namespace ProbablyUnifiedHotkeys
                 }
 
                 // 先刷新原版规则链，确保非 16:9 显示器下的 overriddenDropdowns 与分辨率列表在恢复全屏模式后正确重算
-                RefreshRulesMethod?.Invoke(manager, null);
+                InvokeRefreshRulesSafe(manager);
 
                 if (hasDisplayResolution)
                 {
@@ -1969,13 +2402,13 @@ namespace ProbablyUnifiedHotkeys
                         }
 
                         resEl.SetIndex(targetResIdx, true);
-                        RefreshRulesMethod?.Invoke(manager, null);
+                        InvokeRefreshRulesSafe(manager);
                     }
                 }
 
                 if (hadKeyBind)
                 {
-                    SetKeyBindStatusMethod?.Invoke(manager, new object[] { string.Empty });
+                    SetKeyBindStatusDelegate?.Invoke(manager, string.Empty);
                     RefreshConflicts();
                     if (IsConflictViewActive)
                     {
@@ -2251,6 +2684,11 @@ namespace ProbablyUnifiedHotkeys
                 return;
             }
 
+            if (_activeButtonFont != null && btn.text.font != _activeButtonFont)
+            {
+                btn.text.font = _activeButtonFont;
+            }
+
             if (btn.text.enableAutoSizing)
             {
                 btn.text.enableAutoSizing = false;
@@ -2275,6 +2713,10 @@ namespace ProbablyUnifiedHotkeys
             {
                 tmp.enableAutoSizing = false;
             }
+            if (_activeButtonFont != null && tmp.font != _activeButtonFont)
+            {
+                tmp.font = _activeButtonFont;
+            }
 
             if (string.IsNullOrEmpty(text))
             {
@@ -2296,18 +2738,38 @@ namespace ProbablyUnifiedHotkeys
             }
 
             int widthTenths = Mathf.RoundToInt(spec.AvailWidth * 10f);
+            int heightTenths = Mathf.RoundToInt(spec.AvailHeight * 10f);
             int maxSizeTenths = Mathf.RoundToInt(spec.MaxFontSize * 10f);
-            var key = (fontId, widthTenths, maxSizeTenths, text!);
+            var key = (fontId, widthTenths, heightTenths, maxSizeTenths, text!);
 
             if (!FittedFontSizeCache.TryGetValue(key, out float fitted))
             {
+                float safeWidth = spec.AvailWidth > 0f ? spec.AvailWidth * 0.96f : float.PositiveInfinity;
+                float safeHeight = spec.AvailHeight > 0f ? spec.AvailHeight * 0.88f : float.PositiveInfinity;
+
                 tmp.fontSize = spec.MaxFontSize;
-                Vector2 pref = tmp.GetPreferredValues(text, float.PositiveInfinity, 0f);
+                Vector2 pref = tmp.GetPreferredValues(text, float.PositiveInfinity, float.PositiveInfinity);
                 fitted = spec.MaxFontSize;
-                if (pref.x > spec.AvailWidth && pref.x > 0.01f)
+
+                float scaleX = (safeWidth < float.PositiveInfinity && pref.x > safeWidth && pref.x > 0.01f) ? (safeWidth / pref.x) : 1f;
+                float scaleY = (safeHeight < float.PositiveInfinity && pref.y > safeHeight && pref.y > 0.01f) ? (safeHeight / pref.y) : 1f;
+                float scale = Mathf.Min(scaleX, scaleY);
+
+                if (scale < 1f)
                 {
-                    float scaled = Mathf.Floor((spec.MaxFontSize * (spec.AvailWidth / pref.x)) * 10f) / 10f;
+                    float scaled = Mathf.Floor((spec.MaxFontSize * scale) * 10f) / 10f;
                     fitted = Mathf.Max(spec.MinFontSize, Mathf.Min(spec.MaxFontSize, scaled));
+
+                    tmp.fontSize = fitted;
+                    Vector2 verify = tmp.GetPreferredValues(text, float.PositiveInfinity, float.PositiveInfinity);
+                    if ((safeWidth < float.PositiveInfinity && verify.x > safeWidth) ||
+                        (safeHeight < float.PositiveInfinity && verify.y > safeHeight))
+                    {
+                        float rx = (safeWidth < float.PositiveInfinity && verify.x > safeWidth && verify.x > 0.01f) ? (safeWidth / verify.x) : 1f;
+                        float ry = (safeHeight < float.PositiveInfinity && verify.y > safeHeight && verify.y > 0.01f) ? (safeHeight / verify.y) : 1f;
+                        float refined = Mathf.Floor((fitted * Mathf.Min(rx, ry) * 0.98f) * 10f) / 10f;
+                        fitted = Mathf.Max(spec.MinFontSize, Mathf.Min(fitted, refined));
+                    }
                 }
                 if (FittedFontSizeCache.Count >= 2048)
                 {
@@ -2322,23 +2784,62 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
-        private static void StyleButtonTypography(CustomUIElement? btn, float lrMargin, float tbMargin, float fontScale, float buttonWidth = -1f, bool allowAutoShrink = false)
+        private static void SetButtonLayoutPadding(CustomUIElement? btn, int lrPad, int tbPad, bool forceExpandChild)
+        {
+            if (btn?.root == null) return;
+            var hlg = btn.root.GetComponent<HorizontalLayoutGroup>();
+            if (hlg != null)
+            {
+                hlg.padding = new RectOffset(lrPad, lrPad, tbPad, tbPad);
+                hlg.childControlWidth = true;
+                hlg.childControlHeight = true;
+                if (forceExpandChild)
+                {
+                    hlg.childForceExpandWidth = true;
+                    hlg.childForceExpandHeight = true;
+                }
+            }
+        }
+
+        private static void StyleButtonTypography(CustomUIElement? btn, float lrMargin, float tbMargin, float fontScale, float buttonWidth = -1f, float buttonHeight = -1f, bool allowAutoShrink = false)
         {
             if (btn == null || btn.text == null) return;
+            if (_activeButtonFont != null && btn.text.font != _activeButtonFont)
+            {
+                btn.text.font = _activeButtonFont;
+            }
+
             float baseSize = _baseButtonFontSize > 0f ? _baseButtonFontSize : btn.text.fontSize;
             float targetSize = Mathf.Max(11f, Mathf.Round(baseSize * fontScale * 10f) / 10f);
-            btn.text.margin = new Vector4(lrMargin, tbMargin, lrMargin, tbMargin);
+
+            // 若显式指定了按钮高度（由 SetButtonLayoutPadding 负责外框内边距），避免叠加 TMP margin 导致二次压缩
+            if (buttonHeight > 0f)
+            {
+                btn.text.margin = Vector4.zero;
+            }
+            else
+            {
+                btn.text.margin = new Vector4(lrMargin, tbMargin, lrMargin, tbMargin);
+            }
+
+            btn.text.alignment = TextAlignmentOptions.Center;
             btn.text.enableAutoSizing = false;
             btn.text.enableWordWrapping = false;
-            btn.text.overflowMode = TextOverflowModes.Ellipsis;
+            btn.text.overflowMode = (buttonHeight > 0f && buttonHeight <= 42f)
+                ? TextOverflowModes.Truncate
+                : TextOverflowModes.Ellipsis;
 
             if (allowAutoShrink && buttonWidth > 0f)
             {
+                float availHeight = buttonHeight > 0f
+                    ? Mathf.Max(14f, buttonHeight - tbMargin * 2f - 2f)
+                    : 40f;
                 var spec = new ButtonFitSpec
                 {
                     AvailWidth = Mathf.Max(20f, buttonWidth - lrMargin * 2f - 4f),
+                    AvailHeight = availHeight,
                     MaxFontSize = targetSize,
-                    MinFontSize = 10.5f
+                    MinFontSize = (buttonHeight > 0f && buttonHeight <= 42f) ? 9.5f : 10.5f
                 };
                 int cacheKey = btn.root != null ? btn.root.GetInstanceID() : btn.GetHashCode();
                 ButtonFitSpecCache[cacheKey] = spec;
@@ -2356,6 +2857,11 @@ namespace ProbablyUnifiedHotkeys
             btn.SetFixedWidth(width);
             if (btn.text != null)
             {
+                if (_activeButtonFont != null && btn.text.font != _activeButtonFont)
+                {
+                    btn.text.font = _activeButtonFont;
+                }
+
                 float targetSize = _baseButtonFontSize > 0f ? _baseButtonFontSize : btn.text.fontSize;
                 Vector4 baseMargin = _hasBaseButtonMargin ? _baseButtonMargin : btn.text.margin;
                 float leftMargin = Mathf.Max(baseMargin.x, 8f);
@@ -2365,9 +2871,16 @@ namespace ProbablyUnifiedHotkeys
                 btn.text.overflowMode = TextOverflowModes.Ellipsis;
                 btn.text.enableAutoSizing = false;
 
+                var hlg = btn.root != null ? btn.root.GetComponent<HorizontalLayoutGroup>() : null;
+                var le = btn.root != null ? btn.root.GetComponent<LayoutElement>() : null;
+                float btnHeight = (le != null && le.preferredHeight > 0f) ? le.preferredHeight : 48f;
+                int vPad = hlg != null ? hlg.padding.vertical : 8;
+                float availHeight = Mathf.Max(18f, btnHeight - vPad - baseMargin.y - baseMargin.w);
+
                 var spec = new ButtonFitSpec
                 {
                     AvailWidth = Mathf.Max(20f, width - leftMargin - rightMargin - 4f),
+                    AvailHeight = availHeight,
                     MaxFontSize = targetSize,
                     MinFontSize = 10.5f
                 };
@@ -2382,13 +2895,14 @@ namespace ProbablyUnifiedHotkeys
             StyleNativeWidthButton(btn, KeybindButtonWidth);
         }
 
-        private static void StyleActionButton(CustomUIElement? btn, float width, float height, float lrMargin = 12f, float tbMargin = 3f, float fontScale = 0.88f)
+        private static void StyleActionButton(CustomUIElement? btn, float width, float height, float lrMargin = 10f, float tbMargin = 2f, float fontScale = 0.88f)
         {
             if (btn == null) return;
             btn.SetFixedWidth(width);
             btn.SetPreferredSize(width, height);
             btn.SetFlexible(0f, 0f);
-            StyleButtonTypography(btn, lrMargin, tbMargin, fontScale, width, allowAutoShrink: true);
+            SetButtonLayoutPadding(btn, Mathf.RoundToInt(lrMargin), Mathf.RoundToInt(tbMargin), forceExpandChild: true);
+            StyleButtonTypography(btn, lrMargin, tbMargin, fontScale, width, height, allowAutoShrink: true);
         }
 
         private static void StyleFoldButton(CustomUIElement? btn, float size)
@@ -2397,13 +2911,62 @@ namespace ProbablyUnifiedHotkeys
             btn.SetFixedWidth(size);
             btn.SetPreferredSize(size, size);
             btn.SetFlexible(0f, 0f);
+            // 清空 Meta_Button 默认 (16,16,4,4) 内边距，避免 36px 方形折叠按钮内部 TextRectWidth 被压扁
+            SetButtonLayoutPadding(btn, 0, 0, forceExpandChild: true);
             if (btn.text != null)
             {
+                if (_activeButtonFont != null && btn.text.font != _activeButtonFont)
+                {
+                    btn.text.font = _activeButtonFont;
+                }
                 float baseSize = _baseButtonFontSize > 0f ? _baseButtonFontSize : btn.text.fontSize;
                 btn.text.enableAutoSizing = false;
-                btn.text.fontSize = Mathf.Max(10f, Mathf.Round(baseSize * 0.50f));
+                btn.text.enableWordWrapping = false;
+                btn.text.overflowMode = TextOverflowModes.Overflow;
+                btn.text.fontSize = Mathf.Clamp(Mathf.Round(baseSize * 0.58f), 13f, 16f);
                 btn.text.alignment = TextAlignmentOptions.Center;
                 btn.text.margin = Vector4.zero;
+            }
+        }
+
+        private static void SyncActionButtonsAfterShow()
+        {
+            if (_expandToggleBtn?.text?.font != null)
+            {
+                _activeButtonFont = _expandToggleBtn.text.font;
+            }
+
+            SyncCompactActionButton(_conflictToggleBtn);
+            SyncCompactActionButton(_expandToggleBtn);
+
+            for (int i = 0; i < _vanillaCards.Count; i++)
+            {
+                var vc = _vanillaCards[i];
+                StyleFoldButton(vc.FoldArrowElement, 36f);
+                if (vc.IsExpanded) SyncCompactActionButton(vc.ResetButtonElement);
+            }
+
+            for (int i = 0; i < _modGroups.Count; i++)
+            {
+                var mg = _modGroups[i];
+                StyleFoldButton(mg.FoldArrowElement, 36f);
+                if (mg.IsExpanded) SyncCompactActionButton(mg.ResetButtonElement);
+            }
+
+            UpdateConflictToggleButtonAppearance();
+        }
+
+        internal static void SyncCompactActionButton(CustomUIElement? btn)
+        {
+            if (btn?.text == null) return;
+            if (_activeButtonFont != null && btn.text.font != _activeButtonFont)
+            {
+                btn.text.font = _activeButtonFont;
+            }
+            int cacheKey = btn.root != null ? btn.root.GetInstanceID() : btn.GetHashCode();
+            if (ButtonFitSpecCache.TryGetValue(cacheKey, out ButtonFitSpec spec))
+            {
+                ApplySinglePassFontSize(btn.text, btn.text.text, spec);
             }
         }
 
@@ -2515,9 +3078,9 @@ namespace ProbablyUnifiedHotkeys
         {
             try
             {
-                if (ModHook.Instance != null && FireModConfigAppliedMethod != null)
+                if (ModHook.Instance != null && FireModConfigAppliedDelegate != null)
                 {
-                    FireModConfigAppliedMethod.Invoke(ModHook.Instance, new object[] { modId });
+                    FireModConfigAppliedDelegate.Invoke(modId);
                 }
             }
             catch { }
@@ -2554,7 +3117,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 using (ComboKeyStore.EnterBypass())
                 {
-                    OriginalApplySettingMethod?.Invoke(manager, null);
+                    OriginalApplySettingDelegate?.Invoke(manager);
                 }
                 pendingKeys?.Clear();
             }

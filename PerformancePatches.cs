@@ -29,6 +29,7 @@ namespace ProbablyUnifiedHotkeys
             _fastQuitPrepared = false;
             IdleWarmupRunner.Reset();
             ModUIManagerPerfHelper.ResetCaches();
+            ConflictScannerPerfHelper.ResetSession();
         }
 
         /// <summary>
@@ -203,6 +204,18 @@ namespace ProbablyUnifiedHotkeys
                         // 第 3 步：预建未激活态下的改造件界面骨架与行对象池，消除首开创建卡顿
                         ModUIManagerPerfHelper.PrewarmPanel();
                         _stage = 3;
+                        _framesWaited = 0;
+                        return;
+
+                    case 3:
+                        // 短暂让出主菜单数帧，再静默预建 ConflictScanner 冲突缓存（如果玩家未先点开改造件）
+                        if (_framesWaited < 12)
+                        {
+                            _framesWaited++;
+                            return;
+                        }
+                        ConflictScannerPerfHelper.PrewarmConflictEngine();
+                        _stage = 4;
                         break;
                 }
             }
@@ -249,18 +262,25 @@ namespace ProbablyUnifiedHotkeys
         private static readonly FieldInfo? FilterField = AccessTools.Field(typeof(ModUIManager), "filter");
         private static readonly FieldInfo? DependenciesContainerField = AccessTools.Field(typeof(ModUIManager), "dependenciesContainer");
 
-        private static readonly MethodInfo? EnsureBuiltMethod = AccessTools.Method(typeof(ModUIManager), "EnsureBuilt");
         private static readonly MethodInfo? CreateRowMethod = AccessTools.Method(typeof(ModUIManager), "CreateRow", new Type[] { typeof(LoadedMod), typeof(Transform) });
-        private static readonly MethodInfo? RefreshRowIssuesMethod = AccessTools.Method(typeof(ModUIManager), "RefreshRowIssues");
-        private static readonly MethodInfo? GetModIssueMethod = AccessTools.Method(typeof(ModUIManager), "GetModIssue", new Type[] { typeof(LoadedMod) });
-        private static readonly MethodInfo? ApplyFilterToRowsMethod = AccessTools.Method(typeof(ModUIManager), "ApplyFilterToRows");
-        private static readonly MethodInfo? SelectModMethod = AccessTools.Method(typeof(ModUIManager), "SelectMod", new Type[] { typeof(string) });
+        private static readonly Action<ModUIManager>? EnsureBuiltFn = CreateMethodDelegate<Action<ModUIManager>>("EnsureBuilt");
+        private static readonly Action<ModUIManager>? RefreshRowIssuesFn = CreateMethodDelegate<Action<ModUIManager>>("RefreshRowIssues");
+        private static readonly Func<LoadedMod, string?>? GetModIssueFn = CreateMethodDelegate<Func<LoadedMod, string?>>("GetModIssue", new Type[] { typeof(LoadedMod) });
+        private static readonly Action<ModUIManager>? ApplyFilterToRowsFn = CreateMethodDelegate<Action<ModUIManager>>("ApplyFilterToRows");
+        private static readonly Action<ModUIManager, string?>? SelectModFn = CreateMethodDelegate<Action<ModUIManager, string?>>("SelectMod", new Type[] { typeof(string) });
+        private static readonly Func<ModUIManager, LoadedMod, Transform, object?>? CreateRowFn = CreateMethodDelegate<Func<ModUIManager, LoadedMod, Transform, object?>>("CreateRow", new Type[] { typeof(LoadedMod), typeof(Transform) });
 
         // ModUIManager 私有静态纯工具方法缓存
-        private static readonly Func<LoadedMod, string>? LoadErrorLineFn = CreateStaticDelegate<Func<LoadedMod, string>>("LoadErrorLine");
-        private static readonly Func<LoadedMod, string?>? TrustIssueFn = CreateStaticDelegate<Func<LoadedMod, string?>>("TrustIssue");
-        private static readonly Func<LoadedMod, List<string>>? DeprecatedCapabilitiesFn = CreateStaticDelegate<Func<LoadedMod, List<string>>>("DeprecatedCapabilities");
-        private static readonly Func<string, bool>? VersionMatchesGameFn = CreateStaticDelegate<Func<string, bool>>("VersionMatchesGame");
+        private static readonly Func<LoadedMod, string>? LoadErrorLineFn = CreateMethodDelegate<Func<LoadedMod, string>>("LoadErrorLine");
+        private static readonly Func<LoadedMod, string?>? TrustIssueFn = CreateMethodDelegate<Func<LoadedMod, string?>>("TrustIssue");
+        private static readonly Func<LoadedMod, List<string>>? DeprecatedCapabilitiesFn = CreateMethodDelegate<Func<LoadedMod, List<string>>>("DeprecatedCapabilities");
+        private static readonly Func<string, bool>? VersionMatchesGameFn = CreateMethodDelegate<Func<string, bool>>("VersionMatchesGame");
+
+        // 缓存活跃与未启用列表容器的 LayoutGroup / ContentSizeFitter，避免筛选按键与刷新时重复 GetComponents
+        private static ModUIManager? _cachedLayoutManager;
+        private static readonly List<Behaviour> _cachedActiveContainerLayouts = new List<Behaviour>(4);
+        private static readonly List<Behaviour> _cachedInactiveContainerLayouts = new List<Behaviour>(4);
+        private static readonly List<Behaviour> _suspendedLayoutsStack = new List<Behaviour>(12);
 
         // 每次 PopulateLayoutList / RefreshRowIssues 期间生效的零拷贝 Mod 索引字典
         private static readonly Dictionary<string, LoadedMod> ScopedModLookup = new Dictionary<string, LoadedMod>(StringComparer.Ordinal);
@@ -273,11 +293,13 @@ namespace ProbablyUnifiedHotkeys
         // ModUIManager 行预热标记（每个 ModUIManager 实例仅预建一次行池）
         private static ModUIManager? _prewarmedManager;
 
-        private static T? CreateStaticDelegate<T>(string methodName) where T : Delegate
+        private static T? CreateMethodDelegate<T>(string methodName, Type[]? paramTypes = null) where T : Delegate
         {
             try
             {
-                MethodInfo? mi = AccessTools.Method(typeof(ModUIManager), methodName);
+                MethodInfo? mi = paramTypes != null
+                    ? AccessTools.Method(typeof(ModUIManager), methodName, paramTypes)
+                    : AccessTools.Method(typeof(ModUIManager), methodName);
                 if (mi != null)
                 {
                     return (T)Delegate.CreateDelegate(typeof(T), mi);
@@ -294,6 +316,10 @@ namespace ProbablyUnifiedHotkeys
             _lastEmptyManager = null;
             _lastEmptyHandle = null;
             _prewarmedManager = null;
+            _cachedLayoutManager = null;
+            _cachedActiveContainerLayouts.Clear();
+            _cachedInactiveContainerLayouts.Clear();
+            _suspendedLayoutsStack.Clear();
         }
 
         internal static void MarkNotEmpty(ModUIManager manager)
@@ -504,7 +530,7 @@ namespace ProbablyUnifiedHotkeys
             }
             _prewarmedManager = manager;
 
-            EnsureBuiltMethod?.Invoke(manager, null);
+            EnsureBuiltFn?.Invoke(manager);
             PopulateLayoutRowsPooled(manager, invokeFollowups: false);
         }
 
@@ -515,7 +541,7 @@ namespace ProbablyUnifiedHotkeys
                 return true;
             }
 
-            if (RowType == null || RowsField == null || RowModField == null || RowElementField == null || CreateRowMethod == null)
+            if (RowType == null || RowsField == null || RowModField == null || RowElementField == null || (CreateRowFn == null && CreateRowMethod == null))
             {
                 return false;
             }
@@ -532,9 +558,7 @@ namespace ProbablyUnifiedHotkeys
             }
 
             BeginScopedModLookup(mods);
-            var suspendedLayouts = new List<Behaviour>(6);
-            SuspendLayoutComponents(manager.activeModLayoutObject, suspendedLayouts);
-            SuspendLayoutComponents(manager.inactiveModLayoutObject, suspendedLayouts);
+            int suspendedStart = SuspendManagerLayouts(manager);
 
             try
             {
@@ -627,7 +651,9 @@ namespace ProbablyUnifiedHotkeys
                         }
                     }
 
-                    object? created = CreateRowMethod.Invoke(manager, new object[] { mod, targetParent });
+                    object? created = CreateRowFn != null
+                        ? CreateRowFn(manager, mod, targetParent)
+                        : CreateRowMethod?.Invoke(manager, new object[] { mod, targetParent });
                     if (created != null)
                     {
                         ModElement? createdEl = RowElementField.GetValue(created) as ModElement;
@@ -664,9 +690,9 @@ namespace ProbablyUnifiedHotkeys
 
                 if (invokeFollowups)
                 {
-                    RefreshRowIssuesMethod?.Invoke(manager, null);
-                    ApplyFilterToRowsMethod?.Invoke(manager, null);
-                    SelectModMethod?.Invoke(manager, new object?[] { null });
+                    RefreshRowIssuesFn?.Invoke(manager);
+                    ApplyFilterToRowsFn?.Invoke(manager);
+                    SelectModFn?.Invoke(manager, null);
                 }
 
                 return true;
@@ -678,7 +704,7 @@ namespace ProbablyUnifiedHotkeys
             }
             finally
             {
-                RestoreLayoutComponents(suspendedLayouts);
+                RestoreLayoutComponentsFrom(suspendedStart);
                 EndScopedModLookup();
             }
         }
@@ -695,7 +721,7 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
 
-            if (GetModIssueMethod == null)
+            if (GetModIssueFn == null)
             {
                 return false;
             }
@@ -703,7 +729,6 @@ namespace ProbablyUnifiedHotkeys
             BeginScopedModLookup();
             try
             {
-                object?[] singleArg = new object?[1];
                 for (int i = 0; i < rowList.Count; i++)
                 {
                     object? row = rowList[i];
@@ -712,9 +737,8 @@ namespace ProbablyUnifiedHotkeys
                     if (el == null) continue;
 
                     LoadedMod? mod = RowModField.GetValue(row) as LoadedMod;
-                    singleArg[0] = mod;
-                    // 通过原方法调用使 Harmony Postfix（如 ConflictScanner）正常生效，内部由 Prefix 走 O(1) 索引字典
-                    string? modIssue = GetModIssueMethod.Invoke(null, singleArg) as string;
+                    // 通过委托调用原方法使 Harmony Postfix（如 ConflictScanner）正常生效，内部由 Prefix 走 O(1) 索引字典
+                    string? modIssue = mod != null ? GetModIssueFn(mod) : null;
 
                     GameObject? warningIcon = RowWarningIconField.GetValue(row) as GameObject;
                     bool hasIssue = modIssue != null;
@@ -753,9 +777,7 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
 
-            var suspended = new List<Behaviour>(6);
-            SuspendLayoutComponents(manager.activeModLayoutObject, suspended);
-            SuspendLayoutComponents(manager.inactiveModLayoutObject, suspended);
+            int suspendedStart = SuspendManagerLayouts(manager);
 
             try
             {
@@ -788,7 +810,7 @@ namespace ProbablyUnifiedHotkeys
             }
             finally
             {
-                RestoreLayoutComponents(suspended);
+                RestoreLayoutComponentsFrom(suspendedStart);
             }
         }
 
@@ -809,34 +831,54 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
-        private static void SuspendLayoutComponents(GameObject? container, List<Behaviour> disabled)
+        private static int SuspendManagerLayouts(ModUIManager manager)
+        {
+            if (_cachedLayoutManager != manager)
+            {
+                _cachedLayoutManager = manager;
+                _cachedActiveContainerLayouts.Clear();
+                _cachedInactiveContainerLayouts.Clear();
+                CollectLayoutComponents(manager.activeModLayoutObject, _cachedActiveContainerLayouts);
+                CollectLayoutComponents(manager.inactiveModLayoutObject, _cachedInactiveContainerLayouts);
+            }
+
+            int startIndex = _suspendedLayoutsStack.Count;
+            DisableCachedList(_cachedActiveContainerLayouts);
+            DisableCachedList(_cachedInactiveContainerLayouts);
+            return startIndex;
+        }
+
+        private static void CollectLayoutComponents(GameObject? container, List<Behaviour> target)
         {
             if (container == null) return;
-            LayoutGroup[] lgs = container.GetComponents<LayoutGroup>();
-            for (int i = 0; i < lgs.Length; i++)
+            foreach (LayoutGroup lg in container.GetComponents<LayoutGroup>())
             {
-                if (lgs[i] != null && lgs[i].enabled)
-                {
-                    lgs[i].enabled = false;
-                    disabled.Add(lgs[i]);
-                }
+                if (lg != null) target.Add(lg);
             }
-            ContentSizeFitter[] fitters = container.GetComponents<ContentSizeFitter>();
-            for (int i = 0; i < fitters.Length; i++)
+            foreach (ContentSizeFitter fitter in container.GetComponents<ContentSizeFitter>())
             {
-                if (fitters[i] != null && fitters[i].enabled)
+                if (fitter != null) target.Add(fitter);
+            }
+        }
+
+        private static void DisableCachedList(List<Behaviour> cached)
+        {
+            for (int i = 0; i < cached.Count; i++)
+            {
+                Behaviour b = cached[i];
+                if (b != null && b.enabled)
                 {
-                    fitters[i].enabled = false;
-                    disabled.Add(fitters[i]);
+                    b.enabled = false;
+                    _suspendedLayoutsStack.Add(b);
                 }
             }
         }
 
-        private static void RestoreLayoutComponents(List<Behaviour> disabled)
+        private static void RestoreLayoutComponentsFrom(int startIndex)
         {
-            for (int i = disabled.Count - 1; i >= 0; i--)
+            for (int i = _suspendedLayoutsStack.Count - 1; i >= startIndex; i--)
             {
-                Behaviour b = disabled[i];
+                Behaviour b = _suspendedLayoutsStack[i];
                 if (b != null)
                 {
                     b.enabled = true;
@@ -846,6 +888,10 @@ namespace ProbablyUnifiedHotkeys
                         LayoutRebuilder.MarkLayoutForRebuild(rt);
                     }
                 }
+            }
+            if (_suspendedLayoutsStack.Count > startIndex)
+            {
+                _suspendedLayoutsStack.RemoveRange(startIndex, _suspendedLayoutsStack.Count - startIndex);
             }
         }
     }
@@ -902,6 +948,217 @@ namespace ProbablyUnifiedHotkeys
         public static void Postfix(ModUIManager __instance, LoadedMod? mod)
         {
             ModUIManagerPerfHelper.RecordEmptyShowMod(__instance, mod);
+        }
+    }
+
+    // =========================================================================
+    // 4. CustomUIWindow 缺失元素日志防护（仅在增强版游戏设置 UI 规则刷新期间接管，零日志刷屏）
+    // =========================================================================
+
+    [HarmonyPatch(typeof(CustomUIWindow), nameof(CustomUIWindow.Get), new Type[] { typeof(string) })]
+    public static class Patch_CustomUIWindow_Get
+    {
+        public static bool Prefix(CustomUIWindow __instance, string elementId, ref CustomUIElement? __result)
+        {
+            if (UnifiedOptionUI.ShouldSilenceMissingElementWarning(__instance, elementId, out CustomUIElement? found))
+            {
+                __result = found;
+                return false;
+            }
+            return true;
+        }
+    }
+
+    // =========================================================================
+    // 5. 改造件 (ModUIManager.OpenPanel) × ConflictScanner 双重阻塞扫描去重与缓存
+    // =========================================================================
+
+    [HarmonyPatch(typeof(ModUIManager), nameof(ModUIManager.OpenPanel))]
+    public static class Patch_ModUIManager_OpenPanel_ConflictScope
+    {
+        public static void Prefix()
+        {
+            ConflictScannerPerfHelper.BeginModOpenPanel();
+        }
+
+        public static void Finalizer()
+        {
+            ConflictScannerPerfHelper.EndModOpenPanel();
+        }
+    }
+
+    internal static class ConflictScannerPerfHelper
+    {
+        private static int _modOpenPanelDepth = 0;
+        private static bool _bound = false;
+        private static string? _lastBuiltModSignature = null;
+        private static Action<bool>? _ensureBuiltFn;
+        private static Func<int>? _getBuildCountFn;
+        private static readonly System.Text.StringBuilder SigBuilder = new System.Text.StringBuilder(1024);
+
+        internal static void ResetSession()
+        {
+            _modOpenPanelDepth = 0;
+            _lastBuiltModSignature = null;
+        }
+
+        internal static void BeginModOpenPanel()
+        {
+            _modOpenPanelDepth++;
+        }
+
+        internal static void EndModOpenPanel()
+        {
+            if (_modOpenPanelDepth > 0)
+            {
+                _modOpenPanelDepth--;
+            }
+        }
+
+        internal static void Bind(Assembly conflictScannerAssembly, Harmony harmony, ModLog? log)
+        {
+            if (_bound || conflictScannerAssembly == null || harmony == null)
+            {
+                return;
+            }
+            _bound = true;
+
+            try
+            {
+                Type? engineType = conflictScannerAssembly.GetType("ConflictScanner.ConflictEngine", throwOnError: false);
+                if (engineType == null)
+                {
+                    return;
+                }
+
+                MethodInfo? ensureBuiltMethod = AccessTools.Method(engineType, "EnsureBuilt", new Type[] { typeof(bool) });
+                MethodInfo? invalidateMethod = AccessTools.Method(engineType, "Invalidate");
+                MethodInfo? getBuildCountMethod = AccessTools.PropertyGetter(engineType, "BuildCount");
+
+                if (ensureBuiltMethod != null)
+                {
+                    try { _ensureBuiltFn = Delegate.CreateDelegate(typeof(Action<bool>), ensureBuiltMethod) as Action<bool>; }
+                    catch { _ensureBuiltFn = null; }
+                }
+                if (getBuildCountMethod != null)
+                {
+                    try { _getBuildCountFn = Delegate.CreateDelegate(typeof(Func<int>), getBuildCountMethod) as Func<int>; }
+                    catch { _getBuildCountFn = null; }
+                }
+
+                if (invalidateMethod != null)
+                {
+                    MethodInfo invPrefix = AccessTools.Method(typeof(ConflictScannerPerfHelper), nameof(ConflictEngine_Invalidate_Prefix));
+                    harmony.Patch(invalidateMethod, prefix: new HarmonyMethod(invPrefix));
+                }
+                if (ensureBuiltMethod != null)
+                {
+                    MethodInfo ebPrefix = AccessTools.Method(typeof(ConflictScannerPerfHelper), nameof(ConflictEngine_EnsureBuilt_Prefix));
+                    MethodInfo ebPostfix = AccessTools.Method(typeof(ConflictScannerPerfHelper), nameof(ConflictEngine_EnsureBuilt_Postfix));
+                    harmony.Patch(ensureBuiltMethod, prefix: new HarmonyMethod(ebPrefix), postfix: new HarmonyMethod(ebPostfix));
+                }
+
+                log?.Log("Bound ConflictScanner.ConflictEngine dedup & memoization patches");
+            }
+            catch (Exception ex)
+            {
+                log?.Warning($"[ConflictScannerPerfHelper] Failed to bind ConflictEngine: {ex.Message}");
+            }
+        }
+
+        internal static void PrewarmConflictEngine()
+        {
+            if (!_bound || _ensureBuiltFn == null)
+            {
+                return;
+            }
+            try
+            {
+                int count = _getBuildCountFn != null ? _getBuildCountFn() : 0;
+                if (count == 0)
+                {
+                    _ensureBuiltFn(false);
+                }
+            }
+            catch { }
+        }
+
+        internal static string ComputeModScanSignature()
+        {
+            SigBuilder.Length = 0;
+            List<LoadedMod>? mods = ModLoader.Mods;
+            int asmCount = AppDomain.CurrentDomain.GetAssemblies().Length;
+            SigBuilder.Append(asmCount).Append('|').Append(mods != null ? mods.Count : 0).Append('|');
+
+            if (mods != null)
+            {
+                for (int i = 0; i < mods.Count; i++)
+                {
+                    LoadedMod m = mods[i];
+                    if (m == null)
+                    {
+                        SigBuilder.Append("null;");
+                        continue;
+                    }
+                    string id = m.Manifest?.ID ?? string.Empty;
+                    string ver = m.Manifest?.ModVersion ?? string.Empty;
+                    bool loadedEnabled = m.IsEnabled;
+                    bool persistedEnabled = !string.IsNullOrEmpty(id) && ModLoader.IsModEnabled(id);
+                    SigBuilder.Append(id)
+                        .Append(':')
+                        .Append(ver)
+                        .Append(':')
+                        .Append(loadedEnabled ? '1' : '0')
+                        .Append(':')
+                        .Append(persistedEnabled ? '1' : '0')
+                        .Append(':')
+                        .Append(m.Assembly != null ? '1' : '0')
+                        .Append(':')
+                        .Append(string.IsNullOrEmpty(m.LoadError) ? '0' : '1')
+                        .Append(';');
+                }
+            }
+
+            return SigBuilder.ToString();
+        }
+
+        private static bool HasValidCachedBuildForCurrentEnv()
+        {
+            if (string.IsNullOrEmpty(_lastBuiltModSignature))
+            {
+                return false;
+            }
+            int buildCount = _getBuildCountFn != null ? _getBuildCountFn() : 0;
+            if (buildCount <= 0)
+            {
+                return false;
+            }
+            return string.Equals(ComputeModScanSignature(), _lastBuiltModSignature, StringComparison.Ordinal);
+        }
+
+        public static bool ConflictEngine_Invalidate_Prefix()
+        {
+            if (_modOpenPanelDepth > 0 && HasValidCachedBuildForCurrentEnv())
+            {
+                // 同一模组环境在 ModUIManager.OpenPanel 中不再重复清空已有冲突分析结果（消除两次全量 DseCecil DLL 解析）
+                return false;
+            }
+            _lastBuiltModSignature = null;
+            return true;
+        }
+
+        public static bool ConflictEngine_EnsureBuilt_Prefix()
+        {
+            if (_modOpenPanelDepth > 0 && HasValidCachedBuildForCurrentEnv())
+            {
+                return false;
+            }
+            return true;
+        }
+
+        public static void ConflictEngine_EnsureBuilt_Postfix()
+        {
+            _lastBuiltModSignature = ComputeModScanSignature();
         }
     }
 }
