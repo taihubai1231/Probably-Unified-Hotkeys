@@ -1,5 +1,7 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 
@@ -22,6 +24,68 @@ namespace ProbablyUnifiedHotkeys
         };
 
         private static ushort[]? _indices;
+        private static Dictionary<char, char>? _tradToSimp;
+        private static readonly object _tradInitLock = new object();
+
+        private static Dictionary<char, char> EnsureTradToSimp()
+        {
+            var existing = _tradToSimp;
+            if (existing != null) return existing;
+
+            lock (_tradInitLock)
+            {
+                if (_tradToSimp != null) return _tradToSimp;
+
+                int count = Math.Min(TradSimpTable.TradChars.Length, TradSimpTable.SimpChars.Length);
+                var map = new Dictionary<char, char>(count);
+                for (int i = 0; i < count; i++)
+                {
+                    map[TradSimpTable.TradChars[i]] = TradSimpTable.SimpChars[i];
+                }
+
+                _tradToSimp = map;
+                return map;
+            }
+        }
+
+        /// <summary>
+        /// 将单个繁体汉字规范化为对应简体汉字（非繁体字返回原字符）
+        /// </summary>
+        public static char MapToSimplified(char c)
+        {
+            var map = EnsureTradToSimp();
+            return map.TryGetValue(c, out char simp) ? simp : c;
+        }
+
+        /// <summary>
+        /// 将字符串中的繁体汉字规范化为简体（保留英文、数字与标点）
+        /// </summary>
+        public static string ToSimplified(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+            var map = EnsureTradToSimp();
+            if (map.Count == 0) return text;
+
+            StringBuilder? sb = null;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (map.TryGetValue(c, out char simp))
+                {
+                    if (sb == null)
+                    {
+                        sb = new StringBuilder(text.Length);
+                        sb.Append(text, 0, i);
+                    }
+                    sb.Append(simp);
+                }
+                else
+                {
+                    sb?.Append(c);
+                }
+            }
+            return sb != null ? sb.ToString() : text;
+        }
         private static readonly object _initLock = new object();
 
         private static void EnsureInitialized()
@@ -55,6 +119,7 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static char GetInitial(char c)
         {
+            c = MapToSimplified(c);
             int code = c;
             if (code >= CJK_START && code <= CJK_END)
             {
@@ -68,6 +133,7 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static string GetPinyin(char c)
         {
+            c = MapToSimplified(c);
             int code = c;
             if (code >= CJK_START && code <= CJK_END)
             {
@@ -120,7 +186,8 @@ namespace ProbablyUnifiedHotkeys
             if (string.IsNullOrEmpty(query)) return true;
             if (string.IsNullOrEmpty(targetText)) return false;
 
-            query = query.Trim().ToLowerInvariant();
+            query = ToSimplified(query.Trim()).ToLowerInvariant();
+            targetText = ToSimplified(targetText);
             if (query.Length == 0) return true;
 
             string targetLower = targetText.ToLowerInvariant();

@@ -10,15 +10,29 @@ namespace ProbablyUnifiedHotkeys
     {
         private static ModLog? log;
         private static Harmony? workshopHarmony;
+        private static volatile bool _isApplicationQuitting = false;
+        private static bool _quitHookRegistered = false;
 
         public void Init(ModManifest manifest)
         {
+            _isApplicationQuitting = false;
+            if (!_quitHookRegistered)
+            {
+                _quitHookRegistered = true;
+                Application.quitting += OnApplicationQuitting;
+            }
+
             log = new ModLog(manifest);
             log.Log($"Initialized v{manifest.ModVersion}");
 
             ComboKeyStore.EnsureLoaded();
             workshopHarmony = new Harmony("probably_unified_hotkeys.workshop");
             WorkshopModPatcher.Apply(workshopHarmony, log);
+        }
+
+        private static void OnApplicationQuitting()
+        {
+            _isApplicationQuitting = true;
         }
 
         public void OnEnable()
@@ -30,10 +44,14 @@ namespace ProbablyUnifiedHotkeys
         {
             try
             {
-                GameOptionRegistry.RemoveBySource("probably_unified_hotkeys");
-                GameOptionRegistry.RemoveBySource("allow_unbind_key");
                 ModCatalogCache.Invalidate();
-                workshopHarmony?.UnpatchAll("probably_unified_hotkeys.workshop");
+                // 进程退出时 ModLoader 已在统一卸载所有模组并销毁进程，跳过耗时的逐个 UnpatchAll 与线性注册表清理以消除退出卡顿
+                if (!_isApplicationQuitting)
+                {
+                    GameOptionRegistry.RemoveBySource("probably_unified_hotkeys");
+                    GameOptionRegistry.RemoveBySource("allow_unbind_key");
+                    workshopHarmony?.UnpatchAll("probably_unified_hotkeys.workshop");
+                }
             }
             catch (Exception ex)
             {
@@ -354,10 +372,22 @@ namespace ProbablyUnifiedHotkeys
             ComboKeyStore.FilterRuntimeKey(ref __result, fullId, __instance.Key);
         }
 
+        private static readonly HashSet<string> SupportedWorkshopAssemblies = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "DuojiHotkeyManager",
+            "ConflictScanner",
+            "ShowItemNames",
+            "SmartInventoryArrange.Mono",
+            "FactionReputationExpansion",
+            "Pen_mod_QoL_Tweaks",
+            "ClientDemandHighlight",
+            "PreciseGroupDrag"
+        };
+
         private static void TryPatch(Assembly assembly, Harmony harmony, ModLog? log)
         {
             string? name = assembly.GetName().Name;
-            if (string.IsNullOrEmpty(name)) return;
+            if (string.IsNullOrEmpty(name) || !SupportedWorkshopAssemblies.Contains(name)) return;
 
             lock (PatchedAssemblies)
             {
@@ -394,6 +424,10 @@ namespace ProbablyUnifiedHotkeys
                 else if (name == "ClientDemandHighlight")
                 {
                     PatchClientDemandHighlight(harmony, log);
+                }
+                else if (name == "PreciseGroupDrag")
+                {
+                    PatchPreciseGroupDrag(harmony, log);
                 }
             }
             catch (Exception ex)
@@ -869,7 +903,11 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool FactionReputation_IsBindableName_Prefix(string? name, ref bool __result)
         {
-            if (string.Equals(name, "None", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(name, "None", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Mouse3", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Mouse4", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Mouse5", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Mouse6", StringComparison.OrdinalIgnoreCase))
             {
                 __result = true;
                 return false;
@@ -909,7 +947,10 @@ namespace ProbablyUnifiedHotkeys
                 {
                     PenQoLGetterCandidates[getter] = new[]
                     {
+                        "key_" + optionId,
                         optionId,
+                        "Pen_mod_QoL_Tweaks:" + optionId,
+                        "Pen_mod_QoL_Tweaks:key_" + optionId,
                         "pen_qol." + propName.ToLowerInvariant()
                     };
                 }
@@ -987,12 +1028,36 @@ namespace ProbablyUnifiedHotkeys
         {
             if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
             ComboKeyStore.EnsureLoaded();
-            ComboKeyStore.FilterRuntimeKey(
+            ComboKeyStore.FilterRuntimeKeyWithPrefix(
                 ref __result,
-                "toggleKey",
+                "hollow.clientdemandhighlight:",
+                "hollow.clientdemandhighlight:toggleKey",
                 "hollow.clientdemandhighlight.toggleKey",
-                "clientdemandhighlight.toggle_key"
+                "clientdemandhighlight.toggle_key",
+                "toggleKey"
             );
+        }
+
+        // --- 精准拖拽分组 (PreciseGroupDrag) ---
+        private static void PatchPreciseGroupDrag(Harmony harmony, ModLog? log)
+        {
+            Type? quickMoveType = AccessTools.TypeByName("PreciseGroupDragMod.GroupQuickMove");
+            if (quickMoveType == null) return;
+
+            MethodInfo? anyHeld = AccessTools.Method(quickMoveType, "AnyQuickKeyHeld");
+            if (anyHeld != null)
+            {
+                harmony.Patch(anyHeld, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(PreciseGroupDrag_AnyQuickKeyHeld_Prefix))));
+                log?.Log("Patched PreciseGroupDragMod.GroupQuickMove.AnyQuickKeyHeld (held combo & mouse side button support)");
+            }
+        }
+
+        public static bool PreciseGroupDrag_AnyQuickKeyHeld_Prefix(ref bool __result)
+        {
+            __result = KeyBindHelper.GetKey("quick_move_inventory") ||
+                       KeyBindHelper.GetKey("quick_move_showcase") ||
+                       KeyBindHelper.GetKey("quick_move_storage");
+            return false;
         }
     }
 }

@@ -33,6 +33,10 @@
       <HintPath>..\..\Probably Stolen_Data\Managed\UnityEngine.UI.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>..\..\Probably Stolen_Data\Managed\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Unity.TextMeshPro">
       <HintPath>..\..\Probably Stolen_Data\Managed\Unity.TextMeshPro.dll</HintPath>
       <Private>false</Private>

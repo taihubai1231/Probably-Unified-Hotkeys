@@ -321,31 +321,7 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static void FilterRuntimeKey(ref KeyCode key, params string[] candidateEntryIds)
         {
-            if (key == KeyCode.None || IsBypassed) return;
-            EnsureLoaded();
-
-            KeyModifierMask required = KeyModifierMask.None;
-            foreach (string id in candidateEntryIds)
-            {
-                if (string.IsNullOrEmpty(id)) continue;
-                if (SavedCombos.TryGetValue(id, out var pair) && pair.Key == key)
-                {
-                    required = pair.Modifiers;
-                    break;
-                }
-            }
-
-            if (required != KeyModifierMask.None)
-            {
-                if (!AreModifiersExactMatch(required, key))
-                {
-                    key = KeyCode.None;
-                }
-            }
-            else if (ShouldSuppressPlainKey(key))
-            {
-                key = KeyCode.None;
-            }
+            FilterRuntimeKeyCore(ref key, candidateEntryIds, null);
         }
 
         /// <summary>
@@ -353,16 +329,45 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static void FilterRuntimeKeyByModPrefix(ref KeyCode key, string modIdPrefix)
         {
+            FilterRuntimeKeyCore(ref key, null, modIdPrefix);
+        }
+
+        /// <summary>
+        /// 优先按精确 Entry ID 过滤，未命中时再回落按模组 ID 前缀匹配过滤
+        /// </summary>
+        public static void FilterRuntimeKeyWithPrefix(ref KeyCode key, string modIdPrefix, params string[] candidateEntryIds)
+        {
+            FilterRuntimeKeyCore(ref key, candidateEntryIds, modIdPrefix);
+        }
+
+        private static void FilterRuntimeKeyCore(ref KeyCode key, string[]? candidateEntryIds, string? modIdPrefix)
+        {
             if (key == KeyCode.None || IsBypassed) return;
             EnsureLoaded();
 
             KeyModifierMask required = KeyModifierMask.None;
-            foreach (var kvp in SavedCombos)
+            if (candidateEntryIds != null)
             {
-                if (kvp.Key.StartsWith(modIdPrefix, StringComparison.OrdinalIgnoreCase) && kvp.Value.Key == key)
+                foreach (string id in candidateEntryIds)
                 {
-                    required = kvp.Value.Modifiers;
-                    break;
+                    if (string.IsNullOrEmpty(id)) continue;
+                    if (SavedCombos.TryGetValue(id, out var pair) && pair.Key == key)
+                    {
+                        required = pair.Modifiers;
+                        break;
+                    }
+                }
+            }
+
+            if (required == KeyModifierMask.None && !string.IsNullOrEmpty(modIdPrefix))
+            {
+                foreach (var kvp in SavedCombos)
+                {
+                    if (kvp.Key.StartsWith(modIdPrefix, StringComparison.OrdinalIgnoreCase) && kvp.Value.Key == key)
+                    {
+                        required = kvp.Value.Modifiers;
+                        break;
+                    }
                 }
             }
 

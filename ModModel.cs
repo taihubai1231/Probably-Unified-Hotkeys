@@ -39,6 +39,7 @@ namespace ProbablyUnifiedHotkeys
         public int TotalItemCount => Hotkeys.Count + GeneralSettings.Count;
 
         // UI 引用，用于折叠与过滤
+        public bool IsContentBuilt { get; set; } = false;
         public GameObject? HeaderRowObject { get; set; }
         public GameObject? ContentContainerObject { get; set; }
         public GameObject? OuterSeparatorObject { get; set; }

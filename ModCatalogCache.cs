@@ -48,6 +48,7 @@ namespace ProbablyUnifiedHotkeys
         {
             foreach (var g in groups)
             {
+                g.IsContentBuilt = false;
                 g.HeaderRowObject = null;
                 g.ContentContainerObject = null;
                 g.OuterSeparatorObject = null;

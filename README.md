@@ -1,6 +1,6 @@
-# 可能是按键统一优化 (Probably Unified Hotkeys) v1.3.0
+# 可能是按键统一优化 (Probably Unified Hotkeys) v1.3.1
 
-> 一站式统一按键与模组配置中心 —— 支持 `Shift / Ctrl / Alt` 组合键与鼠标侧键（`Mouse3~Mouse6`）、全局防重复隔离、空键解绑与冲突智能排查。
+> 一站式统一按键与模组配置中心 —— 支持 `Shift / Ctrl / Alt` 组合键与鼠标侧键（`Mouse3~Mouse6`）、繁简中文拼音搜索定位、懒加载极速面板与低退出开销。
 
 ---
 
@@ -34,6 +34,13 @@
 ---
 
 ## 📝 更新日志
+
+### v1.3.1
+1. **修复工坊组合键失效与隔离缺口**：修正 `ClientDemandHighlight`（用户需求高亮）因冒号 ID (`hollow.clientdemandhighlight:toggleKey`) 未命中导致的 `Ctrl+Z` / `Ctrl+C` / `Ctrl+0` 自我抑制问题；同步补齐 `Pen_mod_QoL_Tweaks`（`key_` 前缀）、`PreciseGroupDrag`（群组快移长按热键）及 `FactionReputationExpansion`（侧键持久化规则）。注：由于官方 `ModScanner` 静态策略禁止外部无命名空间类型反射，`RealTimeClock` 保留单键/鼠标侧键/退格/Esc 解绑兼容。
+2. **彻底修复悬停变蓝 Bug**：直接采用游戏公开类型 `ButtonTextColor` 并同步更新其 `normal / highlight / pressed` 状态，修复冲突按键与 `[!] 仅看冲突` 在鼠标扫过后退回蓝色的问题。
+3. **优化 UI 排版、按钮边距与三角图标比例**：缩小折叠三角并居中，加宽顶部功能按钮、应用按钮与按键按钮尺寸并增加内部文本 Margin 与自适应字号，告别字体粘连内边框。
+4. **繁简中文互通搜索与自动滚动定位**：内置 2,473 组繁简汉字对照表 (`TradSimpTable`)（简体可直接搜 `現實時鐘` 等繁体模组及配置，亦支持繁体搜简体）；搜索命中时自动滚动视窗至首个匹配卡片。
+5. **消除选项页打开卡顿与降低退出卡顿**：模组卡片内部控件与冲突速览视图全面改为按需懒加载构建；通过 `Application.quitting` 在游戏退出期间跳过冗余 `UnpatchAll` 与逐条注册表清理，显著减少关闭游戏时的卡顿；并在 `WorkshopModPatcher` 中加入程序集名白名单 O(1) 过滤。
 
 ### v1.3.0
 1. **统一规范命名**：正式定名为 **「可能是按键统一优化」**，统一模组 ID、仓库/运行目录（`probably_unified_hotkeys`）、项目/程序集与命名空间（`ProbablyUnifiedHotkeys`）。
