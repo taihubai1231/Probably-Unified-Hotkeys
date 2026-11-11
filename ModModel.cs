@@ -27,10 +27,12 @@ namespace ProbablyUnifiedHotkeys
     public interface ICollapsibleOptionCard
     {
         bool IsExpanded { get; }
+        Action? ResetToDefaultsAction { get; set; }
         GameObject? HeaderRowObject { get; }
         GameObject? ContentContainerObject { get; }
         GameObject? OuterSeparatorObject { get; }
         CustomUIElement? FoldArrowElement { get; }
+        CustomUIElement? ResetButtonElement { get; set; }
         void SetExpanded(bool expanded);
     }
 
@@ -60,21 +62,36 @@ namespace ProbablyUnifiedHotkeys
 
         public List<VanillaOptionItem> Entries { get; } = new List<VanillaOptionItem>();
 
+        public Action? ResetToDefaultsAction { get; set; }
+
         public GameObject? HeaderRowObject { get; set; }
         public GameObject? ContentContainerObject { get; set; }
         public GameObject? OuterSeparatorObject { get; set; }
         public CustomUIElement? FoldArrowElement { get; set; }
+        public CustomUIElement? ResetButtonElement { get; set; }
 
         public void SetExpanded(bool expanded)
         {
             IsExpanded = expanded;
-            if (ContentContainerObject != null)
+            if (ContentContainerObject != null && ContentContainerObject.activeSelf != expanded)
             {
                 ContentContainerObject.SetActive(expanded);
             }
             if (FoldArrowElement != null)
             {
-                FoldArrowElement.SetText(expanded ? "▼" : "▶");
+                string arrow = expanded ? "▼" : "▶";
+                if (FoldArrowElement.text == null || FoldArrowElement.text.text != arrow)
+                {
+                    FoldArrowElement.SetText(arrow);
+                }
+            }
+            if (ResetButtonElement != null)
+            {
+                bool shouldShowReset = expanded && ResetToDefaultsAction != null;
+                if (ResetButtonElement.root == null || ResetButtonElement.root.activeSelf != shouldShowReset)
+                {
+                    ResetButtonElement.SetVisible(shouldShowReset);
+                }
             }
         }
     }
@@ -107,17 +124,25 @@ namespace ProbablyUnifiedHotkeys
         public void SetExpanded(bool expanded)
         {
             IsExpanded = expanded;
-            if (ContentContainerObject != null)
+            if (ContentContainerObject != null && ContentContainerObject.activeSelf != expanded)
             {
                 ContentContainerObject.SetActive(expanded);
             }
             if (FoldArrowElement != null)
             {
-                FoldArrowElement.SetText(expanded ? "▼" : "▶");
+                string arrow = expanded ? "▼" : "▶";
+                if (FoldArrowElement.text == null || FoldArrowElement.text.text != arrow)
+                {
+                    FoldArrowElement.SetText(arrow);
+                }
             }
             if (ResetButtonElement != null)
             {
-                ResetButtonElement.SetVisible(expanded && ResetToDefaultsAction != null);
+                bool shouldShowReset = expanded && ResetToDefaultsAction != null;
+                if (ResetButtonElement.root == null || ResetButtonElement.root.activeSelf != shouldShowReset)
+                {
+                    ResetButtonElement.SetVisible(shouldShowReset);
+                }
             }
         }
     }
