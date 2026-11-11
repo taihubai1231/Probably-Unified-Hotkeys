@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Manifest>
-  <ID>allow_unbind_key</ID>
-  <Name>深空当铺：可能是按键统一优化 / Probably Unified Hotkeys &amp; Settings</Name>
+  <ID>probably_unified_hotkeys</ID>
+  <Name>可能是按键统一优化</Name>
   <Author>Antigravity &amp; taihubai1231</Author>
-  <ModVersion>1.2.0</ModVersion>
-  <Description>一站式统一按键管理与模组配置中心：彻底解决官方及模组社区按键混杂、多吉改键器漏检、设置空键后选项消失等历史顽疾！100%原生融合于官方设置页面，上部展示原版设置，下部以拼音排序卡片整齐展示所有模组（上半截常规选项，下半截快捷键）；支持输入中英文、拼音缩写（如sp=商品）实时检索；内置淡橙色冲突预警及一键“冲突专属速览”聚合模式；深度支持退格键（Backspace）将任何按键彻底解绑为空键且永不消失。</Description>
+  <ModVersion>1.3.0</ModVersion>
+  <Description>一站式统一按键与模组配置中心：彻底解决官方及模组选项重复混杂、多吉改键器漏检、设置空键失败等顽疾！100%原生融合于官方设置页面，上方保留纯粹原版设置，下方以拼音排序卡片整齐展示所有模组（上半截快捷键，下半截常规设置）；全面支持 Shift / Ctrl / Alt 组合按键（如 Alt+左键、Ctrl+键）及鼠标侧键绑定；支持整体/按键/常规四模式拼音检索、淡橙色 [!] 冲突预警及“仅看冲突”速览；支持按 Esc 将任何按键解绑为原版“无”（Backspace 与 Delete 均保留为正常可绑定快捷键）。</Description>
   <GameVersions>
     <Version>0.46</Version>
     <Version>0.46D</Version>
   </GameVersions>
   <Prerequisites />
   <Assemblies>
-    <Assembly>AllowUnbindKey.dll</Assembly>
+    <Assembly>ProbablyUnifiedHotkeys.dll</Assembly>
   </Assemblies>
   <Capabilities />
 </Manifest>

@@ -4,7 +4,8 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>AllowUnbindKey</AssemblyName>
+    <AssemblyName>ProbablyUnifiedHotkeys</AssemblyName>
+    <RootNamespace>ProbablyUnifiedHotkeys</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -47,8 +48,10 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="..\..\Mods\allow_unbind_key" />
-    <Copy SourceFiles="manifest.xml" DestinationFolder="..\..\Mods\allow_unbind_key" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="..\..\Mods\probably_unified_hotkeys" />
+    <Copy SourceFiles="manifest.xml" DestinationFolder="..\..\Mods\probably_unified_hotkeys" />
+    <Copy SourceFiles="README.md" DestinationFolder="..\..\Mods\probably_unified_hotkeys" />
+    <Copy SourceFiles="preview.png" DestinationFolder="..\..\Mods\probably_unified_hotkeys" Condition="Exists('preview.png')" />
   </Target>
 
 </Project>

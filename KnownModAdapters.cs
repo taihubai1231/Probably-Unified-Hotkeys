@@ -4,29 +4,25 @@ using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 
-namespace AllowUnbindKey
+namespace ProbablyUnifiedHotkeys
 {
     /// <summary>
-    /// 针对使用非标准配置存储的知名创意工坊模组的高速专属适配器
+    /// 针对使用非标准配置存储的知名创意工坊模组的高速专属适配器（作为 GameOptionRegistry / ModConfig 的兜底补充）
     /// </summary>
     public static class KnownModAdapters
     {
-        public static List<ModOptionGroup> TryAdaptKnownMods()
+        public static void TryAdaptKnownMods(List<ModOptionGroup> groups, HashSet<string> handledModIds)
         {
-            var groups = new List<ModOptionGroup>();
-
-            TryAdaptShowItemNames(groups);
-            TryAdaptConflictScanner(groups);
-            TryAdaptFactionReputation(groups);
-            TryAdaptClientDemandHighlight(groups);
-            TryAdaptPenQoL(groups);
-            TryAdaptSmartInventoryArrange(groups);
-
-            return groups;
+            if (!handledModIds.Contains("ShowItemNames")) TryAdaptShowItemNames(groups, handledModIds);
+            if (!handledModIds.Contains("conflict_scanner")) TryAdaptConflictScanner(groups, handledModIds);
+            if (!handledModIds.Contains("faction_reputation_expansion")) TryAdaptFactionReputation(groups, handledModIds);
+            if (!handledModIds.Contains("hollow.clientdemandhighlight")) TryAdaptClientDemandHighlight(groups, handledModIds);
+            if (!handledModIds.Contains("Pen_mod_QoL_Tweaks")) TryAdaptPenQoL(groups, handledModIds);
+            if (!handledModIds.Contains("smart_inventory_arrange")) TryAdaptSmartInventoryArrange(groups, handledModIds);
         }
 
         // 1. 物品名称常显 (ShowItemNames)
-        private static void TryAdaptShowItemNames(List<ModOptionGroup> groups)
+        private static void TryAdaptShowItemNames(List<ModOptionGroup> groups, HashSet<string> handledModIds)
         {
             Type? settingsType = AccessTools.TypeByName("ShowItemNames.Settings");
             if (settingsType == null) return;
@@ -52,6 +48,7 @@ namespace AllowUnbindKey
                     DisplayName = "常显开关热键",
                     Tooltip = "按压或按下该快捷键以切换物品名称常显",
                     DefaultKey = KeyCode.LeftAlt,
+                    HasExplicitDefault = true,
                     GetKey = () => (KeyCode)(hotkeyProp.GetValue(null) ?? KeyCode.None),
                     SetKey = (key) =>
                     {
@@ -69,11 +66,15 @@ namespace AllowUnbindKey
                 });
             }
 
-            if (group.TotalItemCount > 0) groups.Add(group);
+            if (group.TotalItemCount > 0)
+            {
+                groups.Add(group);
+                handledModIds.Add(group.ModId);
+            }
         }
 
         // 2. 模组冲突检测器 (ConflictScanner)
-        private static void TryAdaptConflictScanner(List<ModOptionGroup> groups)
+        private static void TryAdaptConflictScanner(List<ModOptionGroup> groups, HashSet<string> handledModIds)
         {
             Type? keybindType = AccessTools.TypeByName("ConflictScanner.Keybind");
             if (keybindType == null) return;
@@ -98,6 +99,7 @@ namespace AllowUnbindKey
                     DisplayName = "冲突报告窗口快捷键",
                     Tooltip = "按下后呼出模组冲突检测器诊断面板",
                     DefaultKey = KeyCode.F8,
+                    HasExplicitDefault = true,
                     GetKey = () => (KeyCode)(keyProp.GetValue(null) ?? KeyCode.None),
                     SetKey = (key) =>
                     {
@@ -115,11 +117,15 @@ namespace AllowUnbindKey
                 });
             }
 
-            if (group.TotalItemCount > 0) groups.Add(group);
+            if (group.TotalItemCount > 0)
+            {
+                groups.Add(group);
+                handledModIds.Add(group.ModId);
+            }
         }
 
         // 3. 势力声望拓展 (FactionReputationExpansion)
-        private static void TryAdaptFactionReputation(List<ModOptionGroup> groups)
+        private static void TryAdaptFactionReputation(List<ModOptionGroup> groups, HashSet<string> handledModIds)
         {
             Type? repModType = AccessTools.TypeByName("FactionReputationExpansion.RepMod");
             if (repModType == null) return;
@@ -144,6 +150,7 @@ namespace AllowUnbindKey
                     DisplayName = "打开势力声望手帐",
                     Tooltip = "按此键在游戏中打开或关闭各势力声望详情界面",
                     DefaultKey = KeyCode.J,
+                    HasExplicitDefault = true,
                     GetKey = () => (KeyCode)(journalProp.GetValue(null) ?? KeyCode.None),
                     SetKey = (key) =>
                     {
@@ -159,12 +166,15 @@ namespace AllowUnbindKey
                 });
             }
 
-            if (group.TotalItemCount > 0) groups.Add(group);
+            if (group.TotalItemCount > 0)
+            {
+                groups.Add(group);
+                handledModIds.Add(group.ModId);
+            }
         }
 
-
-        // 5. 客户需求高亮 (ClientDemandHighlight)
-        private static void TryAdaptClientDemandHighlight(List<ModOptionGroup> groups)
+        // 4. 客户需求高亮 (ClientDemandHighlight - 兜底适配，若已被 GameOptionRegistry 收编则跳过)
+        private static void TryAdaptClientDemandHighlight(List<ModOptionGroup> groups, HashSet<string> handledModIds)
         {
             Type? cfgType = AccessTools.TypeByName("ClientDemandHighlight.Config");
             if (cfgType == null) return;
@@ -188,6 +198,7 @@ namespace AllowUnbindKey
                 DisplayName = "切换高亮热键",
                 Tooltip = "按此键切换是否高亮当前顾客需求的特殊物品",
                 DefaultKey = KeyCode.H,
+                HasExplicitDefault = true,
                 GetKey = () => (KeyCode)((toggleProp?.GetValue(null) ?? toggleField?.GetValue(null)) ?? KeyCode.None),
                 SetKey = (key) =>
                 {
@@ -198,11 +209,15 @@ namespace AllowUnbindKey
                 }
             });
 
-            if (group.TotalItemCount > 0) groups.Add(group);
+            if (group.TotalItemCount > 0)
+            {
+                groups.Add(group);
+                handledModIds.Add(group.ModId);
+            }
         }
 
-        // 6. Pen 便利性优化 (Pen_mod_QoL_Tweaks)
-        private static void TryAdaptPenQoL(List<ModOptionGroup> groups)
+        // 5. Pen 便利性优化 (Pen_mod_QoL_Tweaks - 兜底适配，若已被 GameOptionRegistry 收编则跳过)
+        private static void TryAdaptPenQoL(List<ModOptionGroup> groups, HashSet<string> handledModIds)
         {
             Type? qolKeys = AccessTools.TypeByName("PenLabelerAssist.QoLKeyBindings");
             if (qolKeys == null) return;
@@ -232,6 +247,7 @@ namespace AllowUnbindKey
                         DisplayName = label,
                         Tooltip = $"Pen便利性优化操作快捷键：{label}",
                         DefaultKey = (KeyCode)(prop.GetValue(null) ?? KeyCode.None),
+                        HasExplicitDefault = false,
                         GetKey = () => (KeyCode)(prop.GetValue(null) ?? KeyCode.None),
                         SetKey = (key) =>
                         {
@@ -241,11 +257,15 @@ namespace AllowUnbindKey
                 }
             }
 
-            if (group.TotalItemCount > 0) groups.Add(group);
+            if (group.TotalItemCount > 0)
+            {
+                groups.Add(group);
+                handledModIds.Add(group.ModId);
+            }
         }
 
-        // 7. 智能物品整理 (SmartInventoryArrange)
-        private static void TryAdaptSmartInventoryArrange(List<ModOptionGroup> groups)
+        // 6. 智能物品整理 (SmartInventoryArrange)
+        private static void TryAdaptSmartInventoryArrange(List<ModOptionGroup> groups, HashSet<string> handledModIds)
         {
             Type? runtimeType = AccessTools.TypeByName("SmartInventoryArrange.SettingsRuntime");
             if (runtimeType == null) return;
@@ -272,7 +292,11 @@ namespace AllowUnbindKey
                 });
             }
 
-            if (group.TotalItemCount > 0) groups.Add(group);
+            if (group.TotalItemCount > 0)
+            {
+                groups.Add(group);
+                handledModIds.Add(group.ModId);
+            }
         }
     }
 }

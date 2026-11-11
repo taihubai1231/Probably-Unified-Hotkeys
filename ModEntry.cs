@@ -4,7 +4,7 @@ using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 
-namespace AllowUnbindKey
+namespace ProbablyUnifiedHotkeys
 {
     public class ModEntry : IMod
     {
@@ -16,22 +16,24 @@ namespace AllowUnbindKey
             log = new ModLog(manifest);
             log.Log($"Initialized v{manifest.ModVersion}");
 
-            workshopHarmony = new Harmony("allow_unbind_key.workshop");
+            ComboKeyStore.EnsureLoaded();
+            workshopHarmony = new Harmony("probably_unified_hotkeys.workshop");
             WorkshopModPatcher.Apply(workshopHarmony, log);
         }
 
         public void OnEnable()
         {
-            log?.Log("Enabled: Key clearing & unbind functionality is active across vanilla and workshop mods.");
+            log?.Log("Enabled: Unified hotkey combos, mouse side buttons & unbinding active across vanilla and workshop mods.");
         }
 
         public void OnDisable()
         {
             try
             {
+                GameOptionRegistry.RemoveBySource("probably_unified_hotkeys");
                 GameOptionRegistry.RemoveBySource("allow_unbind_key");
                 ModCatalogCache.Invalidate();
-                workshopHarmony?.UnpatchAll("allow_unbind_key.workshop");
+                workshopHarmony?.UnpatchAll("probably_unified_hotkeys.workshop");
             }
             catch (Exception ex)
             {
@@ -60,9 +62,21 @@ namespace AllowUnbindKey
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[AllowUnbindKey] Error in enhanced OpenUI, falling back to vanilla: {ex}");
+                Debug.LogError($"[ProbablyUnifiedHotkeys] Error in enhanced OpenUI, falling back to vanilla: {ex}");
                 return true;
             }
+        }
+    }
+
+    /// <summary>
+    /// 隔离原版捕获轮询，避免修改模组快捷键时触发原版 KeyBindHelper 干扰
+    /// </summary>
+    [HarmonyPatch(typeof(GameOptionUIManager), "PollKeyCapture")]
+    public static class Patch_GameOptionUIManager_PollKeyCapture
+    {
+        public static bool Prefix()
+        {
+            return !UnifiedOptionUI.IsCapturingModHotkey;
         }
     }
 
@@ -82,34 +96,166 @@ namespace AllowUnbindKey
         }
     }
 
+    /// <summary>
+    /// 同步原版按键显示色与全局冲突指示（防止原版改键/重置后颜色或冲突标记过期）
+    /// </summary>
+    [HarmonyPatch(typeof(GameOptionUIManager), "RefreshRules")]
+    public static class Patch_GameOptionUIManager_RefreshRules
+    {
+        public static void Postfix()
+        {
+            try
+            {
+                UnifiedOptionUI.OnVanillaRulesRefreshed();
+            }
+            catch { }
+        }
+    }
+
+    [HarmonyPatch(typeof(GameOptionUIManager), "RefreshKeyBindButton")]
+    public static class Patch_GameOptionUIManager_RefreshKeyBindButton
+    {
+        public static void Postfix()
+        {
+            try
+            {
+                UnifiedOptionUI.OnVanillaKeyChanged();
+            }
+            catch { }
+        }
+    }
+
     // =========================================================================
     // 1. 原版游戏设置界面按键捕获补丁
     // =========================================================================
 
     /// <summary>
-    /// 允许捕获空按键（按下 Backspace 或 Delete 时触发 KeyCode.None，代表清空/解除绑定）
+    /// 运行时快捷键判定共享辅助器（支持 Shift/Ctrl/Alt 组合键与鼠标侧键 Mouse3~Mouse6）
+    /// </summary>
+    internal static class KeyBindRuntimeHelper
+    {
+        internal static bool EvaluateKeyBind(string id, bool held)
+        {
+            if (KeyBindHelper.SuppressHotkeys)
+            {
+                return false;
+            }
+
+            KeyCode key = KeyBindHelper.Get(id);
+            if (key == KeyCode.None)
+            {
+                return false;
+            }
+
+            ComboKeyStore.EnsureLoaded();
+            KeyCode effective = key;
+            ComboKeyStore.FilterRuntimeKey(ref effective, "vanilla." + id, id);
+            if (effective == KeyCode.None)
+            {
+                return false;
+            }
+
+            return held ? ComboKeyStore.IsKeyHeldRaw(effective) : ComboKeyStore.IsKeyDownRaw(effective);
+        }
+
+        internal static bool TryPollSideMouseButton(out KeyCode pressed)
+        {
+            for (int code = (int)KeyCode.Mouse3; code <= (int)KeyCode.Mouse6; code++)
+            {
+                KeyCode candidate = (KeyCode)code;
+                if (ComboKeyStore.IsKeyDownRaw(candidate))
+                {
+                    pressed = candidate;
+                    return true;
+                }
+            }
+            pressed = KeyCode.None;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 允许捕获空按键（Esc 解除绑定）并支持直接捕获鼠标侧键（Mouse3~Mouse6）及 Backspace
     /// </summary>
     [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.PollCapture))]
     public static class Patch_KeyBindHelper_PollCapture
     {
+        private static readonly FieldInfo? ConsumedEscapeFrameField = AccessTools.Field(typeof(GameOptionUIManager), "consumedEscapeFrame");
+
         public static bool Prefix(ref KeyBindHelper.CaptureResult __result, ref KeyCode key)
         {
-            if (!KeyBindHelper.IsCapturing || !Input.anyKeyDown)
+            if (!KeyBindHelper.IsCapturing)
             {
                 return true;
             }
 
-            bool isTrashItem = KeyBindHelper.CapturingOptionId == "key_trash_item" || KeyBindHelper.CapturingOptionId == "trash_item";
-
-            // 按下 Backspace（退格键）或者非垃圾桶项按下 Delete 时，绑定为 None（空/无）
-            if (Input.GetKeyDown(KeyCode.Backspace) || (!isTrashItem && Input.GetKeyDown(KeyCode.Delete)))
+            // Unity 的 Input.anyKeyDown 有时会遗漏鼠标侧键，优先轮询 Mouse3~Mouse6
+            if (KeyBindRuntimeHelper.TryPollSideMouseButton(out KeyCode sideBtn))
             {
+                key = sideBtn;
+                __result = KeyBindHelper.CaptureResult.Key;
+                return false;
+            }
+
+            if (!Input.anyKeyDown)
+            {
+                return true;
+            }
+
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                ConsumedEscapeFrameField?.SetValue(null, Time.frameCount);
                 key = KeyCode.None;
                 __result = KeyBindHelper.CaptureResult.Key;
                 return false;
             }
 
+            if (Input.GetKeyDown(KeyCode.Backspace))
+            {
+                key = KeyCode.Backspace;
+                __result = KeyBindHelper.CaptureResult.Key;
+                return false;
+            }
+
             return true;
+        }
+    }
+
+    /// <summary>
+    /// 增强原版 KeyName 输出，将 Mouse3~Mouse6 友好显示为“鼠标侧键1~4”
+    /// </summary>
+    [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.KeyName))]
+    public static class Patch_KeyBindHelper_KeyName
+    {
+        public static void Postfix(KeyCode key, ref string __result)
+        {
+            if (ComboKeyStore.IsMouseSideButton(key))
+            {
+                __result = ComboKeyStore.FormatPrimaryKeyName(key);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 让原版 KeyBindHelper.GetKeyDown / GetKey 在游戏运行时识别组合键与鼠标侧键
+    /// </summary>
+    [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.GetKeyDown))]
+    public static class Patch_KeyBindHelper_GetKeyDown
+    {
+        public static bool Prefix(string id, ref bool __result)
+        {
+            __result = KeyBindRuntimeHelper.EvaluateKeyBind(id, held: false);
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.GetKey))]
+    public static class Patch_KeyBindHelper_GetKey
+    {
+        public static bool Prefix(string id, ref bool __result)
+        {
+            __result = KeyBindRuntimeHelper.EvaluateKeyBind(id, held: true);
+            return false;
         }
     }
 
@@ -131,25 +277,25 @@ namespace AllowUnbindKey
     }
 
     /// <summary>
-    /// 在等待按键输入时，提示用户可以通过 Backspace 设置为空按键
+    /// 接管原版按键录入，走增强统一捕获状态机（支持 Shift/Ctrl/Alt 组合键、Alt+左键、鼠标侧键及 Esc 解绑）
     /// </summary>
-    [HarmonyPatch(typeof(GameOptionUIManager), "StartCapture")]
+    [HarmonyPatch(typeof(GameOptionUIManager), "StartCapture", new Type[] { typeof(string) })]
     public static class Patch_GameOptionUIManager_StartCapture
     {
-        private static readonly MethodInfo? SetKeyBindStatusMethod = AccessTools.Method(typeof(GameOptionUIManager), "SetKeyBindStatus");
-
-        public static void Postfix(GameOptionUIManager __instance)
+        public static bool Prefix(GameOptionUIManager __instance, string optionId)
         {
             try
             {
-                string currentStatus = GameOptionUIManager.KeyBindStatus;
-                string extra = " (按 Backspace 可设为空/清空)";
-                SetKeyBindStatusMethod?.Invoke(__instance, new object[] { currentStatus + extra });
+                if (UnifiedOptionUI.StartCaptureVanillaOption(__instance, optionId))
+                {
+                    return false;
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // 忽略 UI 状态刷新中的次要异常
+                Debug.LogWarning($"[ProbablyUnifiedHotkeys] Error routing vanilla key capture: {ex.Message}");
             }
+            return true;
         }
     }
 
@@ -160,9 +306,13 @@ namespace AllowUnbindKey
     public static class WorkshopModPatcher
     {
         private static readonly HashSet<string> PatchedAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<MethodBase, string[]> PenQoLGetterCandidates = new Dictionary<MethodBase, string[]>();
 
         public static void Apply(Harmony harmony, ModLog? log)
         {
+            // 对官方泛型 ModConfig 热键（ConfigEntry<KeyCode>.Value）挂接运行时组合键过滤
+            PatchConfigEntryKeyCode(harmony, log);
+
             // 扫描当前已加载的程序集
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -174,6 +324,34 @@ namespace AllowUnbindKey
             {
                 TryPatch(args.LoadedAssembly, harmony, log);
             };
+        }
+
+        private static void PatchConfigEntryKeyCode(Harmony harmony, ModLog? log)
+        {
+            try
+            {
+                PropertyInfo? valueProp = AccessTools.Property(typeof(ConfigEntry<KeyCode>), nameof(ConfigEntry<KeyCode>.Value));
+                MethodInfo? getter = valueProp?.GetGetMethod(true);
+                if (getter != null)
+                {
+                    MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ConfigEntryKeyCode_GetValue_Postfix));
+                    harmony.Patch(getter, postfix: new HarmonyMethod(postfix));
+                    log?.Log("Patched ConfigEntry<KeyCode>.Value getter (combo key runtime filter)");
+                }
+            }
+            catch (Exception ex)
+            {
+                log?.Warning($"[WorkshopModPatcher] Failed to patch ConfigEntry<KeyCode>.Value: {ex.Message}");
+            }
+        }
+
+        public static void ConfigEntryKeyCode_GetValue_Postfix(ConfigEntry<KeyCode> __instance, ref KeyCode __result)
+        {
+            if (__result == KeyCode.None || ComboKeyStore.IsBypassed || __instance == null) return;
+            ComboKeyStore.EnsureLoaded();
+            string? modId = __instance.Config?.ModId;
+            string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
+            ComboKeyStore.FilterRuntimeKey(ref __result, fullId, __instance.Key);
         }
 
         private static void TryPatch(Assembly assembly, Harmony harmony, ModLog? log)
@@ -209,6 +387,14 @@ namespace AllowUnbindKey
                 {
                     PatchFactionReputationExpansion(harmony, log);
                 }
+                else if (name == "Pen_mod_QoL_Tweaks")
+                {
+                    PatchPenQoL(harmony, log);
+                }
+                else if (name == "ClientDemandHighlight")
+                {
+                    PatchClientDemandHighlight(harmony, log);
+                }
             }
             catch (Exception ex)
             {
@@ -236,6 +422,18 @@ namespace AllowUnbindKey
                     MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(Duoji_GetCaptureTargetText_Postfix));
                     harmony.Patch(getCaptureText, postfix: new HarmonyMethod(postfix));
                 }
+
+                _duojiGetToggleKeysMethod = AccessTools.PropertyGetter(hotkeyMgrType, "ToggleKeys");
+                MethodInfo? toggleAnyDown = AccessTools.Method(
+                    hotkeyMgrType,
+                    "ToggleAnyDown",
+                    new Type[] { typeof(KeyCode).MakeByRefType(), typeof(bool).MakeByRefType() });
+                if (toggleAnyDown != null && _duojiGetToggleKeysMethod != null)
+                {
+                    MethodInfo prefix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(Duoji_ToggleAnyDown_Prefix));
+                    harmony.Patch(toggleAnyDown, prefix: new HarmonyMethod(prefix));
+                    log?.Log("Patched DuojiHotkeyManager.HotkeyManager.ToggleAnyDown (combo & mouse side button support)");
+                }
             }
 
             Type? keyTextType = AccessTools.TypeByName("DuojiHotkeyManager.KeyText");
@@ -251,9 +449,53 @@ namespace AllowUnbindKey
             }
         }
 
+        private static MethodInfo? _duojiGetToggleKeysMethod;
+
+        public static bool Duoji_ToggleAnyDown_Prefix(ref KeyCode which, ref bool isFallback, ref bool __result)
+        {
+            which = KeyCode.None;
+            isFallback = false;
+
+            if (_duojiGetToggleKeysMethod == null)
+            {
+                return true;
+            }
+
+            if (_duojiGetToggleKeysMethod.Invoke(null, null) is List<KeyCode> keys && keys.Count > 0)
+            {
+                ComboKeyStore.EnsureLoaded();
+                for (int i = 0; i < keys.Count; i++)
+                {
+                    KeyCode rawKey = keys[i];
+                    KeyCode filtered = rawKey;
+                    if (i == 0)
+                    {
+                        ComboKeyStore.FilterRuntimeKey(
+                            ref filtered,
+                            "duoji_hotkey_rebind:open_panel",
+                            "duoji_hotkey_rebind.PanelHotkey",
+                            "open_panel");
+                    }
+
+                    if (filtered != KeyCode.None && ComboKeyStore.IsKeyDownRaw(filtered))
+                    {
+                        which = rawKey;
+                        isFallback = i > 0;
+                        __result = true;
+                        return false;
+                    }
+                }
+
+                __result = false;
+                return false;
+            }
+
+            return true;
+        }
+
         public static bool Duoji_TickCapture_Prefix()
         {
-            if (Input.GetKeyDown(KeyCode.Backspace) || Input.GetKeyDown(KeyCode.Delete))
+            if (Input.GetKeyDown(KeyCode.Escape))
             {
                 Type? hotkeyMgrType = AccessTools.TypeByName("DuojiHotkeyManager.HotkeyManager");
                 if (hotkeyMgrType != null)
@@ -268,15 +510,15 @@ namespace AllowUnbindKey
 
         public static void Duoji_GetCaptureTargetText_Postfix(ref string __result)
         {
-            if (!string.IsNullOrEmpty(__result) && !__result.Contains("Backspace"))
+            if (!string.IsNullOrEmpty(__result) && !__result.Contains("Esc"))
             {
-                __result += " (按 Backspace 可设为空/清空)";
+                __result += " (按 Esc 可设为空)";
             }
         }
 
         public static bool Duoji_IsDefinedKeyCode_Prefix(int value, ref bool __result)
         {
-            if (value == 0) // KeyCode.None
+            if (value == 0 || (value >= (int)KeyCode.Mouse3 && value <= (int)KeyCode.Mouse6))
             {
                 __result = true;
                 return false;
@@ -315,7 +557,21 @@ namespace AllowUnbindKey
                     MethodInfo prefix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ConflictScanner_DisplayName_Prefix));
                     harmony.Patch(disp, prefix: new HarmonyMethod(prefix));
                 }
+
+                MethodInfo? getKey = AccessTools.PropertyGetter(keybindType, "Key");
+                if (getKey != null)
+                {
+                    MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ConflictScanner_GetKey_Postfix));
+                    harmony.Patch(getKey, postfix: new HarmonyMethod(postfix));
+                }
             }
+        }
+
+        public static void ConflictScanner_GetKey_Postfix(ref KeyCode __result)
+        {
+            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            ComboKeyStore.EnsureLoaded();
+            ComboKeyStore.FilterRuntimeKey(ref __result, "conflict_scanner.ReportKey");
         }
 
         public static bool ConflictScanner_Poll_Prefix()
@@ -327,7 +583,17 @@ namespace AllowUnbindKey
             bool isCapturing = (bool)(capturingField?.GetValue(null) ?? false);
             if (!isCapturing) return true;
 
-            if (Input.GetKeyDown(KeyCode.Backspace) || Input.GetKeyDown(KeyCode.Delete))
+            KeyCode? targetKey = null;
+            if (KeyBindRuntimeHelper.TryPollSideMouseButton(out KeyCode sideBtn))
+            {
+                targetKey = sideBtn;
+            }
+            else if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                targetKey = KeyCode.None;
+            }
+
+            if (targetKey.HasValue)
             {
                 capturingField?.SetValue(null, false);
 
@@ -335,7 +601,7 @@ namespace AllowUnbindKey
                 if (keybindType != null)
                 {
                     MethodInfo? save = AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) });
-                    save?.Invoke(null, new object[] { KeyCode.None });
+                    save?.Invoke(null, new object[] { targetKey.Value });
                 }
 
                 CustomUIManager.Instance?.GetWindow("conflict_scanner.rebind")?.Close();
@@ -377,6 +643,11 @@ namespace AllowUnbindKey
                 __result = "（无）";
                 return false;
             }
+            if (ComboKeyStore.IsMouseSideButton(key))
+            {
+                __result = ComboKeyStore.FormatPrimaryKeyName(key);
+                return false;
+            }
             return true;
         }
 
@@ -404,7 +675,21 @@ namespace AllowUnbindKey
                     MethodInfo prefix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ShowItemNames_SetHotkey_Prefix));
                     harmony.Patch(setHotkey, prefix: new HarmonyMethod(prefix));
                 }
+
+                MethodInfo? getHotkey = AccessTools.PropertyGetter(settingsType, "Hotkey");
+                if (getHotkey != null)
+                {
+                    MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ShowItemNames_GetHotkey_Postfix));
+                    harmony.Patch(getHotkey, postfix: new HarmonyMethod(postfix));
+                }
             }
+        }
+
+        public static void ShowItemNames_GetHotkey_Postfix(ref KeyCode __result)
+        {
+            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            ComboKeyStore.EnsureLoaded();
+            ComboKeyStore.FilterRuntimeKey(ref __result, "ShowItemNames.Hotkey");
         }
 
         public static bool ShowItemNames_PollCapture_Prefix(ref bool __result)
@@ -416,7 +701,17 @@ namespace AllowUnbindKey
             bool isCapturing = (bool)(capturingField?.GetValue(null) ?? false);
             if (!isCapturing) return true;
 
-            if (Input.GetKeyDown(KeyCode.Backspace) || Input.GetKeyDown(KeyCode.Delete))
+            KeyCode? captured = null;
+            if (KeyBindRuntimeHelper.TryPollSideMouseButton(out KeyCode sideBtn))
+            {
+                captured = sideBtn;
+            }
+            else if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                captured = KeyCode.None;
+            }
+
+            if (captured.HasValue)
             {
                 capturingField?.SetValue(null, false);
 
@@ -424,7 +719,7 @@ namespace AllowUnbindKey
                 if (settingsType != null)
                 {
                     MethodInfo? setHotkey = AccessTools.Method(settingsType, "SetHotkey", new Type[] { typeof(KeyCode) });
-                    setHotkey?.Invoke(null, new object[] { KeyCode.None });
+                    setHotkey?.Invoke(null, new object[] { captured.Value });
                 }
 
                 MethodInfo? requestRebuild = AccessTools.Method(windowType, "RequestRebuild");
@@ -472,7 +767,7 @@ namespace AllowUnbindKey
 
         public static bool SmartInventoryArrange_CaptureKey_Prefix(object __instance)
         {
-            if (Input.GetKeyDown(KeyCode.Backspace) || Input.GetKeyDown(KeyCode.Delete))
+            if (Input.GetKeyDown(KeyCode.Escape))
             {
                 Type? guiType = AccessTools.TypeByName("SmartInventoryArrange.UnifiedSettingsGui");
                 Type? modelType = AccessTools.TypeByName("SmartInventoryArrange.SettingsHotkeys");
@@ -515,6 +810,13 @@ namespace AllowUnbindKey
                     harmony.Patch(tick, prefix: new HarmonyMethod(prefix));
                     log?.Log("Patched FactionReputationExpansion.RepMod.Tick");
                 }
+
+                MethodInfo? getKey = AccessTools.PropertyGetter(repModType, "JournalKey");
+                if (getKey != null)
+                {
+                    MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(FactionReputation_GetJournalKey_Postfix));
+                    harmony.Patch(getKey, postfix: new HarmonyMethod(postfix));
+                }
             }
 
             Type? rulesType = AccessTools.TypeByName("FactionReputationExpansion.HotkeyRules");
@@ -530,6 +832,13 @@ namespace AllowUnbindKey
             }
         }
 
+        public static void FactionReputation_GetJournalKey_Postfix(ref KeyCode __result)
+        {
+            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            ComboKeyStore.EnsureLoaded();
+            ComboKeyStore.FilterRuntimeKey(ref __result, "faction_reputation.journal_key");
+        }
+
         public static bool FactionReputation_Tick_Prefix()
         {
             Type? repModType = AccessTools.TypeByName("FactionReputationExpansion.RepMod");
@@ -537,10 +846,22 @@ namespace AllowUnbindKey
 
             PropertyInfo? capturingProp = AccessTools.Property(repModType, "CapturingHotkey");
             bool capturing = (bool)(capturingProp?.GetValue(null) ?? false);
-            if (capturing && (Input.GetKeyDown(KeyCode.Backspace) || Input.GetKeyDown(KeyCode.Delete)))
+            if (!capturing) return true;
+
+            KeyCode? captured = null;
+            if (KeyBindRuntimeHelper.TryPollSideMouseButton(out KeyCode sideBtn))
+            {
+                captured = sideBtn;
+            }
+            else if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                captured = KeyCode.None;
+            }
+
+            if (captured.HasValue)
             {
                 MethodInfo? setJournalKey = AccessTools.Method(repModType, "SetJournalKey", new Type[] { typeof(KeyCode), typeof(bool) });
-                setJournalKey?.Invoke(null, new object[] { KeyCode.None, false });
+                setJournalKey?.Invoke(null, new object[] { captured.Value, false });
                 return false;
             }
             return true;
@@ -554,6 +875,124 @@ namespace AllowUnbindKey
                 return false;
             }
             return true;
+        }
+
+        // --- Pen 的便利性优化 (Pen_mod_QoL_Tweaks) ---
+        private static void PatchPenQoL(Harmony harmony, ModLog? log)
+        {
+            Type? qolType = AccessTools.TypeByName("PenLabelerAssist.QoLKeyBindings");
+            if (qolType == null) return;
+
+            var bindings = new (string PropName, string OptionId)[]
+            {
+                ("QuickBuy", "pen_qol_quick_buy"),
+                ("QuickSell", "pen_qol_quick_sell"),
+                ("QuickAppraisal", "pen_qol_quick_appraisal"),
+                ("QuickConfront", "pen_qol_quick_confront"),
+                ("QuickPin", "pen_qol_quick_pin"),
+                ("TabLeft", "pen_qol_tab_left"),
+                ("TabRight", "pen_qol_tab_right"),
+                ("FollowModifier", "pen_qol_window_follow_modifier"),
+                ("SnapModifier", "pen_qol_window_snap_modifier"),
+                ("BoxSelectModifier", "pen_qol_boxselect_modifier"),
+                ("MultiSelectToggle", "pen_qol_multi_select_toggle")
+            };
+
+            MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(PenQoL_GetKey_Postfix));
+            int patchedGetters = 0;
+            foreach (var (propName, optionId) in bindings)
+            {
+                MethodInfo? getter = AccessTools.PropertyGetter(qolType, propName);
+                if (getter == null) continue;
+
+                lock (PenQoLGetterCandidates)
+                {
+                    PenQoLGetterCandidates[getter] = new[]
+                    {
+                        optionId,
+                        "pen_qol." + propName.ToLowerInvariant()
+                    };
+                }
+                harmony.Patch(getter, postfix: new HarmonyMethod(postfix));
+                patchedGetters++;
+            }
+
+            MethodInfo? isBoundDown = AccessTools.Method(qolType, "IsBoundKeyDown", new Type[] { typeof(KeyCode) });
+            if (isBoundDown != null)
+            {
+                harmony.Patch(isBoundDown, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(PenQoL_IsBoundKeyDown_Prefix))));
+            }
+
+            MethodInfo? isDown = AccessTools.Method(qolType, "IsDown", new Type[] { typeof(KeyCode) });
+            if (isDown != null)
+            {
+                harmony.Patch(isDown, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(PenQoL_IsDown_Prefix))));
+            }
+
+            log?.Log($"Patched PenLabelerAssist.QoLKeyBindings ({patchedGetters} properties + input helpers)");
+        }
+
+        public static void PenQoL_GetKey_Postfix(MethodBase __originalMethod, ref KeyCode __result)
+        {
+            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            if (!PenQoLGetterCandidates.TryGetValue(__originalMethod, out string[]? ids) || ids == null) return;
+
+            ComboKeyStore.EnsureLoaded();
+            ComboKeyStore.FilterRuntimeKey(ref __result, ids);
+        }
+
+        public static bool PenQoL_IsBoundKeyDown_Prefix(KeyCode key, ref bool __result)
+        {
+            if (key == KeyCode.None)
+            {
+                __result = false;
+                return false;
+            }
+            __result = ComboKeyStore.IsKeyDownRaw(key);
+            return false;
+        }
+
+        public static bool PenQoL_IsDown_Prefix(KeyCode key, ref bool __result)
+        {
+            if (key == KeyCode.None)
+            {
+                __result = false;
+                return false;
+            }
+            if (key == KeyCode.Mouse0 && ComboKeyStore.GetHeldModifiersMask() == KeyModifierMask.None)
+            {
+                __result = false;
+                return false;
+            }
+            __result = ComboKeyStore.IsKeyHeldRaw(key);
+            return false;
+        }
+
+        // --- 客户需求高亮 (ClientDemandHighlight) ---
+        private static void PatchClientDemandHighlight(Harmony harmony, ModLog? log)
+        {
+            Type? cfgType = AccessTools.TypeByName("ClientDemandHighlight.Config");
+            if (cfgType == null) return;
+
+            MethodInfo? getToggle = AccessTools.PropertyGetter(cfgType, "ToggleKey");
+            if (getToggle != null)
+            {
+                MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ClientDemandHighlight_GetToggleKey_Postfix));
+                harmony.Patch(getToggle, postfix: new HarmonyMethod(postfix));
+                log?.Log("Patched ClientDemandHighlight.Config.ToggleKey");
+            }
+        }
+
+        public static void ClientDemandHighlight_GetToggleKey_Postfix(ref KeyCode __result)
+        {
+            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            ComboKeyStore.EnsureLoaded();
+            ComboKeyStore.FilterRuntimeKey(
+                ref __result,
+                "toggleKey",
+                "hollow.clientdemandhighlight.toggleKey",
+                "clientdemandhighlight.toggle_key"
+            );
         }
     }
 }

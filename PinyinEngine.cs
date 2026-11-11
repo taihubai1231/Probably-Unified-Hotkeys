@@ -1,8 +1,9 @@
 #nullable enable
 using System;
+using System.Linq;
 using System.Text;
 
-namespace AllowUnbindKey
+namespace ProbablyUnifiedHotkeys
 {
     /// <summary>
     /// 高性能纯内存拼音检索引擎 (全覆盖 CJK Unicode 0x4E00..0x9FA5 共 20902 字)
@@ -31,7 +32,7 @@ namespace AllowUnbindKey
                 if (_indices != null) return;
                 try
                 {
-                    using (var stream = typeof(PinyinEngine).Assembly.GetManifestResourceStream("AllowUnbindKey.pinyin.bin"))
+                    var asm = typeof(PinyinEngine).Assembly; string? resName = asm.GetManifestResourceNames().FirstOrDefault(n => n.EndsWith("pinyin.bin", StringComparison.OrdinalIgnoreCase)); if (resName != null) using (var stream = asm.GetManifestResourceStream(resName))
                     {
                         if (stream != null)
                         {
