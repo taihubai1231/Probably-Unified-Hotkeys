@@ -138,6 +138,15 @@ namespace ProbablyUnifiedHotkeys
         private static bool _diagnosticViewDirty = true;
         private static string? _diagnosticStatusMessage = null;
         private static readonly HashSet<string> _expandedDiagnosticModIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<ModDiagnosticStatus, bool> _diagnosticSectionExpanded = new Dictionary<ModDiagnosticStatus, bool>
+        {
+            { ModDiagnosticStatus.HasCandidates, true },
+            { ModDiagnosticStatus.UnmanagedCodeMod, false },
+            { ModDiagnosticStatus.Managed, false },
+            { ModDiagnosticStatus.AssetOnlyMod, false }
+        };
+        private static readonly List<(ModDiagnosticStatus Status, GameObject BodyObj, CustomUIElement FoldBtn)> _diagnosticSectionViews =
+            new List<(ModDiagnosticStatus, GameObject, CustomUIElement)>(4);
 
         // 统一增强按键捕获状态机（同时服务上方原版设置项与下方模组卡片）
         private static ModHotkeyEntry? _capturingEntry;
@@ -173,6 +182,7 @@ namespace ProbablyUnifiedHotkeys
         private static GameObject? _normalContentRoot;
         private static GameObject? _modCardsContainer;
         private static GameObject? _conflictContentRoot;
+        private static GameObject? _diagnosticStickyHeaderRoot;
         private static GameObject? _diagnosticContentRoot;
         private static GameObject? _vanillaHeaderRow;
         private static GameObject? _vanillaHeaderSep;
@@ -257,6 +267,15 @@ namespace ProbablyUnifiedHotkeys
             AppliedButtonNormalColorCache.Clear();
             ButtonFitSpecCache.Clear();
             CardParts.Clear();
+            _diagnosticSectionViews.Clear();
+        }
+
+        private static void ResetDiagnosticSectionDefaults()
+        {
+            _diagnosticSectionExpanded[ModDiagnosticStatus.HasCandidates] = true;
+            _diagnosticSectionExpanded[ModDiagnosticStatus.UnmanagedCodeMod] = false;
+            _diagnosticSectionExpanded[ModDiagnosticStatus.Managed] = false;
+            _diagnosticSectionExpanded[ModDiagnosticStatus.AssetOnlyMod] = false;
         }
 
         public static void OpenEnhancedUI(GameOptionUIManager manager)
@@ -269,6 +288,7 @@ namespace ProbablyUnifiedHotkeys
             _diagnosticViewDirty = true;
             _diagnosticStatusMessage = null;
             _expandedDiagnosticModIds.Clear();
+            ResetDiagnosticSectionDefaults();
             _lastConflictSignature = null;
             _suppressRuleConflictRefresh = false;
             _searchQuery = string.Empty;
@@ -278,6 +298,7 @@ namespace ProbablyUnifiedHotkeys
             _normalContentRoot = null;
             _modCardsContainer = null;
             _conflictContentRoot = null;
+            _diagnosticStickyHeaderRoot = null;
             _diagnosticContentRoot = null;
             _conflictToggleBtn = null;
             _expandToggleBtn = null;
@@ -359,6 +380,7 @@ namespace ProbablyUnifiedHotkeys
                 _normalContentRoot = null;
                 _modCardsContainer = null;
                 _conflictContentRoot = null;
+                _diagnosticStickyHeaderRoot = null;
                 _diagnosticContentRoot = null;
                 _conflictToggleBtn = null;
                 _expandToggleBtn = null;
@@ -511,6 +533,17 @@ namespace ProbablyUnifiedHotkeys
             builder.End();
 
             builder.AddSeparator(null, 2);
+
+            // =================================================================
+            // 4.5 模组排查置顶摘要框（位于顶部工具栏之下、ScrollRect 之上；浏览排查列表时固定可见）
+            // =================================================================
+            builder.BeginColumn(4f, TextAnchor.UpperLeft);
+            _diagnosticStickyHeaderRoot = builder.CurrentContainer.gameObject;
+            var diagStickyLe = _diagnosticStickyHeaderRoot.GetComponent<LayoutElement>() ?? _diagnosticStickyHeaderRoot.AddComponent<LayoutElement>();
+            diagStickyLe.flexibleWidth = 1f;
+            diagStickyLe.flexibleHeight = 0f;
+            _diagnosticStickyHeaderRoot.SetActive(false);
+            builder.End();
 
             // =================================================================
             // 5. 滚动视窗核心区域（折叠卡片懒加载，消除打开选项页卡顿）
@@ -1633,6 +1666,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 _diagnosticViewDirty = true;
                 RebuildDiagnosticView();
+                ResetScrollToTop();
                 return;
             }
             if (IsConflictViewActive && !string.IsNullOrWhiteSpace(text))
@@ -2301,10 +2335,19 @@ namespace ProbablyUnifiedHotkeys
             bool showNormal = !IsConflictViewActive && !IsDiagnosticViewActive;
             if (_normalContentRoot != null) _normalContentRoot.SetActive(showNormal);
             if (_conflictContentRoot != null) _conflictContentRoot.SetActive(IsConflictViewActive);
+            if (_diagnosticStickyHeaderRoot != null)
+            {
+                _diagnosticStickyHeaderRoot.SetActive(IsDiagnosticViewActive);
+                if (!IsDiagnosticViewActive && _diagnosticStickyHeaderRoot.transform.parent is RectTransform parentRt)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(parentRt);
+                }
+            }
             if (_diagnosticContentRoot != null) _diagnosticContentRoot.SetActive(IsDiagnosticViewActive);
 
             UpdateConflictToggleButtonAppearance();
             UpdateDiagnosticToggleButtonAppearance();
+            RefreshExpandAllButtonState();
         }
 
         private static void ToggleConflictMode()
@@ -2404,6 +2447,30 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        private static void RefreshDiagnosticStickyHeader()
+        {
+            if (!IsDiagnosticViewActive || _diagnosticStickyHeaderRoot == null || _currentWindow == null || CustomUIManager.Instance == null)
+            {
+                return;
+            }
+
+            var stickyRt = _diagnosticStickyHeaderRoot.GetComponent<RectTransform>();
+            if (stickyRt == null) return;
+
+            CustomUIBuilder.ClearContainer(stickyRt);
+            using (ComboKeyStore.EnterBypass())
+            {
+                var stickyBuilder = new CustomUIBuilder(CustomUIManager.Instance, _currentWindow, stickyRt);
+                BuildDiagnosticStickyHeader(stickyBuilder);
+            }
+
+            LayoutRebuilder.ForceRebuildLayoutImmediate(stickyRt);
+            if (stickyRt.parent is RectTransform parentRt)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(parentRt);
+            }
+        }
+
         private static void RebuildDiagnosticView()
         {
             if (!IsDiagnosticViewActive || _diagnosticContentRoot == null || _currentWindow == null || CustomUIManager.Instance == null)
@@ -2416,10 +2483,18 @@ namespace ProbablyUnifiedHotkeys
 
             if (!_diagnosticViewDirty && rt.childCount > 0)
             {
+                RefreshDiagnosticStickyHeader();
+                RefreshExpandAllButtonState();
                 return;
             }
 
+            float savedNormalized = _scrollRect != null ? _scrollRect.verticalNormalizedPosition : 1f;
+            bool hadExistingContent = rt.childCount > 0;
+
+            RefreshDiagnosticStickyHeader();
+
             CustomUIBuilder.ClearContainer(rt);
+            _diagnosticSectionViews.Clear();
 
             using (ComboKeyStore.EnterBypass())
             {
@@ -2432,7 +2507,13 @@ namespace ProbablyUnifiedHotkeys
             if (_scrollRect != null && _scrollRect.content != null)
             {
                 LayoutRebuilder.ForceRebuildLayoutImmediate(_scrollRect.content);
+                if (hadExistingContent)
+                {
+                    _scrollRect.verticalNormalizedPosition = Mathf.Clamp01(savedNormalized);
+                    _scrollRect.StopMovement();
+                }
             }
+            RefreshExpandAllButtonState();
         }
 
         private static void AddWrappedDiagnosticLabel(CustomUIBuilder builder, float leftIndent, string text, string? id = null)
@@ -2455,11 +2536,11 @@ namespace ProbablyUnifiedHotkeys
             builder.End();
         }
 
-        private static void BuildDiagnosticViewContent(CustomUIBuilder builder)
+        private static void BuildDiagnosticStickyHeader(CustomUIBuilder builder)
         {
             var report = _scanReport ?? new ModScanReport();
 
-            // 1. 顶部汇总栏与快捷操作按钮
+            builder.AddSpace(4f);
             builder.BeginRow(6f, TextAnchor.MiddleCenter);
             builder.AddSpace(8f);
             string summaryHeader = I18n.Format(
@@ -2507,11 +2588,110 @@ namespace ProbablyUnifiedHotkeys
             }
 
             builder.AddSeparator(null, 2);
+        }
+
+        private static string GetDiagnosticCategoryTitle(ModDiagnosticStatus status, int count)
+        {
+            switch (status)
+            {
+                case ModDiagnosticStatus.HasCandidates:
+                    return I18n.Format(
+                        "<color=#ffd27d>[有疑难/待确认项]</color> <b>疑难 / 待确认设置模组</b> <color=#99a3b0>({0} 个)</color>",
+                        "<color=#ffd27d>[Needs Review]</color> <b>Mods Requiring Review</b> <color=#99a3b0>({0})</color>",
+                        count);
+                case ModDiagnosticStatus.UnmanagedCodeMod:
+                    return I18n.Format(
+                        "<color=#ffb347>[未检测到官方配置]</color> <b>未检测到官方配置模组</b> <color=#99a3b0>({0} 个)</color>",
+                        "<color=#ffb347>[No Official Config]</color> <b>Mods Without Official Config</b> <color=#99a3b0>({0})</color>",
+                        count);
+                case ModDiagnosticStatus.Managed:
+                    return I18n.Format(
+                        "<color=#7fe0a0>[已正常纳管]</color> <b>已正常纳管模组</b> <color=#99a3b0>({0} 个)</color>",
+                        "<color=#7fe0a0>[Managed]</color> <b>Managed Mods</b> <color=#99a3b0>({0})</color>",
+                        count);
+                default:
+                    return I18n.Format(
+                        "<color=#99a3b0>[纯资源/无代码]</color> <b>纯资源 / 无代码模组</b> <color=#99a3b0>({0} 个，无需排查设置)</color>",
+                        "<color=#99a3b0>[Asset Only]</color> <b>Asset / Data-Only Mods</b> <color=#99a3b0>({0}, no settings required)</color>",
+                        count);
+            }
+        }
+
+        private static void BuildDiagnosticCategorySection(
+            CustomUIBuilder builder,
+            ModDiagnosticStatus status,
+            List<ModDiagnosticItem> items,
+            string query,
+            bool hasQuery)
+        {
+            if (items.Count == 0) return;
+
+            bool initialExpanded = hasQuery || (_diagnosticSectionExpanded.TryGetValue(status, out bool saved) && saved);
+
+            CustomUIElement? foldBtn = null;
+            GameObject? bodyObj = null;
+
+            builder.BeginRow(8f, TextAnchor.MiddleLeft);
+            builder.AddSpace(6f);
+
+            builder.AddButton(initialExpanded ? "▼" : "▶", () =>
+            {
+                if (bodyObj == null || foldBtn == null) return;
+                bool nextExpanded = !bodyObj.activeSelf;
+                bodyObj.SetActive(nextExpanded);
+                foldBtn.SetText(nextExpanded ? "▼" : "▶");
+                if (!hasQuery)
+                {
+                    _diagnosticSectionExpanded[status] = nextExpanded;
+                }
+                RefreshExpandAllButtonState();
+
+                if (_diagnosticContentRoot != null && _diagnosticContentRoot.transform is RectTransform diagRt)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(diagRt);
+                }
+                if (_scrollRect != null && _scrollRect.content != null)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(_scrollRect.content);
+                }
+            }, null);
+            foldBtn = builder.Last;
+            StyleFoldButton(foldBtn, 36f);
+
+            string catTitle = GetDiagnosticCategoryTitle(status, items.Count);
+            builder.AddLabel(catTitle, null);
+            I18n.ApplyFontIfRuntime(builder.Last?.text, catTitle);
+            builder.AddFlexibleSpace();
+            builder.AddSpace(6f);
+            builder.End();
+
+            builder.BeginColumn(2f, TextAnchor.UpperLeft);
+            bodyObj = builder.CurrentContainer.gameObject;
+            foreach (var item in items)
+            {
+                BuildDiagnosticModCard(builder, item, query, hasQuery);
+            }
+            builder.End();
+            bodyObj.SetActive(initialExpanded);
+
+            if (foldBtn != null)
+            {
+                _diagnosticSectionViews.Add((status, bodyObj, foldBtn));
+            }
+
+            builder.AddSeparator(null, 2);
+        }
+
+        private static void BuildDiagnosticViewContent(CustomUIBuilder builder)
+        {
+            var report = _scanReport ?? new ModScanReport();
 
             string query = _searchQuery?.Trim() ?? string.Empty;
             bool hasQuery = query.Length > 0;
 
-            var primaryItems = new List<ModDiagnosticItem>();
+            var reviewItems = new List<ModDiagnosticItem>();
+            var unmanagedItems = new List<ModDiagnosticItem>();
+            var managedItems = new List<ModDiagnosticItem>();
             var assetItems = new List<ModDiagnosticItem>();
 
             foreach (var item in report.Mods)
@@ -2521,17 +2701,24 @@ namespace ProbablyUnifiedHotkeys
                     continue;
                 }
 
-                if (item.Status == ModDiagnosticStatus.AssetOnlyMod && !hasQuery)
+                switch (item.Status)
                 {
-                    assetItems.Add(item);
-                }
-                else
-                {
-                    primaryItems.Add(item);
+                    case ModDiagnosticStatus.HasCandidates:
+                        reviewItems.Add(item);
+                        break;
+                    case ModDiagnosticStatus.UnmanagedCodeMod:
+                        unmanagedItems.Add(item);
+                        break;
+                    case ModDiagnosticStatus.Managed:
+                        managedItems.Add(item);
+                        break;
+                    default:
+                        assetItems.Add(item);
+                        break;
                 }
             }
 
-            if (primaryItems.Count == 0 && assetItems.Count == 0)
+            if (reviewItems.Count == 0 && unmanagedItems.Count == 0 && managedItems.Count == 0 && assetItems.Count == 0)
             {
                 builder.AddSpace(8f);
                 AddWrappedDiagnosticLabel(
@@ -2544,33 +2731,11 @@ namespace ProbablyUnifiedHotkeys
                 return;
             }
 
-            // 2. 主体模组诊断卡片（待排查 -> 正常纳管；搜索时亦包含匹配的纯资源模组）
-            foreach (var item in primaryItems)
-            {
-                BuildDiagnosticModCard(builder, item, query, hasQuery);
-            }
-
-            // 3. 底部紧凑汇总：纯资源 / 无代码模组
-            if (assetItems.Count > 0)
-            {
-                builder.AddSpace(6f);
-                var names = new System.Text.StringBuilder(assetItems.Count * 16);
-                string sep = I18n.Get("、", ", ");
-                for (int i = 0; i < assetItems.Count; i++)
-                {
-                    if (i > 0) names.Append(sep);
-                    names.Append(assetItems[i].DisplayName);
-                }
-                AddWrappedDiagnosticLabel(
-                    builder,
-                    8f,
-                    I18n.Format(
-                        "<color=#99a3b0><b>纯资源 / 无代码模组 ({0} 个，无需排查设置)：</b>{1}</color>",
-                        "<color=#99a3b0><b>Asset / Data-Only Mods ({0}, no code config needed): </b>{1}</color>",
-                        assetItems.Count,
-                        names));
-                builder.AddSpace(4f);
-            }
+            // 按 4 个同类分组依次渲染可折叠卡片，减少同屏杂乱并保留折叠记忆
+            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.HasCandidates, reviewItems, query, hasQuery);
+            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.UnmanagedCodeMod, unmanagedItems, query, hasQuery);
+            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.Managed, managedItems, query, hasQuery);
+            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.AssetOnlyMod, assetItems, query, hasQuery);
         }
 
         private static bool MatchesDiagnosticItemFilter(ModDiagnosticItem item, string query)
@@ -2630,7 +2795,7 @@ namespace ProbablyUnifiedHotkeys
             bool isExpanded = _expandedDiagnosticModIds.Contains(item.ModId) || anyCandMatchedQuery;
 
             builder.BeginRow(6f, TextAnchor.MiddleLeft);
-            builder.AddSpace(8f);
+            builder.AddSpace(18f);
 
             string titleBadge = GetDiagnosticStatusBadge(item.Status);
             string idSuffix = item.IsWildOrphanConfig
@@ -2730,7 +2895,7 @@ namespace ProbablyUnifiedHotkeys
                 string meta = string.IsNullOrEmpty(authorVer) ? string.Empty : $"({authorVer}) ";
                 AddWrappedDiagnosticLabel(
                     builder,
-                    22f,
+                    30f,
                     I18n.Format(
                         "<color=#b0b9c4>{0}该模组含程序集代码但未通过 ModConfig / GameOptionRegistry 注册官方配置（多为自绘热键、独立响应或硬编码功能）。受官方安全扫描限制无法盲反照未知私有类，可点「复制信息」反馈作者补充专项适配。</color>",
                         "<color=#b0b9c4>{0}Contains mod assembly code without registering official ModConfig / GameOptionRegistry entries (typically custom IMGUI/input or hardcoded features). Click \"Copy Info\" to share details for dedicated adapter support.</color>",
@@ -2740,7 +2905,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 AddWrappedDiagnosticLabel(
                     builder,
-                    22f,
+                    30f,
                     I18n.Get(
                         "<color=#99a3b0>该模组不包含代码程序集，属于纯资源/数据模组，无需快捷键或设置。</color>",
                         "<color=#99a3b0>Contains no assembly code (asset / data-only mod); no settings or hotkeys required.</color>"));
@@ -2752,7 +2917,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 AddWrappedDiagnosticLabel(
                     builder,
-                    22f,
+                    30f,
                     I18n.Format(
                         "<color=#9ec4ff>已关联 ModConfig ID: {0}</color>",
                         "<color=#9ec4ff>Linked ModConfig ID(s): {0}</color>",
@@ -2791,7 +2956,7 @@ namespace ProbablyUnifiedHotkeys
                 tag, cand.Label, cand.EntryKey, cand.ValueTypeName, cand.CurrentValuePreview, cand.DefaultValuePreview);
 
             builder.BeginRow(6f, TextAnchor.MiddleLeft);
-            builder.AddSpace(26f);
+            builder.AddSpace(34f);
 
             builder.AddLabel(detailText, null);
             var el = builder.Last;
@@ -2869,8 +3034,7 @@ namespace ProbablyUnifiedHotkeys
                 "已复制 [{0}] 的模组排查信息到剪贴板",
                 "Copied diagnostics for [{0}] to clipboard",
                 item.DisplayName);
-            _diagnosticViewDirty = true;
-            RebuildDiagnosticView();
+            RefreshDiagnosticStickyHeader();
         }
 
         private static void JumpToModInNormalView(string ownerModId, string? hotkeyLabelHint)
@@ -3108,6 +3272,23 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        private static bool AllVisibleDiagnosticSectionsExpanded()
+        {
+            if (_diagnosticSectionViews.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var section in _diagnosticSectionViews)
+            {
+                if (section.BodyObj != null && !section.BodyObj.activeSelf)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private static bool AllVisibleCardsExpanded()
         {
             bool hasQuery = !string.IsNullOrWhiteSpace(_searchQuery);
@@ -3131,16 +3312,49 @@ namespace ProbablyUnifiedHotkeys
 
         private static void RefreshExpandAllButtonState()
         {
-            _allExpanded = AllVisibleCardsExpanded();
+            _allExpanded = IsDiagnosticViewActive
+                ? AllVisibleDiagnosticSectionsExpanded()
+                : AllVisibleCardsExpanded();
             SetButtonTextFast(_expandToggleBtn, _allExpanded ? I18n.Get("全部收起", "Collapse All") : I18n.Get("全部展开", "Expand All"));
         }
 
         private static void ToggleExpandAll()
         {
-            if (IsConflictViewActive || IsDiagnosticViewActive)
+            if (IsDiagnosticViewActive)
+            {
+                bool nextExpanded = !AllVisibleDiagnosticSectionsExpanded();
+                bool hasDiagnosticQuery = !string.IsNullOrWhiteSpace(_searchQuery);
+
+                for (int i = 0; i < _diagnosticSectionViews.Count; i++)
+                {
+                    var sec = _diagnosticSectionViews[i];
+                    if (!hasDiagnosticQuery)
+                    {
+                        _diagnosticSectionExpanded[sec.Status] = nextExpanded;
+                    }
+                    sec.BodyObj?.SetActive(nextExpanded);
+                    sec.FoldBtn?.SetText(nextExpanded ? "▼" : "▶");
+                }
+
+                RefreshExpandAllButtonState();
+                if (_diagnosticContentRoot != null)
+                {
+                    var diagRt = _diagnosticContentRoot.GetComponent<RectTransform>();
+                    if (diagRt != null)
+                    {
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(diagRt);
+                    }
+                }
+                if (_scrollRect != null && _scrollRect.content != null)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(_scrollRect.content);
+                }
+                return;
+            }
+
+            if (IsConflictViewActive)
             {
                 IsConflictViewActive = false;
-                IsDiagnosticViewActive = false;
                 SyncViewContainersAndToggleButtons();
                 ApplySearchFilter();
             }
