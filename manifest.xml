@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Manifest>
   <ID>probably_unified_hotkeys</ID>
-  <Name>可能是按键统一优化</Name>
+  <Name>可能是按键统一优化 / Probably Unified Hotkeys</Name>
   <Author>Antigravity &amp; taihubai1231</Author>
   <ModVersion>1.4.3</ModVersion>
   <Description>将原版与所有模组的快捷键与常规设置统一整合进官方 ESC「选项」页，并全面重构「选项 / 全部展开 / 改造件 / 退出游戏」四大核心交互流畅度。
@@ -11,9 +11,26 @@
 • 按键增强：支持 Shift / Ctrl / Alt 组合键、鼠标组合/侧键，按 Esc 即可解绑为「无」
 • 搜索排重：支持简繁中文、英文与拼音搜索定位，自带 [!] 仅看冲突集中排查与防误触
 • 丝滑响应：离线窗口装配、按帧预算预建、改造件列表对象池复用及全模组极速秒退优化
+• 模组排查：支持排查未通过官方配置暴露隐藏按键的模组，强制提权可疑项并一键跳转至对应卡片
+• 双语切换：支持简体中文 / English 实时切换（默认跟随游戏语言），可在改造件齿轮设置或本模组卡片中调整
 
 【怎么使用】
-按 ESC 打开「选项」→ 顶部搜索或展开/收起任意分区卡片 → 点击按键直接录入（按 Esc 清空，左/右键取消）→ 点击底部「应用设置」保存生效。</Description>
+按 ESC 打开「选项」→ 顶部搜索或展开/收起任意分区卡片 → 点击按键直接录入（按 Esc 清空，左/右键取消）→ 点击底部「应用设置」保存生效。
+
+---
+
+Unifies vanilla and mod hotkeys &amp; settings into the official ESC "Options" menu, while overhauling responsiveness across Options, Expand All, Mods, and Quit Game.
+
+[Features]
+• Unified View: Collapsible vanilla &amp; mod cards with CN/EN/Pinyin search and per-card "Reset"
+• Enhanced Keybinds: Supports Shift / Ctrl / Alt combos, mouse &amp; side buttons, and Esc to unbind to "None"
+• Conflict Check &amp; Filter: Supports CN (Simp/Trad), EN &amp; Pinyin search, "[!] Conflicts" view, and anti-leak combo guard
+• Smooth Performance: Off-screen batched window assembly, frame-budgeted prebuild, pooled Mods list, and fast quit
+• Mod Diagnostics: Inspect mods without official config exposure, promote candidate entries, and jump directly to cards
+• Bilingual UI: Supports Simplified Chinese / English live switching (defaults to Follow Game Language) via the Mods gear settings or this mod's card
+
+[How to Use]
+Press ESC → "Options" → search or expand/collapse cards → click any keybind to capture (Esc to clear, Left/Right click to cancel) → click "Apply" at the bottom.</Description>
   <GameVersions>
     <Version>0.46</Version>
     <Version>0.46D</Version>

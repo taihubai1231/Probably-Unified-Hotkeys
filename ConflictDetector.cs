@@ -63,7 +63,11 @@ namespace ProbablyUnifiedHotkeys
                         names.Add($"- [{other.ModDisplayName}] {other.DisplayName}");
                     }
                 }
-                return $"<color=#ffb347>[!] 按键冲突提醒（[{combo}] 与以下功能重叠）：</color>\n" + string.Join("\n", names);
+                return I18n.Format(
+                    "<color=#ffb347>[!] 按键冲突提醒（[{0}] 与以下功能重叠）：</color>\n",
+                    "<color=#ffb347>[!] Keybind Conflict ([{0}] also used by):</color>\n",
+                    combo
+                ) + string.Join("\n", names);
             }
 
             return string.Empty;

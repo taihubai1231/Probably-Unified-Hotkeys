@@ -120,6 +120,7 @@ namespace ProbablyUnifiedHotkeys
             try
             {
                 var sb = new StringBuilder(512);
+                sb.Append("LANG:").Append(I18n.IsChinese ? "zh:" : "en:").Append(I18n.GetSafeGameLocaleCode()).Append(";");
                 sb.Append("FORCED:").Append(ComboKeyStore.GetForcedHotkeysRevision()).Append(";");
                 sb.Append("MCFG:").Append(ModOptionScanner.GetRegisteredModConfigCount()).Append(";");
 

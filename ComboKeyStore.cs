@@ -617,24 +617,24 @@ namespace ProbablyUnifiedHotkeys
 
         public static string FormatPrimaryKeyName(KeyCode key)
         {
-            if (key == KeyCode.None) return KeyBindHelper.KeyName(KeyCode.None);
+            if (key == KeyCode.None) return I18n.Get("无", "None");
 
             switch (key)
             {
-                case KeyCode.Mouse0: return "左键";
-                case KeyCode.Mouse1: return "右键";
-                case KeyCode.Mouse2: return "中键";
-                case KeyCode.Mouse3: return "鼠标侧键1";
-                case KeyCode.Mouse4: return "鼠标侧键2";
-                case KeyCode.Mouse5: return "鼠标侧键3";
-                case KeyCode.Mouse6: return "鼠标侧键4";
+                case KeyCode.Mouse0: return I18n.Get("左键", "Left Click");
+                case KeyCode.Mouse1: return I18n.Get("右键", "Right Click");
+                case KeyCode.Mouse2: return I18n.Get("中键", "Middle Click");
+                case KeyCode.Mouse3: return I18n.Get("鼠标侧键1", "Mouse Side 1");
+                case KeyCode.Mouse4: return I18n.Get("鼠标侧键2", "Mouse Side 2");
+                case KeyCode.Mouse5: return I18n.Get("鼠标侧键3", "Mouse Side 3");
+                case KeyCode.Mouse6: return I18n.Get("鼠标侧键4", "Mouse Side 4");
                 default: return KeyBindHelper.KeyName(key);
             }
         }
 
         public static string FormatCombo(KeyModifierMask modifiers, KeyCode key)
         {
-            if (key == KeyCode.None) return KeyBindHelper.KeyName(KeyCode.None);
+            if (key == KeyCode.None) return I18n.Get("无", "None");
 
             var effectiveMods = modifiers & ~GetModifierBit(key);
             string keyName = FormatPrimaryKeyName(key);

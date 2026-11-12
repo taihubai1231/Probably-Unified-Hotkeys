@@ -31,6 +31,7 @@ namespace ProbablyUnifiedHotkeys
             log.Log($"Initialized v{manifest.ModVersion}");
 
             ComboKeyStore.EnsureLoaded();
+            I18n.EnsureRegistered();
             workshopHarmony = new Harmony("probably_unified_hotkeys.workshop");
             WorkshopModPatcher.Apply(workshopHarmony, log);
         }
@@ -184,6 +185,111 @@ namespace ProbablyUnifiedHotkeys
             try
             {
                 UnifiedOptionUI.OnVanillaKeyChanged();
+            }
+            catch { }
+        }
+    }
+
+    internal static class ModConfigUiHelper
+    {
+        public static void ApplyEntryLocalization(CustomUIBuilder builder, ModConfig config, ConfigEntry entry)
+        {
+            if (config == null || entry == null) return;
+            if (!string.Equals(config.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase)) return;
+            if (!string.Equals(entry.Key, I18n.LanguageConfigKey, StringComparison.Ordinal)) return;
+
+            var dropdownEl = builder?.Last;
+            if (dropdownEl == null || !dropdownEl.IsAlive) return;
+
+            dropdownEl.SetOptions(I18n.GetLanguageChoices());
+            dropdownEl.SetIndex(I18n.LanguageToIndex(entry.BoxedValue));
+            I18n.ApplyFontToDropdown(dropdownEl, forceCjkCapableList: true);
+        }
+
+        public static void ApplyWindowFonts(CustomUIWindow? window)
+        {
+            if (window == null || !window.IsAlive) return;
+
+            var sectionEl = window.Get("section_" + I18n.SectionHeader);
+            if (sectionEl?.text != null)
+            {
+                I18n.ApplyFontIfRuntime(sectionEl.text, sectionEl.text.text);
+            }
+
+            var labelEl = window.Get("label_" + I18n.LanguageConfigKey);
+            if (labelEl?.text != null)
+            {
+                I18n.ApplyFontIfRuntime(labelEl.text, labelEl.text.text);
+            }
+
+            var dropEl = window.Get(I18n.LanguageConfigKey);
+            I18n.ApplyFontToDropdown(dropEl, forceCjkCapableList: true);
+        }
+
+        public static void SyncOpenModConfigWindow(CustomUIWindow? window)
+        {
+            if (window == null || !window.IsAlive) return;
+
+            string link = "modcfg:" + I18n.ModId + ":" + I18n.LanguageConfigKey;
+            string labelText = $"{I18n.Get("界面语言", "UI Language")} <link=\"{link}\"><sprite name=\"info\" tint=1></link>";
+            var labelEl = window.Get("label_" + I18n.LanguageConfigKey);
+            labelEl?.SetText(labelText);
+
+            var dropEl = window.Get(I18n.LanguageConfigKey);
+            if (dropEl != null && dropEl.IsAlive)
+            {
+                dropEl.SetOptions(I18n.GetLanguageChoices());
+                dropEl.SetIndex(I18n.LanguageToIndex(I18n.GetConfiguredMode()));
+            }
+
+            ApplyWindowFonts(window);
+        }
+    }
+
+    [HarmonyPatch(typeof(ModConfigWindow), "BuildEntry")]
+    public static class Patch_ModConfigWindow_BuildEntry
+    {
+        public static void Postfix(CustomUIBuilder b, ModConfig config, ConfigEntry entry)
+        {
+            try
+            {
+                ModConfigUiHelper.ApplyEntryLocalization(b, config, entry);
+            }
+            catch { }
+        }
+    }
+
+    [HarmonyPatch(typeof(ModConfigWindow), nameof(ModConfigWindow.Open))]
+    public static class Patch_ModConfigWindow_Open
+    {
+        public static void Postfix(LoadedMod mod, CustomUIWindow __result)
+        {
+            try
+            {
+                if (mod?.Manifest != null &&
+                    string.Equals(mod.Manifest.ID, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
+                    __result != null)
+                {
+                    ModConfigUiHelper.ApplyWindowFonts(__result);
+                }
+            }
+            catch { }
+        }
+    }
+
+    [HarmonyPatch(typeof(ModConfigWindow), "Apply")]
+    public static class Patch_ModConfigWindow_Apply
+    {
+        public static void Postfix(CustomUIWindow window, ModConfig config)
+        {
+            try
+            {
+                if (config != null &&
+                    string.Equals(config.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
+                    window != null && window.IsAlive)
+                {
+                    ModConfigUiHelper.SyncOpenModConfigWindow(window);
+                }
             }
             catch { }
         }
@@ -684,7 +790,7 @@ namespace ProbablyUnifiedHotkeys
         {
             if (!string.IsNullOrEmpty(__result) && !__result.Contains("Esc"))
             {
-                __result += " (按 Esc 可设为空)";
+                __result += I18n.Get(" (按 Esc 可设为空)", " (Esc to clear)");
             }
         }
 
@@ -814,7 +920,7 @@ namespace ProbablyUnifiedHotkeys
         {
             if (key == KeyCode.None)
             {
-                __result = "（无）";
+                __result = I18n.Get("（无）", "None");
                 return false;
             }
             if (ComboKeyStore.IsMouseSideButton(key))

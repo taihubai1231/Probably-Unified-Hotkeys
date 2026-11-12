@@ -62,10 +62,15 @@ namespace ProbablyUnifiedHotkeys
         private static readonly Dictionary<string, float> InitialFloatSnapshots = new Dictionary<string, float>(StringComparer.Ordinal);
         private static readonly Dictionary<string, int> InitialIndexSnapshots = new Dictionary<string, int>(StringComparer.Ordinal);
 
+        private static bool IsLegacySelfModId(string? modId)
+        {
+            return string.Equals(modId, "allow_unbind_key", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool IsSelfModId(string? modId)
         {
-            return string.Equals(modId, "probably_unified_hotkeys", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(modId, "allow_unbind_key", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(modId, I18n.ModId, StringComparison.OrdinalIgnoreCase) ||
+                   IsLegacySelfModId(modId);
         }
 
         private static bool IsSystemOrEngineAssembly(Assembly asm)
@@ -242,6 +247,7 @@ namespace ProbablyUnifiedHotkeys
             var unmatchedWildConfigs = new List<ModConfig>();
 
             // 1. 优先扫描已加载模组的标准 ModConfig（含完整 BoxedDefault 默认值与取值范围）
+            I18n.EnsureRegistered();
             List<LoadedMod>? loadedMods = null;
             try
             {
@@ -261,7 +267,7 @@ namespace ProbablyUnifiedHotkeys
                 {
                     if (mod == null || mod.Manifest == null) continue;
                     string modId = mod.Manifest.ID;
-                    if (IsSelfModId(modId)) continue;
+                    if (IsLegacySelfModId(modId)) continue;
 
                     bool isEnabled = IsLoadedModActive(mod, modId);
                     if (isEnabled)
@@ -299,7 +305,7 @@ namespace ProbablyUnifiedHotkeys
                     string cfgId = kvp.Key;
                     ModConfig config = kvp.Value;
                     if (string.IsNullOrEmpty(cfgId) || config == null || !config.HasEntries) continue;
-                    if (IsSelfModId(cfgId) || consumedConfigIds.Contains(cfgId)) continue;
+                    if (IsLegacySelfModId(cfgId) || consumedConfigIds.Contains(cfgId)) continue;
 
                     consumedConfigIds.Add(cfgId);
 
@@ -325,8 +331,13 @@ namespace ProbablyUnifiedHotkeys
                     }
                     else
                     {
-                        var group = GetOrCreateGroup(groups, cfgId, cfgId);
-                        unmatchedWildConfigs.Add(config);
+                        bool isSelfCfg = string.Equals(cfgId, I18n.ModId, StringComparison.OrdinalIgnoreCase);
+                        string fallbackName = isSelfCfg ? I18n.OwnDisplayName : cfgId;
+                        var group = GetOrCreateGroup(groups, cfgId, fallbackName);
+                        if (!isSelfCfg)
+                        {
+                            unmatchedWildConfigs.Add(config);
+                        }
                         ScanModConfigIntoGroup(
                             group,
                             config,
@@ -620,8 +631,11 @@ namespace ProbablyUnifiedHotkeys
                 }
 
                 // 收集潜在可转为按键的候选/被丢弃/已强转条目（用于诊断面板人工纠偏）
-                bool isPromotableType = entry.ValueType == typeof(string) ||
-                                        (entry.ValueType == typeof(int) && !entry.HasRange && (entry.Choices == null || entry.Choices.Length == 0));
+                bool isOwnLanguageEntry = string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
+                                          string.Equals(entryKey, I18n.LanguageConfigKey, StringComparison.Ordinal);
+                bool isPromotableType = !isOwnLanguageEntry &&
+                                        (entry.ValueType == typeof(string) ||
+                                         (entry.ValueType == typeof(int) && !entry.HasRange && (entry.Choices == null || entry.Choices.Length == 0)));
 
                 if (isForced || dropped || (isPromotableType && isGeneral))
                 {
@@ -758,7 +772,7 @@ namespace ProbablyUnifiedHotkeys
         {
             if (val == null) return "null";
             string s = val.ToString() ?? string.Empty;
-            if (s.Length == 0) return "<空>";
+            if (s.Length == 0) return I18n.Get("<空>", "<empty>");
             return s.Length > 28 ? s.Substring(0, 28) + "..." : s;
         }
 
@@ -1006,7 +1020,7 @@ namespace ProbablyUnifiedHotkeys
                             Id = "vanilla." + entry.id,
                             RawOptionId = entry.id,
                             ModId = "vanilla",
-                            ModDisplayName = "原版官方",
+                            ModDisplayName = I18n.Get("原版官方", "Vanilla"),
                             DisplayName = label,
                             Tooltip = tooltip,
                             GetKey = entry.getKey ?? (() => KeyCode.None),
@@ -1403,20 +1417,30 @@ namespace ProbablyUnifiedHotkeys
             else if (entry.Choices != null && entry.Choices.Length > 0)
             {
                 item.Kind = OptionKind.Dropdown;
-                item.GetChoices = () => entry.Choices.ToList();
-                item.GetIndex = () =>
+                if (string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(entry.Key, I18n.LanguageConfigKey, StringComparison.Ordinal))
                 {
-                    string cur = entry.BoxedValue?.ToString() ?? string.Empty;
-                    int idx = Array.IndexOf(entry.Choices, cur);
-                    return idx >= 0 ? idx : 0;
-                };
-                item.SetIndex = (idx) =>
+                    item.GetChoices = () => I18n.GetLanguageChoices();
+                    item.GetIndex = () => I18n.LanguageToIndex(entry.BoxedValue);
+                    item.SetIndex = (idx) => SetEntryBoxed(entry, I18n.IndexToChoiceValue(idx));
+                }
+                else
                 {
-                    if (idx >= 0 && idx < entry.Choices.Length)
+                    item.GetChoices = () => entry.Choices.ToList();
+                    item.GetIndex = () =>
                     {
-                        SetEntryBoxed(entry, entry.Choices[idx]);
-                    }
-                };
+                        string cur = entry.BoxedValue?.ToString() ?? string.Empty;
+                        int idx = Array.IndexOf(entry.Choices, cur);
+                        return idx >= 0 ? idx : 0;
+                    };
+                    item.SetIndex = (idx) =>
+                    {
+                        if (idx >= 0 && idx < entry.Choices.Length)
+                        {
+                            SetEntryBoxed(entry, entry.Choices[idx]);
+                        }
+                    };
+                }
             }
             else
             {

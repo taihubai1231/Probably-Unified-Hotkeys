@@ -61,7 +61,8 @@ namespace ProbablyUnifiedHotkeys
         // 5. Pen_mod_QoL_Tweaks 缓存
         private static int _penQolEpoch = -1;
         private static readonly string[] PenPropNames = new string[] { "QuickBuy", "QuickSell", "QuickAppraisal", "QuickConfront", "QuickPin", "TabLeft", "TabRight" };
-        private static readonly string[] PenLabels = new string[] { "一键快速购买", "一键快速出售", "一键快速估价", "一键当面对质", "一键快捷锁定", "左切换页签", "右切换页签" };
+        private static readonly string[] PenLabelsZh = new string[] { "一键快速购买", "一键快速出售", "一键快速估价", "一键当面对质", "一键快捷锁定", "左切换页签", "右切换页签" };
+        private static readonly string[] PenLabelsEn = new string[] { "Quick Buy", "Quick Sell", "Quick Appraisal", "Quick Confront", "Quick Pin", "Previous Tab", "Next Tab" };
         private static readonly PropertyInfo?[] PenCachedProps = new PropertyInfo?[7];
 
         // 6. SmartInventoryArrange 缓存
@@ -137,11 +138,12 @@ namespace ProbablyUnifiedHotkeys
             Action<KeyCode>? setHotkey = _showItemSetMethodFn;
             Action? commit = _showItemCommitFn;
 
+            string showItemName = I18n.Get("物品名称常显", "Show Item Names");
             var group = new ModOptionGroup
             {
                 ModId = "ShowItemNames",
-                DisplayName = "物品名称常显",
-                PinyinSortKey = PinyinEngine.ToInitials("物品名称常显")
+                DisplayName = showItemName,
+                PinyinSortKey = PinyinEngine.ToInitials(showItemName)
             };
 
             group.Hotkeys.Add(new ModHotkeyEntry
@@ -149,8 +151,8 @@ namespace ProbablyUnifiedHotkeys
                 Id = "ShowItemNames.Hotkey",
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
-                DisplayName = "常显开关热键",
-                Tooltip = "按压或按下该快捷键以切换物品名称常显",
+                DisplayName = I18n.Get("常显开关热键", "Toggle Item Names"),
+                Tooltip = I18n.Get("按压或按下该快捷键以切换物品名称常显", "Press or hold to toggle persistent item name labels"),
                 DefaultKey = KeyCode.LeftAlt,
                 HasExplicitDefault = true,
                 GetKey = () => getHotkey != null ? getHotkey() : (KeyCode)(hotkeyProp.GetValue(null) ?? KeyCode.None),
@@ -201,11 +203,12 @@ namespace ProbablyUnifiedHotkeys
             Action<KeyCode>? setKeyProp = _csSetKeyPropFn;
             Action<KeyCode>? saveMethod = _csSaveMethodFn;
 
+            string csName = I18n.Get("模组冲突检测器", "Mod Conflict Scanner");
             var group = new ModOptionGroup
             {
                 ModId = "conflict_scanner",
-                DisplayName = "模组冲突检测器",
-                PinyinSortKey = PinyinEngine.ToInitials("模组冲突检测器")
+                DisplayName = csName,
+                PinyinSortKey = PinyinEngine.ToInitials(csName)
             };
 
             group.Hotkeys.Add(new ModHotkeyEntry
@@ -213,8 +216,8 @@ namespace ProbablyUnifiedHotkeys
                 Id = "conflict_scanner.ReportKey",
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
-                DisplayName = "冲突报告窗口快捷键",
-                Tooltip = "按下后呼出模组冲突检测器诊断面板",
+                DisplayName = I18n.Get("冲突报告窗口快捷键", "Open Conflict Report"),
+                Tooltip = I18n.Get("按下后呼出模组冲突检测器诊断面板", "Press to open the Mod Conflict Scanner diagnostic window"),
                 DefaultKey = KeyCode.F8,
                 HasExplicitDefault = true,
                 GetKey = () => getKey != null ? getKey() : (KeyCode)(keyProp.GetValue(null) ?? KeyCode.None),
@@ -265,11 +268,12 @@ namespace ProbablyUnifiedHotkeys
             Action<KeyCode>? setJournalProp = _repSetJournalPropFn;
             Action<KeyCode, bool>? setJournalKey = _repSetJournalMethodFn;
 
+            string repName = I18n.Get("势力声望扩展", "Faction Reputation Expansion");
             var group = new ModOptionGroup
             {
                 ModId = "faction_reputation_expansion",
-                DisplayName = "势力声望扩展",
-                PinyinSortKey = PinyinEngine.ToInitials("势力声望扩展")
+                DisplayName = repName,
+                PinyinSortKey = PinyinEngine.ToInitials(repName)
             };
 
             group.Hotkeys.Add(new ModHotkeyEntry
@@ -277,8 +281,8 @@ namespace ProbablyUnifiedHotkeys
                 Id = "faction_reputation.journal_key",
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
-                DisplayName = "打开势力声望手帐",
-                Tooltip = "按此键在游戏中打开或关闭各势力声望详情界面",
+                DisplayName = I18n.Get("打开势力声望手帐", "Open Faction Journal"),
+                Tooltip = I18n.Get("按此键在游戏中打开或关闭各势力声望详情界面", "Toggle the Faction Reputation journal in-game"),
                 DefaultKey = KeyCode.J,
                 HasExplicitDefault = true,
                 GetKey = () => getJournalKey != null ? getJournalKey() : (KeyCode)(journalProp.GetValue(null) ?? KeyCode.None),
@@ -329,11 +333,12 @@ namespace ProbablyUnifiedHotkeys
             FieldInfo? toggleField = _demandToggleField;
             if (toggleProp == null && toggleField == null) return;
 
+            string cdhName = I18n.Get("客户需求高亮", "Client Demand Highlight");
             var group = new ModOptionGroup
             {
                 ModId = "hollow.clientdemandhighlight",
-                DisplayName = "客户需求高亮",
-                PinyinSortKey = PinyinEngine.ToInitials("客户需求高亮")
+                DisplayName = cdhName,
+                PinyinSortKey = PinyinEngine.ToInitials(cdhName)
             };
 
             group.Hotkeys.Add(new ModHotkeyEntry
@@ -341,8 +346,8 @@ namespace ProbablyUnifiedHotkeys
                 Id = "clientdemandhighlight.toggle_key",
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
-                DisplayName = "切换高亮热键",
-                Tooltip = "按此键切换是否高亮当前顾客需求的特殊物品",
+                DisplayName = I18n.Get("切换高亮热键", "Toggle Highlight Key"),
+                Tooltip = I18n.Get("按此键切换是否高亮当前顾客需求的特殊物品", "Toggle highlighting items requested by the current customer"),
                 DefaultKey = KeyCode.H,
                 HasExplicitDefault = true,
                 GetKey = () => getToggle != null ? getToggle() : (KeyCode)((toggleProp?.GetValue(null) ?? toggleField?.GetValue(null)) ?? KeyCode.None),
@@ -391,17 +396,18 @@ namespace ProbablyUnifiedHotkeys
             }
             if (!hasAny) return;
 
+            string penName = I18n.Get("Pen的便利性优化", "Pen's QoL Tweaks");
             var group = new ModOptionGroup
             {
                 ModId = "Pen_mod_QoL_Tweaks",
-                DisplayName = "Pen的便利性优化",
-                PinyinSortKey = PinyinEngine.ToInitials("Pen的便利性优化")
+                DisplayName = penName,
+                PinyinSortKey = PinyinEngine.ToInitials(penName)
             };
 
             for (int i = 0; i < PenPropNames.Length; i++)
             {
                 string propName = PenPropNames[i];
-                string label = PenLabels[i];
+                string label = I18n.IsChinese ? PenLabelsZh[i] : PenLabelsEn[i];
                 PropertyInfo? prop = PenCachedProps[i];
                 if (prop != null)
                 {
@@ -411,7 +417,7 @@ namespace ProbablyUnifiedHotkeys
                         ModId = group.ModId,
                         ModDisplayName = group.DisplayName,
                         DisplayName = label,
-                        Tooltip = $"Pen便利性优化操作快捷键：{label}",
+                        Tooltip = I18n.Format("Pen便利性优化操作快捷键：{0}", "Pen's QoL Tweaks hotkey: {0}", label),
                         DefaultKey = (KeyCode)(prop.GetValue(null) ?? KeyCode.None),
                         HasExplicitDefault = false,
                         GetKey = () => (KeyCode)(prop.GetValue(null) ?? KeyCode.None),
@@ -447,19 +453,20 @@ namespace ProbablyUnifiedHotkeys
             PropertyInfo? enabledProp = _smartArrangeEnabledProp;
             if (enabledProp == null) return;
 
+            string siaName = I18n.Get("智能物品整理", "Smart Inventory Arrange");
             var group = new ModOptionGroup
             {
                 ModId = "smart_inventory_arrange",
-                DisplayName = "智能物品整理",
-                PinyinSortKey = PinyinEngine.ToInitials("智能物品整理")
+                DisplayName = siaName,
+                PinyinSortKey = PinyinEngine.ToInitials(siaName)
             };
 
             group.GeneralSettings.Add(new ModGeneralEntry
             {
                 Id = "smart_inventory_arrange.enabled",
                 ModId = group.ModId,
-                DisplayName = "启用快捷键一键整理",
-                Tooltip = "关闭后快捷键整理功能将暂停响应",
+                DisplayName = I18n.Get("启用快捷键一键整理", "Enable Quick Arrange Hotkey"),
+                Tooltip = I18n.Get("关闭后快捷键整理功能将暂停响应", "Disables quick inventory arrange hotkey when unchecked"),
                 Kind = OptionKind.Toggle,
                 GetBool = () => (bool)(enabledProp.GetValue(null) ?? true),
                 SetBool = (val) => { if (enabledProp.CanWrite) enabledProp.SetValue(null, val); }
@@ -617,7 +624,7 @@ namespace ProbablyUnifiedHotkeys
 
             string displayName = trainerMod?.Manifest != null && !string.IsNullOrEmpty(trainerMod.Manifest.Name)
                 ? trainerMod.Manifest.Name
-                : "Probably Stolen 修改器";
+                : I18n.Get("Probably Stolen 修改器", "Probably Stolen Trainer");
 
             if (TryReadTrainerSavedHotkey(out KeyCode diskKey))
             {
@@ -642,8 +649,11 @@ namespace ProbablyUnifiedHotkeys
                 Id = "probablystolen.trainer.toggle",
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
-                DisplayName = "开关修改器窗口",
-                Tooltip = "打开/关闭修改器悬浮窗（支持单键、鼠标侧键与 Esc 清空为无；因原模组未使用官方配置与命名空间，受安全扫描限制暂不支持组合键前缀）",
+                DisplayName = I18n.Get("开关修改器窗口", "Toggle Trainer Overlay"),
+                Tooltip = I18n.Get(
+                    "打开/关闭修改器悬浮窗（支持单键、鼠标侧键与 Esc 清空为无；因原模组未使用官方配置与命名空间，受安全扫描限制暂不支持组合键前缀）",
+                    "Toggle trainer overlay (supports single keys, mouse side buttons & Esc to clear; modifier combos unavailable under sandbox scan)"
+                ),
                 DefaultKey = KeyCode.F7,
                 DefaultModifiers = KeyModifierMask.None,
                 HasExplicitDefault = true,
