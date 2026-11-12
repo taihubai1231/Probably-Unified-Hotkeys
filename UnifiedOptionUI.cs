@@ -539,6 +539,8 @@ namespace ProbablyUnifiedHotkeys
             // =================================================================
             builder.BeginColumn(4f, TextAnchor.UpperLeft);
             _diagnosticStickyHeaderRoot = builder.CurrentContainer.gameObject;
+            var diagStickyVlg = _diagnosticStickyHeaderRoot.GetComponent<VerticalLayoutGroup>();
+            if (diagStickyVlg != null) diagStickyVlg.childForceExpandWidth = true;
             var diagStickyLe = _diagnosticStickyHeaderRoot.GetComponent<LayoutElement>() ?? _diagnosticStickyHeaderRoot.AddComponent<LayoutElement>();
             diagStickyLe.flexibleWidth = 1f;
             diagStickyLe.flexibleHeight = 0f;
@@ -631,6 +633,10 @@ namespace ProbablyUnifiedHotkeys
                 // --- C. 模组排查与疑难接管视图容器（初始为空并隐藏，点击“模组排查”时按需懒构建） ---
                 builder.BeginColumn(4f, TextAnchor.UpperLeft);
                 _diagnosticContentRoot = builder.CurrentContainer.gameObject;
+                var diagContentVlg = _diagnosticContentRoot.GetComponent<VerticalLayoutGroup>();
+                if (diagContentVlg != null) diagContentVlg.childForceExpandWidth = true;
+                var diagContentLe = _diagnosticContentRoot.GetComponent<LayoutElement>() ?? _diagnosticContentRoot.AddComponent<LayoutElement>();
+                diagContentLe.flexibleWidth = 1f;
                 _diagnosticContentRoot.SetActive(false);
             }
 
@@ -2516,23 +2522,48 @@ namespace ProbablyUnifiedHotkeys
             RefreshExpandAllButtonState();
         }
 
+        private static void AddFixedHorizontalSpace(CustomUIBuilder builder, float pixels)
+        {
+            builder.AddSpace(pixels);
+            if (builder.CurrentContainer == null || builder.CurrentContainer.childCount <= 0) return;
+            var spaceTransform = builder.CurrentContainer.GetChild(builder.CurrentContainer.childCount - 1);
+            var le = spaceTransform.GetComponent<LayoutElement>();
+            if (le != null)
+            {
+                le.minWidth = pixels;
+                le.preferredWidth = pixels;
+                le.flexibleWidth = 0f;
+            }
+        }
+
+        private static void ConfigureWrappedDiagnosticLabel(CustomUIElement? el, string text)
+        {
+            if (el == null) return;
+            if (el.root != null)
+            {
+                var le = el.root.GetComponent<LayoutElement>() ?? el.root.AddComponent<LayoutElement>();
+                // 置零 min/preferredWidth 并赋予 flexibleWidth=1，避免长文本在 HorizontalLayoutGroup 换行前挤压同行的左侧缩进 Spacer
+                le.minWidth = 0f;
+                le.preferredWidth = 0f;
+                le.flexibleWidth = 1f;
+                le.flexibleHeight = 0f;
+            }
+            if (el.text != null)
+            {
+                el.text.alignment = TextAlignmentOptions.MidlineLeft;
+                el.text.enableWordWrapping = true;
+                el.text.overflowMode = TextOverflowModes.Overflow;
+                I18n.ApplyFontIfRuntime(el.text, text);
+            }
+        }
+
         private static void AddWrappedDiagnosticLabel(CustomUIBuilder builder, float leftIndent, string text, string? id = null)
         {
             builder.BeginRow(4f, TextAnchor.MiddleLeft);
-            if (leftIndent > 0f) builder.AddSpace(leftIndent);
+            if (leftIndent > 0f) AddFixedHorizontalSpace(builder, leftIndent);
             builder.AddLabel(text, id);
-            var el = builder.Last;
-            if (el != null)
-            {
-                el.SetFlexible(1f, 0f);
-                if (el.text != null)
-                {
-                    el.text.enableWordWrapping = true;
-                    el.text.overflowMode = TextOverflowModes.Overflow;
-                    I18n.ApplyFontIfRuntime(el.text, text);
-                }
-            }
-            builder.AddSpace(8f);
+            ConfigureWrappedDiagnosticLabel(builder.Last, text);
+            AddFixedHorizontalSpace(builder, 8f);
             builder.End();
         }
 
@@ -2542,7 +2573,7 @@ namespace ProbablyUnifiedHotkeys
 
             builder.AddSpace(4f);
             builder.BeginRow(6f, TextAnchor.MiddleCenter);
-            builder.AddSpace(8f);
+            AddFixedHorizontalSpace(builder, 8f);
             string summaryHeader = I18n.Format(
                 "<b>已启用模组排查</b> <color=#99a3b0>(共 {0} 个 | 正常纳管 {1} | </color>" +
                 "<color=#ffd27d>待排查 {2}</color><color=#99a3b0> | 纯资源 {3})</color>",
@@ -2571,7 +2602,7 @@ namespace ProbablyUnifiedHotkeys
             StyleActionButton(builder.Last, 102f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
-            builder.AddSpace(8f);
+            AddFixedHorizontalSpace(builder, 8f);
             builder.End();
 
             AddWrappedDiagnosticLabel(
@@ -2632,7 +2663,7 @@ namespace ProbablyUnifiedHotkeys
             GameObject? bodyObj = null;
 
             builder.BeginRow(8f, TextAnchor.MiddleLeft);
-            builder.AddSpace(6f);
+            AddFixedHorizontalSpace(builder, 6f);
 
             builder.AddButton(initialExpanded ? "▼" : "▶", () =>
             {
@@ -2660,13 +2691,17 @@ namespace ProbablyUnifiedHotkeys
 
             string catTitle = GetDiagnosticCategoryTitle(status, items.Count);
             builder.AddLabel(catTitle, null);
-            I18n.ApplyFontIfRuntime(builder.Last?.text, catTitle);
-            builder.AddFlexibleSpace();
-            builder.AddSpace(6f);
+            ConfigureWrappedDiagnosticLabel(builder.Last, catTitle);
+            AddFixedHorizontalSpace(builder, 6f);
             builder.End();
 
             builder.BeginColumn(2f, TextAnchor.UpperLeft);
             bodyObj = builder.CurrentContainer.gameObject;
+            var bodyLayout = bodyObj.GetComponent<VerticalLayoutGroup>();
+            if (bodyLayout != null)
+            {
+                bodyLayout.childForceExpandWidth = true;
+            }
             foreach (var item in items)
             {
                 BuildDiagnosticModCard(builder, item, query, hasQuery);
@@ -2795,7 +2830,7 @@ namespace ProbablyUnifiedHotkeys
             bool isExpanded = _expandedDiagnosticModIds.Contains(item.ModId) || anyCandMatchedQuery;
 
             builder.BeginRow(6f, TextAnchor.MiddleLeft);
-            builder.AddSpace(18f);
+            AddFixedHorizontalSpace(builder, 18f);
 
             string titleBadge = GetDiagnosticStatusBadge(item.Status);
             string idSuffix = item.IsWildOrphanConfig
@@ -2821,17 +2856,7 @@ namespace ProbablyUnifiedHotkeys
 
             string modTitleText = $"{titleBadge} <b>{item.DisplayName}</b>{idSuffix}{statsPart}";
             builder.AddLabel(modTitleText, null);
-            var titleEl = builder.Last;
-            if (titleEl != null)
-            {
-                titleEl.SetFlexible(1f, 0f);
-                if (titleEl.text != null)
-                {
-                    titleEl.text.enableWordWrapping = true;
-                    titleEl.text.overflowMode = TextOverflowModes.Overflow;
-                    I18n.ApplyFontIfRuntime(titleEl.text, modTitleText);
-                }
-            }
+            ConfigureWrappedDiagnosticLabel(builder.Last, modTitleText);
 
             if (item.CandidateEntries.Count > 0)
             {
@@ -2885,7 +2910,7 @@ namespace ProbablyUnifiedHotkeys
                 ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
             }
 
-            builder.AddSpace(8f);
+            AddFixedHorizontalSpace(builder, 8f);
             builder.End();
 
             // 副标题与排查说明
@@ -2956,20 +2981,10 @@ namespace ProbablyUnifiedHotkeys
                 tag, cand.Label, cand.EntryKey, cand.ValueTypeName, cand.CurrentValuePreview, cand.DefaultValuePreview);
 
             builder.BeginRow(6f, TextAnchor.MiddleLeft);
-            builder.AddSpace(34f);
+            AddFixedHorizontalSpace(builder, 34f);
 
             builder.AddLabel(detailText, null);
-            var el = builder.Last;
-            if (el != null)
-            {
-                el.SetFlexible(1f, 0f);
-                if (el.text != null)
-                {
-                    el.text.enableWordWrapping = true;
-                    el.text.overflowMode = TextOverflowModes.Overflow;
-                    I18n.ApplyFontIfRuntime(el.text, detailText);
-                }
-            }
+            ConfigureWrappedDiagnosticLabel(builder.Last, detailText);
 
             if (cand.IsForcedHotkey)
             {
@@ -3022,7 +3037,7 @@ namespace ProbablyUnifiedHotkeys
                 ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
             }
 
-            builder.AddSpace(8f);
+            AddFixedHorizontalSpace(builder, 8f);
             builder.End();
         }
 
