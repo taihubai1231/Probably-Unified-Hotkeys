@@ -36,13 +36,22 @@ namespace ProbablyUnifiedHotkeys
             var conflicts = new Dictionary<KeyCombo, List<ModHotkeyEntry>>();
             foreach (var kvp in keyMap)
             {
-                if (kvp.Value.Count > 1)
+                if (kvp.Value.Count > 1 && HasAnyEditableBinding(kvp.Value))
                 {
                     conflicts[kvp.Key] = kvp.Value;
                 }
             }
 
             return conflicts;
+        }
+
+        private static bool HasAnyEditableBinding(List<ModHotkeyEntry> entries)
+        {
+            for (int i = 0; i < entries.Count; i++)
+            {
+                if (!entries[i].IsReadOnlyProbed) return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -60,7 +69,10 @@ namespace ProbablyUnifiedHotkeys
                 {
                     if (other.Id != currentEntry.Id)
                     {
-                        names.Add($"- [{other.ModDisplayName}] {other.DisplayName}");
+                        string suffix = other.IsReadOnlyProbed
+                            ? I18n.Get(" (只读探测)", " (Probed · Read-Only)")
+                            : string.Empty;
+                        names.Add($"- [{other.ModDisplayName}] {other.DisplayName}{suffix}");
                     }
                 }
                 return I18n.Format(

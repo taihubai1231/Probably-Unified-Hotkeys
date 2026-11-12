@@ -26,8 +26,11 @@ namespace ProbablyUnifiedHotkeys
         {
             "Count", "Max", "Min", "Size", "Width", "Height", "Delay", "Interval", "Cooldown",
             "Duration", "Speed", "Scale", "Alpha", "Opacity", "Port", "Index", "Page", "Slot",
-            "Limit", "Amount", "Price", "Rate", "Percent", "Level", "Day", "Days", "Step",
-            "Radius", "Distance", "Font"
+            "Limit", "Amount", "Price", "Rate", "Percent", "Percentage", "Level", "Day", "Days", "Step",
+            "Radius", "Distance", "Font", "FontSize", "IconSize", "Threshold", "Volume", "Weight",
+            "Multiplier", "Factor", "Offset", "Padding", "Margin", "Spacing", "Rows", "Cols", "Columns",
+            "PerPage", "PageSize", "Seconds", "Minutes", "Hours", "Ms", "Retry", "Retries", "Timeout",
+            "SlotCount", "Capacity", "Quality", "MaxItems"
         };
 
         private static readonly string[] ChineseHotkeyKeywords =
@@ -512,7 +515,10 @@ namespace ProbablyUnifiedHotkeys
                 };
             }
 
-            // 5. 按拼音首字母排序
+            // 5. 自动只读探测（DseCecil 静态 IL + ModData / 模组文件配置）补充无官方接口模组热键
+            var probedByModId = ProbeReadOnlyHotkeysIntoGroups(enabledLoadedMods, groups);
+
+            // 6. 按拼音首字母排序
             groups.Sort((a, b) =>
             {
                 int cmp = string.Compare(a.PinyinSortKey, b.PinyinSortKey, StringComparison.OrdinalIgnoreCase);
@@ -520,7 +526,7 @@ namespace ProbablyUnifiedHotkeys
                 return string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
             });
 
-            // 6. 汇总全量快捷键用于全局冲突检测与组合键运行时路由表（原版 + 所有模组）
+            // 7. 汇总全量快捷键用于全局冲突检测与组合键运行时路由表（原版 + 所有可改模组 + 只读探测热键）
             allHotkeysForConflict = new List<ModHotkeyEntry>();
             allHotkeysForConflict.AddRange(GetVanillaKeybinds());
             foreach (var g in groups)
@@ -528,8 +534,15 @@ namespace ProbablyUnifiedHotkeys
                 allHotkeysForConflict.AddRange(g.Hotkeys);
             }
             ComboKeyStore.RebuildRuntimeLookup(allHotkeysForConflict);
+            foreach (var g in groups)
+            {
+                if (g.ReadOnlyProbedHotkeys.Count > 0)
+                {
+                    allHotkeysForConflict.AddRange(g.ReadOnlyProbedHotkeys);
+                }
+            }
 
-            // 7. 构建零安全警告的全量模组扫描与疑难项诊断报告
+            // 8. 构建全量模组扫描与疑难项诊断报告
             scanReport = BuildModScanReport(
                 groups,
                 enabledLoadedMods,
@@ -537,10 +550,110 @@ namespace ProbablyUnifiedHotkeys
                 candidatesByGroupId,
                 registryMatchedModIds,
                 adapterMatchedModIds,
-                unmatchedWildConfigs
+                unmatchedWildConfigs,
+                probedByModId
             );
 
             return groups;
+        }
+
+        private static Dictionary<string, List<ModHotkeyEntry>> ProbeReadOnlyHotkeysIntoGroups(
+            List<LoadedMod> enabledLoadedMods,
+            List<ModOptionGroup> groups)
+        {
+            var result = new Dictionary<string, List<ModHotkeyEntry>>(StringComparer.OrdinalIgnoreCase);
+            var groupById = new Dictionary<string, ModOptionGroup>(groups.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var g in groups)
+            {
+                if (!string.IsNullOrEmpty(g.ModId) && !groupById.ContainsKey(g.ModId))
+                {
+                    groupById[g.ModId] = g;
+                }
+            }
+
+            foreach (var mod in enabledLoadedMods)
+            {
+                if (mod?.Manifest == null || string.IsNullOrEmpty(mod.Manifest.ID)) continue;
+                string modId = mod.Manifest.ID;
+                if (IsSelfModId(modId)) continue;
+
+                List<ProbedKeyRecord> rawRecords;
+                try
+                {
+                    rawRecords = DllKeyProbe.ProbeMod(mod);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[ProbablyUnifiedHotkeys] ProbeMod failed for '{modId}': {ex.Message}");
+                    continue;
+                }
+
+                if (rawRecords.Count == 0) continue;
+
+                groupById.TryGetValue(modId, out var existingGroup);
+                var filteredEntries = new List<ModHotkeyEntry>();
+                foreach (var rec in rawRecords)
+                {
+                    if (ShouldSuppressProbedRecord(modId, rec, existingGroup))
+                    {
+                        continue;
+                    }
+                    filteredEntries.Add(DllKeyProbe.ToReadOnlyHotkeyEntry(mod, rec));
+                }
+
+                if (filteredEntries.Count == 0) continue;
+
+                result[modId] = filteredEntries;
+
+                if (existingGroup == null)
+                {
+                    string disp = string.IsNullOrEmpty(mod.Manifest.Name) ? modId : mod.Manifest.Name;
+                    existingGroup = GetOrCreateGroup(groups, modId, disp);
+                    groupById[modId] = existingGroup;
+                }
+                existingGroup.ReadOnlyProbedHotkeys.AddRange(filteredEntries);
+            }
+
+            return result;
+        }
+
+        private static bool ShouldSuppressProbedRecord(string modId, ProbedKeyRecord rec, ModOptionGroup? existingGroup)
+        {
+            if (existingGroup != null)
+            {
+                var probedCombo = new KeyCombo(rec.Modifiers, rec.Key);
+                foreach (var hk in existingGroup.Hotkeys)
+                {
+                    if (hk.EffectiveCombo.Equals(probedCombo))
+                    {
+                        return true;
+                    }
+                    if (!string.IsNullOrEmpty(hk.RawOptionId) &&
+                        rec.SourceDetail.IndexOf(hk.RawOptionId, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            // 已知已由专属适配器或官方渠道接管的私有宿主热键字段不再作为只读探测重复展示
+            if (string.Equals(modId, "probablystolen.trainer", StringComparison.OrdinalIgnoreCase) &&
+                rec.SourceDetail.IndexOf("_toggleKey", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+            if (string.Equals(modId, "hollow.clientdemandhighlight", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(rec.PlayerPrefsKey, "ClientDemandHighlight.hotkey", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (string.Equals(modId, "nicokobo.speed-up", StringComparison.OrdinalIgnoreCase) &&
+                rec.SourceDetail.IndexOf("KeyCombination.IsPressed", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private static bool IsLoadedModActive(LoadedMod mod, string modId)
@@ -639,6 +752,7 @@ namespace ProbablyUnifiedHotkeys
 
                 if (isForced || dropped || (isPromotableType && isGeneral))
                 {
+                    bool isIgnored = !isForced && ComboKeyStore.IsIgnoredCandidate(canonicalId);
                     bool suspicious = isForced || dropped;
                     if (!suspicious && entry.ValueType == typeof(int))
                     {
@@ -663,7 +777,8 @@ namespace ProbablyUnifiedHotkeys
                         IsCurrentlyGeneral = isGeneral,
                         WasDroppedFromMainUI = dropped,
                         CanPromoteToHotkey = isPromotableType || entry.ValueType == typeof(KeyCode),
-                        IsSuspiciousCandidate = suspicious
+                        IsSuspiciousCandidate = suspicious,
+                        IsIgnoredCandidate = isIgnored
                     });
                 }
             }
@@ -750,18 +865,21 @@ namespace ProbablyUnifiedHotkeys
         private static bool IsLikelyKeyCodeInt(object? boxed)
         {
             if (boxed is not int intVal) return false;
-            // 排除常见小整数配置 0..8 避免把天数/数量滑块误判，重点关注字母/数字/功能键/鼠标侧键码位
-            if (intVal == (int)KeyCode.Tab || intVal == (int)KeyCode.Return || intVal == (int)KeyCode.Space || intVal == (int)KeyCode.BackQuote)
+            // 优先匹配专属功能/小键盘/方向/鼠标侧键码位，尽量避开常见百分比/秒数/像素整十数(50/60/100/120)误判
+            if (intVal == (int)KeyCode.Tab || intVal == (int)KeyCode.BackQuote)
             {
                 return true;
             }
-            if ((intVal >= (int)KeyCode.Alpha0 && intVal <= (int)KeyCode.Alpha9) ||
-                (intVal >= (int)KeyCode.A && intVal <= (int)KeyCode.Z) ||
-                (intVal >= (int)KeyCode.Keypad0 && intVal <= (int)KeyCode.KeypadEquals) ||
+            if ((intVal >= (int)KeyCode.Keypad0 && intVal <= (int)KeyCode.KeypadEquals) ||
                 (intVal >= (int)KeyCode.UpArrow && intVal <= (int)KeyCode.PageDown) ||
                 (intVal >= (int)KeyCode.F1 && intVal <= (int)KeyCode.F15) ||
                 (intVal >= (int)KeyCode.RightShift && intVal <= (int)KeyCode.LeftAlt) ||
-                (intVal >= (int)KeyCode.Mouse0 && intVal <= (int)KeyCode.Mouse6))
+                (intVal >= (int)KeyCode.Mouse2 && intVal <= (int)KeyCode.Mouse6))
+            {
+                return true;
+            }
+            if (intVal >= (int)KeyCode.A && intVal <= (int)KeyCode.Z &&
+                intVal != 100 && intVal != 110 && intVal != 120)
             {
                 return true;
             }
@@ -783,7 +901,8 @@ namespace ProbablyUnifiedHotkeys
             Dictionary<string, List<DiagnosticCandidateEntry>> candidatesByGroupId,
             HashSet<string> registryMatchedModIds,
             HashSet<string> adapterMatchedModIds,
-            List<ModConfig> unmatchedWildConfigs)
+            List<ModConfig> unmatchedWildConfigs,
+            Dictionary<string, List<ModHotkeyEntry>> probedByModId)
         {
             var report = new ModScanReport();
             var groupById = new Dictionary<string, ModOptionGroup>(groups.Count, StringComparer.OrdinalIgnoreCase);
@@ -824,6 +943,12 @@ namespace ProbablyUnifiedHotkeys
                     UsedKnownAdapter = adapterMatchedModIds.Contains(modId)
                 };
 
+                if (probedByModId.TryGetValue(modId, out var probedList))
+                {
+                    item.ProbedHotkeys.AddRange(probedList);
+                    report.ProbedHotkeysCount += probedList.Count;
+                }
+
                 if (matchedConfigsByGroupId.TryGetValue(modId, out var cfgs))
                 {
                     foreach (var c in cfgs)
@@ -842,14 +967,18 @@ namespace ProbablyUnifiedHotkeys
                     {
                         item.CandidateEntries.Add(c);
                         report.AllCandidates.Add(c);
-                        if (c.IsSuspiciousCandidate || c.IsForcedHotkey)
+                        if (c.IsIgnoredCandidate)
+                        {
+                            item.IgnoredCandidateCount++;
+                        }
+                        if ((c.IsSuspiciousCandidate && !c.IsIgnoredCandidate) || c.IsForcedHotkey)
                         {
                             hasActionableCandidate = true;
                         }
                     }
                 }
 
-                if (!hasAsm && managedTotal == 0 && item.CandidateEntries.Count == 0)
+                if (!hasAsm && managedTotal == 0 && item.CandidateEntries.Count == 0 && item.ProbedHotkeys.Count == 0)
                 {
                     item.Status = ModDiagnosticStatus.AssetOnlyMod;
                     report.AssetOnlyModCount++;
@@ -900,7 +1029,11 @@ namespace ProbablyUnifiedHotkeys
                     {
                         item.CandidateEntries.Add(c);
                         report.AllCandidates.Add(c);
-                        if (c.IsSuspiciousCandidate || c.IsForcedHotkey)
+                        if (c.IsIgnoredCandidate)
+                        {
+                            item.IgnoredCandidateCount++;
+                        }
+                        if ((c.IsSuspiciousCandidate && !c.IsIgnoredCandidate) || c.IsForcedHotkey)
                         {
                             hasActionable = true;
                         }

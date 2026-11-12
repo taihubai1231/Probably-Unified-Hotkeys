@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Xml.Linq;
 
 internal static class Program
 {
@@ -62,39 +63,93 @@ internal static class Program
             true
         });
 
-        int capCount = 0;
-        int findCount = 0;
+        var declaredCaps = LoadDeclaredCapabilities(Path.Combine(modDir, "manifest.xml"));
+        Console.WriteLine($"Declared Capabilities in manifest.xml: {(declaredCaps.Count == 0 ? "<none>" : string.Join(", ", declaredCaps))}");
+
+        var detectedCaps = new List<string>();
+        var findings = new List<string>();
         int hardCount = 0;
+        int pendingCount = 0;
+        int depCapCount = 0;
+        bool usesDepCap = false;
+        bool usesDepRef = false;
         bool refused = false;
         string errorText = string.Empty;
 
         foreach (var f in result!.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
         {
             object? val = f.GetValue(result);
-            PrintMember(f.Name, val, ref capCount, ref findCount, ref hardCount, ref refused, ref errorText);
+            PrintMember(f.Name, val, detectedCaps, findings, ref hardCount, ref pendingCount, ref depCapCount, ref usesDepCap, ref usesDepRef, ref refused, ref errorText);
         }
         foreach (var p in result.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
             object? val = p.GetValue(result);
-            PrintMember(p.Name, val, ref capCount, ref findCount, ref hardCount, ref refused, ref errorText);
+            PrintMember(p.Name, val, detectedCaps, findings, ref hardCount, ref pendingCount, ref depCapCount, ref usesDepCap, ref usesDepRef, ref refused, ref errorText);
         }
 
-        if (refused || capCount > 0 || findCount > 0 || hardCount > 0 || !string.IsNullOrEmpty(errorText))
+        var undeclaredCaps = detectedCaps
+            .Where(c => !declaredCaps.Contains(c, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        var unexpectedFindings = findings
+            .Where(item => !declaredCaps.Any(c => item.StartsWith(c + ":", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (refused ||
+            undeclaredCaps.Count > 0 ||
+            unexpectedFindings.Count > 0 ||
+            hardCount > 0 ||
+            pendingCount > 0 ||
+            depCapCount > 0 ||
+            usesDepCap ||
+            usesDepRef ||
+            !string.IsNullOrEmpty(errorText))
         {
-            Console.Error.WriteLine("FAIL: ModScanner reported findings, capabilities, hard flags, or refusal.");
+            Console.Error.WriteLine("FAIL: ModScanner reported undeclared capabilities, unexpected findings, deprecated usages, hard flags, pending flags, or refusal.");
+            if (undeclaredCaps.Count > 0) Console.Error.WriteLine("  Undeclared Capabilities: " + string.Join(", ", undeclaredCaps));
+            if (unexpectedFindings.Count > 0) Console.Error.WriteLine("  Unexpected Findings: " + string.Join(" | ", unexpectedFindings));
             return 4;
         }
 
-        Console.WriteLine("PASS: ModScanner 0 Capabilities / 0 Findings / 0 HardFlags / Refused=False.");
+        Console.WriteLine($"PASS: ModScanner verified cleanly (Declared=[{string.Join(", ", declaredCaps)}], Capabilities={detectedCaps.Count}, Findings={findings.Count}, HardFlags=0, Deprecated=0, Refused=False).");
         return 0;
+    }
+
+    private static HashSet<string> LoadDeclaredCapabilities(string manifestPath)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(manifestPath)) return set;
+        try
+        {
+            var doc = XDocument.Load(manifestPath);
+            var root = doc.Root;
+            var caps = root?.Element("Capabilities")?.Elements("Capability");
+            if (caps != null)
+            {
+                foreach (var c in caps)
+                {
+                    string v = c.Value.Trim();
+                    if (!string.IsNullOrEmpty(v)) set.Add(v);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("WARN: Failed to parse manifest.xml capabilities: " + ex.Message);
+        }
+        return set;
     }
 
     private static void PrintMember(
         string name,
         object? val,
-        ref int capCount,
-        ref int findCount,
+        List<string> detectedCaps,
+        List<string> findings,
         ref int hardCount,
+        ref int pendingCount,
+        ref int depCapCount,
+        ref bool usesDepCap,
+        ref bool usesDepRef,
         ref bool refused,
         ref string errorText)
     {
@@ -104,14 +159,32 @@ internal static class Program
             foreach (var item in en) items.Add(item);
             Console.WriteLine($"{name}: Count={items.Count}");
             foreach (var item in items) Console.WriteLine("  - " + item);
-            if (name == "Capabilities") capCount = items.Count;
-            else if (name == "Findings") findCount = items.Count;
+            if (name == "Capabilities")
+            {
+                foreach (var item in items)
+                {
+                    string? s = item?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(s)) detectedCaps.Add(s);
+                }
+            }
+            else if (name == "Findings")
+            {
+                foreach (var item in items)
+                {
+                    string? s = item?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(s)) findings.Add(s);
+                }
+            }
             else if (name == "HardFlags") hardCount = items.Count;
+            else if (name == "Pending") pendingCount = items.Count;
+            else if (name == "DeprecatedCapabilities") depCapCount = items.Count;
         }
         else
         {
             Console.WriteLine($"{name}: {val}");
             if (name == "Refused" && val is bool b) refused = b;
+            else if (name == "UsesDeprecatedCapability" && val is bool dc) usesDepCap = dc;
+            else if (name == "UsesDeprecatedReflection" && val is bool dr) usesDepRef = dr;
             else if (name == "Error" && val is string s) errorText = s;
         }
     }

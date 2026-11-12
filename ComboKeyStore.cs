@@ -49,11 +49,15 @@ namespace ProbablyUnifiedHotkeys
     {
         private const string PrefsKey = "probably_unified_hotkeys.combos.v1";
         private const string ForcedHotkeysPrefsKey = "probably_unified_hotkeys.forced_hotkeys.v1";
+        private const string IgnoredCandidatesPrefsKey = "probably_unified_hotkeys.ignored_candidates.v1";
 
         private static readonly Dictionary<string, (KeyModifierMask Modifiers, KeyCode Key)> SavedCombos
             = new Dictionary<string, (KeyModifierMask, KeyCode)>(StringComparer.OrdinalIgnoreCase);
 
         private static readonly HashSet<string> ForcedHotkeyIds
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly HashSet<string> IgnoredCandidateIds
             = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private static HashSet<string> _managedStringHotkeyIds
@@ -155,6 +159,7 @@ namespace ProbablyUnifiedHotkeys
         {
             SavedCombos.Clear();
             ForcedHotkeyIds.Clear();
+            IgnoredCandidateIds.Clear();
             try
             {
                 string raw = ReadPrefString(PrefsKey);
@@ -185,19 +190,8 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
 
-                string forcedRaw = ReadPrefString(ForcedHotkeysPrefsKey);
-                if (!string.IsNullOrEmpty(forcedRaw))
-                {
-                    string[] parts = forcedRaw.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (string part in parts)
-                    {
-                        string id = Uri.UnescapeDataString(part).Trim();
-                        if (!string.IsNullOrEmpty(id))
-                        {
-                            ForcedHotkeyIds.Add(id);
-                        }
-                    }
-                }
+                LoadIdSet(ForcedHotkeysPrefsKey, ForcedHotkeyIds);
+                LoadIdSet(IgnoredCandidatesPrefsKey, IgnoredCandidateIds);
             }
             catch (Exception ex)
             {
@@ -207,34 +201,51 @@ namespace ProbablyUnifiedHotkeys
             RebuildRuntimeFromSaved();
         }
 
-        public static void SaveForcedHotkeys()
+        private static void LoadIdSet(string prefKey, HashSet<string> target)
+        {
+            string raw = ReadPrefString(prefKey);
+            if (string.IsNullOrEmpty(raw)) return;
+            string[] parts = raw.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string part in parts)
+            {
+                string id = Uri.UnescapeDataString(part).Trim();
+                if (!string.IsNullOrEmpty(id))
+                {
+                    target.Add(id);
+                }
+            }
+        }
+
+        private static void SaveIdSet(string prefKey, HashSet<string> ids, string label)
         {
             try
             {
-                if (ForcedHotkeyIds.Count == 0)
+                if (ids.Count == 0)
                 {
-                    DeletePrefKey(ForcedHotkeysPrefsKey);
+                    DeletePrefKey(prefKey);
                 }
                 else
                 {
                     var sb = new StringBuilder(128);
-                    foreach (string id in ForcedHotkeyIds)
+                    foreach (string id in ids)
                     {
                         if (string.IsNullOrEmpty(id)) continue;
                         if (sb.Length > 0) sb.Append(';');
                         sb.Append(Uri.EscapeDataString(id));
                     }
                     string encoded = sb.ToString();
-                    if (string.IsNullOrEmpty(encoded)) DeletePrefKey(ForcedHotkeysPrefsKey);
-                    else WritePrefString(ForcedHotkeysPrefsKey, encoded);
+                    if (string.IsNullOrEmpty(encoded)) DeletePrefKey(prefKey);
+                    else WritePrefString(prefKey, encoded);
                 }
                 SavePrefsStorage();
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[ProbablyUnifiedHotkeys] Error saving forced hotkeys: {ex.Message}");
+                Debug.LogWarning($"[ProbablyUnifiedHotkeys] Error saving {label}: {ex.Message}");
             }
         }
+
+        public static void SaveForcedHotkeys() => SaveIdSet(ForcedHotkeysPrefsKey, ForcedHotkeyIds, "forced hotkeys");
 
         public static bool IsForcedHotkey(string? canonicalId)
         {
@@ -255,6 +266,10 @@ namespace ProbablyUnifiedHotkeys
             if (changed)
             {
                 _forcedHotkeysRevision++;
+                if (forced && IgnoredCandidateIds.Remove(canonicalId))
+                {
+                    SaveIdSet(IgnoredCandidatesPrefsKey, IgnoredCandidateIds, "ignored candidates");
+                }
                 if (!forced)
                 {
                     if (SavedCombos.Remove(canonicalId))
@@ -265,6 +280,35 @@ namespace ProbablyUnifiedHotkeys
                 }
                 SaveForcedHotkeys();
             }
+        }
+
+        public static bool IsIgnoredCandidate(string? canonicalId)
+        {
+            EnsureLoaded();
+            if (string.IsNullOrEmpty(canonicalId)) return false;
+            return IgnoredCandidateIds.Contains(canonicalId);
+        }
+
+        public static void SetIgnoredCandidate(string? canonicalId, bool ignored)
+        {
+            EnsureLoaded();
+            if (string.IsNullOrEmpty(canonicalId)) return;
+
+            bool changed = ignored
+                ? IgnoredCandidateIds.Add(canonicalId)
+                : IgnoredCandidateIds.Remove(canonicalId);
+
+            if (changed)
+            {
+                _forcedHotkeysRevision++;
+                SaveIdSet(IgnoredCandidatesPrefsKey, IgnoredCandidateIds, "ignored candidates");
+            }
+        }
+
+        public static int GetIgnoredCandidatesCount()
+        {
+            EnsureLoaded();
+            return IgnoredCandidateIds.Count;
         }
 
         public static int GetForcedHotkeysRevision()
@@ -416,6 +460,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 foreach (var hk in allHotkeys)
                 {
+                    if (hk.IsReadOnlyProbed) continue;
                     var mods = hk.EffectiveModifiers;
                     var key = hk.EffectiveKey;
                     if (key == KeyCode.None || mods == KeyModifierMask.None) continue;

@@ -1,11 +1,11 @@
 # 可能是按键统一优化 / Probably Unified Hotkeys
 
-> **作者**：太湖白1231 ｜ **当前版本**：`v1.4.3` ｜ **适用游戏**：*深空当铺 (Probably Stolen)* `0.46` / `0.46D` ｜ **语言**：简体中文 / English ｜ **安全扫描**：官方 `ModScanner` 零告警（0 Capabilities / 0 Findings）  
+> **作者**：太湖白1231 ｜ **当前版本**：`v1.4.4` ｜ **适用游戏**：*深空当铺 (Probably Stolen)* `0.46` / `0.46D` ｜ **语言**：简体中文 / English ｜ **安全扫描**：官方 `ModScanner` 零高危告警（仅声明 `<Capability>files</Capability>`，0 HardFlags / 0 Deprecated / `Refused=False`）  
 > **Steam 创意工坊**：[物品 ID `3837828444`](https://steamcommunity.com/sharedfiles/filedetails/?id=3837828444) ｜ **QQ 交流群**：`1127147529`
 
-![可能是按键统一优化 v1.4.3 界面预览](preview.png)
+![可能是按键统一优化 v1.4.4 界面预览](preview.png)
 
-> 面向 **深空当铺 (*Probably Stolen*)** 的一站式原生统一按键与模组配置中心 —— 支持 `Shift / Ctrl / Alt` 组合键与鼠标侧键（`Mouse3 ~ Mouse6`）、原版与模组双区折叠及「恢复默认」、全范围繁简中文 / 英文 / 拼音搜索、智能防误触隔离、交互式「模组排查」与疑难热键强转、中英双语实时切换、后台静默预建 + 无过渡单帧原子切换，零告警通过官方 `ModScanner` 安全扫描。
+> 面向 **深空当铺 (*Probably Stolen*)** 的一站式原生统一按键与模组配置中心 —— 支持 `Shift / Ctrl / Alt` 组合键与鼠标侧键（`Mouse3 ~ Mouse6`）、原版与模组双区折叠及「恢复默认」、全范围繁简中文 / 英文 / 拼音搜索、智能防误触隔离、静态 `DseCecil` IL 与本地配置只读热键探测（自动覆盖未公开官方配置的硬编码模组并参与冲突检测）、交互式「模组排查」与疑难热键强转/忽略、中英双语实时切换、后台静默预建 + 无过渡单帧原子切换，严格遵循官方 `<Capability>files</Capability>` 合规权限通过 `ModScanner` 安全扫描。
 
 ---
 
@@ -61,8 +61,10 @@
 - **秒级退出流程（「退出游戏」）**：主菜单退出、暂停菜单退出与窗口关闭前统一安全触发各模组 `OnDisable()` 以保存配置，随后清空已卸载模组持有的一次性 `HarmonyInstance` 引用以跳过 `ModLoader.OnApplicationQuit()` 在进程销毁前的 40+ 次同步 `UnpatchAll` 动态方法重编译；同时在游戏禁用遥测（`OVERWRITE_DISABLE_ANALYTICS == true`）时跳过暂停菜单 `QuitWithAnalytics()` 无意义的 1 秒固定空等，实现流畅秒退。
 - **全面委托化热点钩子 & `ModScanner` 全绿**：全代码库零 `FindObjectsOfType` / `GameObject.Find`，所有 `AccessTools.TypeByName` 与热点 `MethodInfo` 均在启动/epoch 初始化阶段一次性绑定为静态 `Delegate.CreateDelegate` 强类型委托，消除每帧与热路径反射查找；工坊程序集监听通过 `O(1)` 名称白名单过滤，严格遵守官方 `ModScanner` 静态扫描 **0 Findings / 0 Capabilities / 0 HardFlags / Refused: False**。
 
-### 9. 模组排查与疑难设置接管（v1.4.3 新增）
-- **官方渠道全量恢复**：在保持 `ModScanner` 0 警告前提下，深入官方 `ModConfig.configs` 注册字典与 `GameOptionRegistry` 条目回调归属，自动找回作者命名不规范（“野 `ModConfig.For(...)` ID”或错配 `source`）导致的漏检设定，并在应用/还原时联动通知全部关联配置 ID 生效。
+### 9. 模组排查、只读热键探测与疑难设置接管（v1.4.3 ~ v1.4.4）
+- **官方渠道全量恢复**：在遵循官方 `ModScanner` 安全边界前提下，深入官方 `ModConfig.configs` 注册字典与 `GameOptionRegistry` 条目回调归属，自动找回作者命名不规范（“野 `ModConfig.For(...)` ID”或错配 `source`）导致的漏检设定，并在应用/还原时联动通知全部关联配置 ID 生效。
+- **全自动只读热键探测（Route B · `<Capability>files</Capability>`）**：使用游戏内置静态 IL 解析库 `DseCecil` 与官方 `ModData` / 模组配置读取接口，自动探测未公开官方热键配置的代码模组所占用的硬编码按键 / 本地配置文件按键，按模组卡片与文件指纹缓存；在模组卡片与 `[!] 仅看冲突` 视图中以 `[探测·只读]` 紫调标注展示并参与冲突检测，同时严守零外部反射红线。
+- **疑难候选管理升级**：在「模组排查」中支持一键 `设为按键绑定`、`忽略(非按键)`（永久免打扰误报并支持 `恢复提醒`）与 `复制排查汇总`。
 - **独立「模组排查」子视图**：点击顶部操作栏 **`模组排查 (N)`** 按钮即可按需排查所有已启用模组：
   - 将模组按四类归并为可折叠分类卡片（`[有疑难/待确认项]` 默认展开，其余 `[未检测到官方配置]`、`[已正常纳管]`、`[纯资源/无代码]` 默认折叠并保留会话折叠状态，支持顶部 **`全部展开 / 全部收起`** 一键切换及搜索自动展开），同时将 **`已启用模组排查`** 概览与绿字操作反馈条置顶固定在滚动区上方，上下浏览与点击操作时随时清晰可见；支持顶部搜索框实时过滤、**`强制全部重扫`**、单模组 **`复查此模组`**、**`查看设置`** 与 **`复制信息`** 反馈文本导出（原地无闪刷新且自动保留尚未应用的待定修改）；
   - 针对通过 `ConfigEntry<string>`（非明确单键名）或未设范围的 `ConfigEntry<int>` 编写的非常规按键，支持在 **`查看原始项`** 中一键 **`设为按键绑定`** 强制纳管或 **`还原`**，强转及自动识别的 string/int 热键同样享有完整的 `Shift/Ctrl/Alt` 组合键、防误触拦截、`Mouse3~6` 侧键、`Esc` 清空与 **`前去改键`** 自动定位功能（配置持久化于 `probably_unified_hotkeys.forced_hotkeys.v1`）。
@@ -93,11 +95,25 @@
 - **内置数据持久化键表**：
   - 组合键修饰位：`PlayerPrefs` 键 `probably_unified_hotkeys.combos.v1`
   - 强制纳管热键表：`PlayerPrefs` 键 `probably_unified_hotkeys.forced_hotkeys.v1`
+  - 忽略的非按键候选项：`PlayerPrefs` 键 `probably_unified_hotkeys.ignored_candidates.v1`
+  - 只读热键探测指纹缓存：`ModData` 文件 `dll_probe_cache_v1.txt`
   - 界面语言选择：官方 `ModConfig`（模组 ID `probably_unified_hotkeys`，配置键 `ui_language`）
 
 ---
 
 ## 📝 更新日志
+
+### v1.4.4
+1. **自动只读热键探测（Route B · `<Capability>files</Capability>`，零外部反射）**：
+   - 新增 `DllKeyProbe.cs`，基于游戏自带静态 IL 解析器 `DseCecil.dll` 与 `ModData` / 本地小型 `.json/.cfg/.ini` 配置扫描，为未通过官方 `ModConfig` / `GameOptionRegistry` 公开热键的第三方代码模组自动提取硬编码或自定义保存的按键占用（覆盖 `Input.GetKey*` 字面量、静态字段、`PlayerPrefs.GetInt` 默认键以及 `KeyBindHelper.GetKeyDown("...")`）。
+   - 按各模组 `manifest.ModVersion` + DLL/配置大小与修改时间建立增量指纹缓存并持久化至 `ModData/probably_unified_hotkeys/dll_probe_cache_v1.txt`，主设置开窗零重复解析开销，并支持在「模组排查」中点击 **`强制全部重扫`** / **`复查此模组`** 按需失效重探。
+   - 在模组卡片头部显示 `探测: N` 徽章，卡片内新增 **「自动探测热键 (只读 · 仅供冲突排查)」** 分区与 **`[探测·只读]`** 不可改键行；已探测按键实时并入全局 **`[!] 仅看冲突`** 检测（提示标注来源，避免“硬编码+已配模组”静默撞键），并保持仅探测-vs-可改键的实用冲突降噪。
+2. **「模组排查」疑难收口与诊断效率提升**：
+   - 扩充非按键整数关键词黑名单并收紧键码整数启发式（自动跳过 `50/60/100/110/120` 常见数值滑块与 ASCII 数字范围），显著减少常规数值设置误入 `[有疑难/待确认项]`。
+   - 候选项操作行新增 **`忽略(非按键)`** 按钮与 **`[已忽略非按键]` / `恢复提醒`** 状态切换（持久化于 `probably_unified_hotkeys.ignored_candidates.v1`），已全部忽略误报的模组自动退回 `[已正常纳管]`，彻底告别永久黄标。
+   - 「模组排查」置顶汇总栏新增 **探测热键总数** 与 **`复制排查汇总`** 一键复制按钮；展开明细后同步列出只读探测按键并支持 **`定位`** 跳转至对应模组卡片。
+3. **合规声明与扫描工具同步**：
+   - `manifest.xml` 显式声明 `<Capabilities><Capability>files</Capability></Capabilities>` 并附中英双语权限说明；全程不触碰任何废弃能力（`0 HardFlags / 0 Deprecated / UsesDeprecatedReflection=False / Refused=False`）。
 
 ### v1.4.3
 1. **官方渠道深度防漏检（野 `ModConfig` / 错配 `source` 自动收编）**：
@@ -224,15 +240,16 @@
 ## 📦 兼容性与源码结构
 
 - **适用游戏版本**：*深空当铺 (Probably Stolen)* `0.46` / `0.46D`
-- **前置依赖 / 权限声明**：无前置模组、无特殊权限声明（0 Capabilities / 0 Findings）
+- **前置依赖 / 权限声明**：无前置模组 ｜ 仅声明官方 `<Capability>files</Capability>`（用于静态只读读取各模组 DLL 与本地配置探测未知热键，不修改任何外部文件；通过官方 `ModScanner` 零高危扫描：`0 HardFlags / 0 Deprecated / Refused=False`）
 - **核心代码模块**：
   - `ModEntry.cs`：模组入口、生命周期/快速退出状态管理、`KeyBindHelper` 与工坊程序集 Harmony 补丁中枢，以及「改造件」齿轮与 `I18n` 入口注册（`ModConfigUiHelper`）。
   - `I18n.cs`：中英双语本地化系统（`跟随游戏语言` / `简体中文` / `English`）、`ModConfig` 语言持久化（`ui_language`）与热刷新事件通知。
   - `PerformancePatches.cs`：v1.4.0+ 退出秒退、主菜单分帧闲置预热、`ModUIManager` 行池化、O(1) 依赖索引及 `ConflictScanner` 双扫去重优化模块。
-  - `UnifiedOptionUI.cs` & `ModModel.cs`：原生选项页接管、离线构建、单次字体尺寸适配、按帧预算静默预建、挂起根布局瞬时切换、全范围四档搜索、「模组排查」子视图与 `ButtonTextColor` 色彩缓存同步。
-  - `ComboKeyStore.cs`：组合键持久化（`combos.v1`）、修饰键掩码校验、侧键命名格式化与运行时隔离抑制引擎。
-  - `ModOptionScanner.cs` & `KnownModAdapters.cs` & `ModCatalogCache.cs`：全渠道设置收集（含野 `ModConfig` 收编与强转热键 `forced_hotkeys.v1`）、委托来源防重识别、专项适配（含修改器）、会话启动快照与指纹缓存。
-  - `ConflictDetector.cs`：修饰键+主键精确判重与冲突提示生成。
+  - `UnifiedOptionUI.cs` & `ModModel.cs`：原生选项页接管、离线构建、单次字体尺寸适配、按帧预算静默预建、挂起根布局瞬时切换、全范围四档搜索、只读探测热键行、「模组排查」子视图与 `ButtonTextColor` 色彩缓存同步。
+  - `ComboKeyStore.cs`：组合键持久化（`combos.v1`）、修饰键掩码校验、侧键命名格式化、强转/忽略列表持久化与运行时隔离抑制引擎。
+  - `DllKeyProbe.cs`：`DseCecil` 静态 IL、`ModData` 与模组小型配置文件全自动只读热键探测器及指纹增量缓存。
+  - `ModOptionScanner.cs` & `KnownModAdapters.cs` & `ModCatalogCache.cs`：全渠道设置收集（含野 `ModConfig` 收编与只读探测并入）、委托来源防重识别、专项适配（含修改器）、会话启动快照与指纹缓存。
+  - `ConflictDetector.cs`：修饰键+主键精确判重（含可改键与只读探测键联动检测）与冲突提示生成。
   - `PinyinEngine.cs` & `TradSimpTable.cs`：CJK 拼音与 `2,473` 组繁简互通归一化搜索引擎。
 
 ---
@@ -241,7 +258,7 @@
 
 - **QQ 交流群**：`1127147529`
 - **提交 Issue / 反馈模板**：反馈问题时请尽量附上以下信息以便定位：
-  1. 游戏版本与本模组版本号（例如 `0.46 / v1.4.3`）；
+  1. 游戏版本与本模组版本号（例如 `0.46 / v1.4.4`）；
   2. 问题现象与复现步骤（所在界面、操作步骤、预期与实际表现）；
-  3. 若涉及特定第三方模组，请在 **`模组排查`** 中点击该模组的 **`复制信息`** 并粘贴至反馈中；
+  3. 若涉及特定第三方模组，请在 **`模组排查`** 中点击该模组的 **`复制信息`**（或顶部的 **`复制排查汇总`**）并粘贴至反馈中；
   4. 游戏日志 `Player.log`（位于游戏存档数据目录，若有报错段落请优先截取）。

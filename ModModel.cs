@@ -111,12 +111,13 @@ namespace ProbablyUnifiedHotkeys
         public bool IsExpanded { get; set; } = false;
 
         public List<ModHotkeyEntry> Hotkeys { get; } = new List<ModHotkeyEntry>();
+        public List<ModHotkeyEntry> ReadOnlyProbedHotkeys { get; } = new List<ModHotkeyEntry>();
         public List<ModGeneralEntry> GeneralSettings { get; } = new List<ModGeneralEntry>();
         public List<string> ExtraNotifyModIds { get; } = new List<string>();
 
         public Action? ResetToDefaultsAction { get; set; }
 
-        public int TotalItemCount => Hotkeys.Count + GeneralSettings.Count;
+        public int TotalItemCount => Hotkeys.Count + ReadOnlyProbedHotkeys.Count + GeneralSettings.Count;
 
         // UI 引用，用于折叠与过滤
         public bool IsContentBuilt { get; set; } = false;
@@ -173,6 +174,8 @@ namespace ProbablyUnifiedHotkeys
         public KeyCode SnapshotKey { get; set; } = KeyCode.None;
         public KeyModifierMask SnapshotModifiers { get; set; } = KeyModifierMask.None;
         public bool HasExplicitDefault { get; set; } = false;
+        public bool IsReadOnlyProbed { get; set; } = false;
+        public string ProbedSourceDetail { get; set; } = string.Empty;
         private bool _disableModifierCombos;
         /// <summary>是否允许在按键前叠加 Ctrl/Shift/Alt 组合键前缀（部分无官方配置的独立模组仅支持单键/侧键；默认开启，兼容零初始化对象）。</summary>
         public bool SupportsModifierCombos
@@ -368,6 +371,7 @@ namespace ProbablyUnifiedHotkeys
         public bool WasDroppedFromMainUI { get; set; }
         public bool CanPromoteToHotkey { get; set; }
         public bool IsSuspiciousCandidate { get; set; }
+        public bool IsIgnoredCandidate { get; set; }
     }
 
     /// <summary>
@@ -386,10 +390,12 @@ namespace ProbablyUnifiedHotkeys
         public ModDiagnosticStatus Status { get; set; }
         public int ManagedHotkeyCount { get; set; }
         public int ManagedGeneralCount { get; set; }
+        public int IgnoredCandidateCount { get; set; }
         public List<string> MatchedConfigIds { get; } = new List<string>();
         public bool UsedGameOptionRegistry { get; set; }
         public bool UsedKnownAdapter { get; set; }
         public List<DiagnosticCandidateEntry> CandidateEntries { get; } = new List<DiagnosticCandidateEntry>();
+        public List<ModHotkeyEntry> ProbedHotkeys { get; } = new List<ModHotkeyEntry>();
     }
 
     /// <summary>
@@ -405,6 +411,7 @@ namespace ProbablyUnifiedHotkeys
         public int AssetOnlyModCount { get; set; }
         public int TotalHotkeysCount { get; set; }
         public int TotalGeneralsCount { get; set; }
+        public int ProbedHotkeysCount { get; set; }
         public int OrphanConfigCount { get; set; }
         public List<ModDiagnosticItem> Mods { get; } = new List<ModDiagnosticItem>();
         public List<DiagnosticCandidateEntry> AllCandidates { get; } = new List<DiagnosticCandidateEntry>();

@@ -25,21 +25,22 @@
 
 ## 二、代码模块与 Harmony 补丁清单
 
-### 1. 核心源码模块（12 个 `.cs` + 嵌入资源 `pinyin.bin`）
+### 1. 核心源码模块（13 个 `.cs` + 嵌入资源 `pinyin.bin`）
 
 | 文件 | 行数 | 职责说明 |
 |---|---:|---|
-| `UnifiedOptionUI.cs` | 4,445 | 「选项」整页 UI 重构：搜索栏/作用域、折叠卡、拼音 A-Z 排序、「仅看冲突」、置顶反馈栏的「模组排查」、像素级对齐辅助与双语渲染 |
-| `ModOptionScanner.cs` | 1,612 | 扫描原版 `GameOptionRegistry`、各模组 `ModConfig`（含非标准命名实例）与回调归属，推断快捷键/常规/候选原始项 |
+| `UnifiedOptionUI.cs` | 4,743 | 「选项」整页 UI 重构：搜索栏/作用域、折叠卡、拼音 A-Z 排序、「仅看冲突」、只读探测行、置顶反馈栏的「模组排查」（含忽略非按键/一键复制汇总）与双语渲染 |
+| `ModOptionScanner.cs` | 1,743 | 扫描原版 `GameOptionRegistry`、各模组 `ModConfig`（含非标准命名实例）与回调归属，并归并 `DllKeyProbe` 只读探测结果 |
 | `ModEntry.cs` | 1,312 | `IMod` 入口（`Init` / `OnEnable` / `OnDisable`）、退出钩子、核心 Harmony 补丁、`WorkshopModPatcher` 运行时适配 |
 | `PerformancePatches.cs` | 1,148 | 4 项流畅度优化补丁（选项开窗异步/离线装配、字号缓存、改造件列表行复用、退出流程精简） |
+| `DllKeyProbe.cs` | 914 | 基于官方 `DseCecil.dll` 与 `ModData`/模组配置文件的只读热键探测器与增量指纹缓存（`dll_probe_cache_v1.txt`） |
+| `ComboKeyStore.cs` | 696 | 组合键（Shift/Ctrl/Alt + 主键/鼠标、Mouse3~Mouse6）、单键修饰门控、「无」空键、强制强转与忽略非按键列表 |
 | `KnownModAdapters.cs` | 688 | 第三方模组专项适配与强转桥接 |
-| `ComboKeyStore.cs` | 651 | 组合键（Shift/Ctrl/Alt + 主键/鼠标、Mouse3~Mouse6）、单键修饰门控、「无」空键、强制强转热键清单 |
-| `ModModel.cs` | 396 | 统一数据模型与快照/默认值状态管理 |
+| `ModModel.cs` | 403 | 统一数据模型与快照/默认值/只读探测状态管理 |
 | `I18n.cs` | 292 | 中英双语词典、字体回退应用（`ApplyFontIfRuntime` / `ApplyFontToDropdown`）与语言选项接口 |
 | `PinyinEngine.cs` | 275 | 基于嵌入资源 `pinyin.bin` 的离线汉字转拼音/首字母检索引擎 |
 | `ModCatalogCache.cs` | 159 | 主菜单闲置预热与配置目录缓存 |
-| `ConflictDetector.cs` | 89 | 精准按键冲突分组（跳过「无」空键） |
+| `ConflictDetector.cs` | 101 | 精准按键冲突分组（跳过「无」空键，可改键与只读探测键联动冲突排查） |
 | `TradSimpTable.cs` | 73 | 繁简中文互转搜索对照表 |
 
 ### 2. Harmony 补丁点位索引
@@ -55,30 +56,31 @@
   - `ModUIManager.PopulateLayoutList`、`RefreshRowIssues`、`GetModIssue`、`ApplyFilterToRows`、`ShowMod`、`OpenPanel`（`ConflictScope`）
   - `CustomUIWindow.Get(string)`
 
-### 3. 数据持久化 Key
+### 3. 数据持久化 Key 与缓存文件
 
 - `PlayerPrefs`：
   - `probably_unified_hotkeys.combos.v1`：组合键、鼠标侧键与单键修饰状态
   - `probably_unified_hotkeys.forced_hotkeys.v1`：「模组排查」中显式强转为按键绑定的原始项
+  - `probably_unified_hotkeys.ignored_candidates.v1`：「模组排查」中标记忽略的非按键候选项
+- `ModData`：
+  - `probably_unified_hotkeys/dll_probe_cache_v1.txt`：各模组 DLL / 配置文件大小与时间戳指纹缓存
 - `ModConfig`（模组 ID `probably_unified_hotkeys`）：
   - `ui_language`：`auto`（跟随游戏语言）/ `zh`（简体中文）/ `en`（English）
 
 ---
 
-## 三、官方红线与安全扫描边界
+## 三、官方红线与安全扫描边界（v1.4.4 路线 B）
 
 综合官方 `ModdingDocs`（`CodeOfConduct.zh-CN.md`、`ModdingGuide.zh-CN.md`、`APIChanges.zh-CN.md`、`trust-list.json`）及工坊经验库 `3834708453`（`docs/06-发布与工坊.md`、`docs/10-官方红线清单.md`）：
 
-1. **零权限声明与零告警通过**：
-   - `manifest.xml` 保持 `<Capabilities />` 为空、`<Prerequisites />` 为空；
-   - 发版前必须保证官方 `ModScanner.Scan` 输出 **`0 Capabilities / 0 Findings / 0 HardFlags / Refused=False`**。
-2. **严禁越界 API**：
-   - 不得直接调用 `System.IO` 读写磁盘文件（只读模组附带数据时统一使用官方 `ModHelper.ReadModDataFileText(...)`，配置保存统一走 `PlayerPrefs` / `ModConfig`）。
-   - 不得触碰 `[ModRestricted]` API：`ModLoader.ApproveAndEnable`、`SetModEnabled`、`ReorderMods`、`SetDeveloperMode`、`ForgetMod`、`ModTrust`、`ModWorkshop.Unsubscribe`、`Process.Start`、`Application.OpenURL`、`SaveFiles.*`。
-   - 不得 Patch `DirectoryMaster.Item`。
-3. **无命名空间外挂的沙盒避让**：
-   - `ModScanner` 会拦截对无命名空间第三方类型（如 `probablystolen.trainer`、`RealTimeClock`）的外部反射；
-   - 这类模组不得添加基于反射的修饰键前置门控补丁，改以只读/官方数据通道（如 `ModHelper.ReadModDataFileText("hotkey-v1.txt")`、`"ProbablyStolenTrainerHost"`）接入，保持单键、鼠标侧键 `Mouse3~6` 与 `Esc` 清空可用。
+1. **合规声明 `<Capability>files</Capability>` 与开发者认证机制**：
+   - `manifest.xml` 严格声明 `<Capabilities><Capability>files</Capability></Capabilities>`（`<Prerequisites />` 为空），专用于 `DllKeyProbe.cs` 只读扫描其他已启用模组目录下的 DLL（交由游戏内置 `DseCecil.dll` 静态 IL 解析）与小型本地配置文件；**绝不写入或修改任何外部目录文件**。
+   - **发版硬性门禁**：每次 `ModScanner.Scan` 必须满足：检测 `Capabilities` 与 `manifest.xml` 声明严格一致（仅 `[files]`），且 **`HardFlags = 0 / Pending = 0 / DeprecatedCapabilities = 0 / UsesDeprecatedCapability = False / UsesDeprecatedReflection = False / Refused = False`**。
+   - 自 `2026-12-10` 起，创意工坊对声明 `<Capability>files</Capability>` 的新版本强制要求进入官方开发者认证白名单（`trust-list.json`），每次发版（或申请作者永久信任 `"*"`）前需按官方指引提交工坊认证申请。
+2. **严禁触碰废弃能力与红线 API**：
+   - **零外部反射**：严禁 `reflection-external`（已标记废弃并将自 `2026-12-10` 起直接 `Refused=True`），不得对无命名空间第三方类型（如 `probablystolen.trainer`、`RealTimeClock`）使用 `AccessTools` / `Type.GetType` 反射打补丁；这类模组继续通过只读官方数据通道与 `DseCecil` 静态 IL 探测接入。
+   - 不得触碰 `[ModRestricted]` API：`ModLoader.ApproveAndEnable`、`SetModEnabled`、`ReorderMods`、`SetDeveloperMode`、`ForgetMod`、`ModTrust`、`ModWorkshop.Unsubscribe`、`Process.Start`、`Application.OpenURL`、`SaveFiles.*`、`Patch DirectoryMaster.Item`。
+   - **禁止打包 `DseCecil.dll`**：`.csproj` 对 `DseCecil.dll` 固定设 `<Private>false</Private>`，运行时复用游戏 `Managed\DseCecil.dll`。
 
 ---
 
@@ -94,7 +96,23 @@
 
 ---
 
-## 五、四端文案对齐清单
+## 五、版本号规范与四端文案对齐清单
+
+### 1. 三段式版本号命名规则（`Major.Minor.Patch`）
+
+本模组统一采用三段式语义化版本号 **`主版本.次版本.修订号`**（例如 `1.4.3`、`1.4.4`）：
+- `manifest.xml` 的 `<ModVersion>` 写纯数字格式（如 `1.4.4`）；
+- `README.md` 更新日志与 Git Tag 加 `v` 前缀（如 `v1.4.4`）。
+
+| 版本段 | 触发条件（何时递增） | 归零规则 | 本模组示例 |
+|---|---|---|---|
+| **主版本（Major / 大版本）**<br>`X.0.0` | **不向下兼容的破坏性变更或推翻级重构**：<br>1. 变更持久化数据键或数据结构且不再兼容旧配置（如调整 `combos.v1` / `forced_hotkeys.v1` 存储结构导致旧配置失效）；<br>2. 底层架构或核心交互模式推翻重做、跨世代重构。 | 次版本、修订号归零 | `1.4.4` → `2.0.0` |
+| **次版本（Minor / 中/小版本）**<br>`X.Y.0` | **向下兼容地新增重要功能或特性模块**：<br>1. 新增独立核心功能或主要子视图（如新增整合中心、组合键体系、全链路性能重构等）；<br>2. 对现有体验做较大幅度扩展，但不破坏已有玩家配置。 | 修订号归零 | `1.4.4` → `1.5.0` |
+| **修订号（Patch / 补丁版本）**<br>`X.Y.Z` | **向下兼容的 Bug 修复、局部完善与适配微调**：<br>1. 修复已知崩溃、UI 排版、搜索误命中或按键冲突判重问题；<br>2. 局部功能完善、性能优化微调、新增少量第三方模组适配；<br>3. 仅适配新游戏版本（更新 `<GameVersions>`）或补充双语文案。 | 不影响前两位 | `1.4.3` → `1.4.4` |
+
+> **发布提示**：每次发版必须确保 `<ModVersion>` 严格递增；若本次更新引入了新的 `<Capabilities>` 声明，玩家客户端会触发重新「审核并启用」，建议在四端说明中写明权限用途。
+
+### 2. 四端文案对齐清单
 
 每次发布新版本前，确保以下四处版本号与功能边界描述一致：
 

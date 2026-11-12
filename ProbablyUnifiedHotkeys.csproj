@@ -23,6 +23,10 @@
       <HintPath>$(GameDir)\Probably Stolen_Data\Managed\0Harmony.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="DseCecil">
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\DseCecil.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine">
       <HintPath>$(GameDir)\Probably Stolen_Data\Managed\UnityEngine.dll</HintPath>
       <Private>false</Private>
