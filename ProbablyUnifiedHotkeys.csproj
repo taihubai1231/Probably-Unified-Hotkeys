@@ -6,6 +6,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>ProbablyUnifiedHotkeys</AssemblyName>
     <RootNamespace>ProbablyUnifiedHotkeys</RootNamespace>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tools\**;docs\**</DefaultItemExcludes>
     <GameDir Condition="'$(GameDir)' == '' and Exists('..\..\Probably Stolen_Data\Managed\Assembly-CSharp.dll')">..\..</GameDir>
     <GameDir Condition="'$(GameDir)' == '' and '$(PROBABLY_STOLEN_DIR)' != ''">$(PROBABLY_STOLEN_DIR)</GameDir>
     <GameDir Condition="'$(GameDir)' == ''">E:\Program Files (x86)\steam\steamapps\common\Probably Stolen</GameDir>

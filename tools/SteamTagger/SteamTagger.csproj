@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <GameDir Condition="'$(GameDir)' == '' and '$(PROBABLY_STOLEN_DIR)' != ''">$(PROBABLY_STOLEN_DIR)</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">E:\Program Files (x86)\steam\steamapps\common\Probably Stolen</GameDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="com.rlabrecque.steamworks.net">
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\com.rlabrecque.steamworks.net.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameDir)\Probably Stolen_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="CopyNativeSteam" AfterTargets="Build">
+    <Copy SourceFiles="$(GameDir)\Probably Stolen_Data\Plugins\x86_64\steam_api64.dll" DestinationFolder="$(OutDir)" />
+    <WriteLinesToFile File="$(OutDir)steam_appid.txt" Lines="4348910" Overwrite="true" />
+  </Target>
+</Project>
