@@ -29,7 +29,7 @@
 
 | 文件 | 行数 | 职责说明 |
 |---|---:|---|
-| `UnifiedOptionUI.cs` | 5,020 | 「选项」整页 UI 重构：搜索栏/展示模式切换、折叠卡、拼音 A-Z 排序、「仅看冲突」、只读探测行、置顶反馈+分类筛选的「模组排查」（含忽略非按键/复制汇总）与双语渲染 |
+| `UnifiedOptionUI.cs` | 5,079 | 「选项」整页 UI 重构：顶部统一操作行（展示/排查筛选选项、仅看冲突、模组排查、全部展开）、折叠卡、拼音 A-Z 排序、只读探测行、美化置顶概况栏的「模组排查」与双语渲染 |
 | `ModOptionScanner.cs` | 1,743 | 扫描原版 `GameOptionRegistry`、各模组 `ModConfig`（含非标准命名实例）与回调归属，并归并 `DllKeyProbe` 只读探测结果 |
 | `ModEntry.cs` | 1,312 | `IMod` 入口（`Init` / `OnEnable` / `OnDisable`）、退出钩子、核心 Harmony 补丁、`WorkshopModPatcher` 运行时适配 |
 | `PerformancePatches.cs` | 1,148 | 4 项流畅度优化补丁（选项开窗异步/离线装配、字号缓存、改造件列表行复用、退出流程精简） |

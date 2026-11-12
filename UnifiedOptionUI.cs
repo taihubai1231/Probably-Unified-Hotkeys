@@ -197,6 +197,7 @@ namespace ProbablyUnifiedHotkeys
         private static CustomUIElement? _expandToggleBtn;
         private static CustomUIElement? _diagnosticToggleBtn;
         private static CustomUIElement? _normalDisplayDropdown;
+        private static CustomUIElement? _diagnosticFilterDropdown;
         private static TMP_InputField? _searchInputField;
 
         // 缓存 ButtonTextColor 私有色彩字段（OnPointerEnter/Exit/Up/Disable 会使用 normal/highlight/pressed 覆写 text.color）
@@ -309,6 +310,7 @@ namespace ProbablyUnifiedHotkeys
             _expandToggleBtn = null;
             _diagnosticToggleBtn = null;
             _normalDisplayDropdown = null;
+            _diagnosticFilterDropdown = null;
             _capturingEntry = null;
             _capturingStartedFrame = -1;
             _restoreCloseOnEscapeFrame = -1;
@@ -392,6 +394,7 @@ namespace ProbablyUnifiedHotkeys
                 _expandToggleBtn = null;
                 _diagnosticToggleBtn = null;
                 _normalDisplayDropdown = null;
+                _diagnosticFilterDropdown = null;
                 ClearPendingScroll();
                 _capturingEntry = null;
                 _restoreCloseOnEscapeFrame = -1;
@@ -457,26 +460,11 @@ namespace ProbablyUnifiedHotkeys
 
             builder.AddSpace(6f);
 
-            // 第二行：仅看冲突按钮 + 全部展开/收起按钮 + 模组排查按钮 + 快捷提示（单行紧凑排版，避免右侧提示折行拉高表头）
+            // 第二行：选项(显示模式/排查分类) + 仅看冲突 + 模组排查 + 全部展开/收起 + 快捷提示（紧凑单行排版）
             builder.BeginRow(6f, TextAnchor.MiddleCenter);
             builder.AddSpace(10f);
 
-            string conflictBtnText = _conflicts.Count > 0
-                ? I18n.Format("[!] 仅看冲突 ({0} 组)", "[!] Conflicts ({0})", _conflicts.Count)
-                : I18n.Get("[!] 仅看冲突", "[!] Conflicts");
-            builder.AddButton(conflictBtnText, ToggleConflictMode, "btn_conflict_toggle");
-            _conflictToggleBtn = builder.Last;
-
-            builder.AddButton(_allExpanded ? I18n.Get("全部收起", "Collapse All") : I18n.Get("全部展开", "Expand All"), ToggleExpandAll, "btn_expand_all");
-            _expandToggleBtn = builder.Last;
-
-            int diagCount = _scanReport?.AttentionModCount ?? 0;
-            string diagBtnText = diagCount > 0
-                ? I18n.Format("模组排查 ({0})", "Diagnostics ({0})", diagCount)
-                : I18n.Get("模组排查", "Diagnostics");
-            builder.AddButton(diagBtnText, ToggleDiagnosticMode, "btn_diagnostic_toggle");
-            _diagnosticToggleBtn = builder.Last;
-
+            // 1. 完整设置展示筛选下拉选项 (显示: 全部 / 仅展示按键 / 仅展示常规)
             builder.AddDropdown(
                 new List<string>
                 {
@@ -489,9 +477,44 @@ namespace ProbablyUnifiedHotkeys
                 "unified_display_filter"
             );
             _normalDisplayDropdown = builder.Last;
-            _normalDisplayDropdown.SetFixedWidth(138f);
-            _normalDisplayDropdown.SetPreferredSize(138f, 38f);
+            _normalDisplayDropdown.SetFixedWidth(150f);
+            _normalDisplayDropdown.SetPreferredSize(150f, 38f);
             I18n.ApplyFontToDropdown(_normalDisplayDropdown, forceCjkCapableList: I18n.IsChinese);
+
+            // 1-alt. 模组排查分类筛选下拉选项 (全部 / 探测热键 / 疑难待确认 / 未配官方 / 正常纳管 / 纯资源)
+            builder.AddDropdown(
+                BuildDiagnosticDropdownOptions(),
+                (int)_diagnosticFilterMode,
+                OnDiagnosticFilterModeChanged,
+                "unified_diagnostic_filter"
+            );
+            _diagnosticFilterDropdown = builder.Last;
+            _diagnosticFilterDropdown.SetFixedWidth(150f);
+            _diagnosticFilterDropdown.SetPreferredSize(150f, 38f);
+            I18n.ApplyFontToDropdown(_diagnosticFilterDropdown, forceCjkCapableList: I18n.IsChinese);
+            if (_diagnosticFilterDropdown?.root != null)
+            {
+                _diagnosticFilterDropdown.root.SetActive(false);
+            }
+
+            // 2. 仅看冲突按钮
+            string conflictBtnText = _conflicts.Count > 0
+                ? I18n.Format("[!] 仅看冲突 ({0} 组)", "[!] Conflicts ({0})", _conflicts.Count)
+                : I18n.Get("[!] 仅看冲突", "[!] Conflicts");
+            builder.AddButton(conflictBtnText, ToggleConflictMode, "btn_conflict_toggle");
+            _conflictToggleBtn = builder.Last;
+
+            // 3. 模组排查按钮
+            int diagCount = _scanReport?.AttentionModCount ?? 0;
+            string diagBtnText = diagCount > 0
+                ? I18n.Format("模组排查 ({0})", "Diagnostics ({0})", diagCount)
+                : I18n.Get("模组排查", "Diagnostics");
+            builder.AddButton(diagBtnText, ToggleDiagnosticMode, "btn_diagnostic_toggle");
+            _diagnosticToggleBtn = builder.Last;
+
+            // 4. 全部展开 / 全部收起按钮
+            builder.AddButton(_allExpanded ? I18n.Get("全部收起", "Collapse All") : I18n.Get("全部展开", "Expand All"), ToggleExpandAll, "btn_expand_all");
+            _expandToggleBtn = builder.Last;
 
             // 优先抓取原生 ButtonTextColor 默认字色、高亮色、按下色、激活字体与原始字号（每个层级 menu/meta 仅需首开抓取一次）
             if (!hasThemeForLayer)
@@ -515,8 +538,8 @@ namespace ProbablyUnifiedHotkeys
             }
 
             StyleActionButton(_conflictToggleBtn, 168f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
-            StyleActionButton(_expandToggleBtn, 112f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
             StyleActionButton(_diagnosticToggleBtn, 140f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_expandToggleBtn, 112f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
 
             UpdateConflictToggleButtonAppearance();
             UpdateDiagnosticToggleButtonAppearance();
@@ -2585,6 +2608,14 @@ namespace ProbablyUnifiedHotkeys
             }
             if (_diagnosticContentRoot != null) _diagnosticContentRoot.SetActive(IsDiagnosticViewActive);
             if (_normalDisplayDropdown?.root != null) _normalDisplayDropdown.root.SetActive(showNormal);
+            if (_diagnosticFilterDropdown?.root != null)
+            {
+                _diagnosticFilterDropdown.root.SetActive(IsDiagnosticViewActive);
+                if (IsDiagnosticViewActive)
+                {
+                    RefreshDiagnosticFilterDropdown();
+                }
+            }
 
             UpdateConflictToggleButtonAppearance();
             UpdateDiagnosticToggleButtonAppearance();
@@ -2695,6 +2726,8 @@ namespace ProbablyUnifiedHotkeys
                 return;
             }
 
+            RefreshDiagnosticFilterDropdown();
+
             var stickyRt = _diagnosticStickyHeaderRoot.GetComponent<RectTransform>();
             if (stickyRt == null) return;
 
@@ -2802,60 +2835,95 @@ namespace ProbablyUnifiedHotkeys
             builder.End();
         }
 
-        private static void AddDiagnosticFilterTabButton(
-            CustomUIBuilder builder,
-            DiagnosticFilterMode mode,
-            string title,
-            int count,
-            float width)
+        private static List<string> BuildDiagnosticDropdownOptions()
         {
-            bool isActive = _diagnosticFilterMode == mode;
-            builder.AddButton($"{title} ({count})", () =>
+            var report = _scanReport ?? new ModScanReport();
+            int probedModCount = report.Mods.Count(m => m.ProbedHotkeys.Count > 0);
+            int managedOnlyCount = report.Mods.Count(m => m.Status == ModDiagnosticStatus.Managed);
+
+            return new List<string>
             {
-                if (_diagnosticFilterMode == mode) return;
-                _diagnosticFilterMode = mode;
+                I18n.Format("全部 ({0})", "All ({0})", report.Mods.Count),
+                I18n.Format("探测热键 ({0})", "Probed ({0})", probedModCount),
+                I18n.Format("疑难待确认 ({0})", "Needs Review ({0})", report.HasCandidatesModCount),
+                I18n.Format("未配官方 ({0})", "No Config ({0})", report.UnmanagedCodeModCount),
+                I18n.Format("正常纳管 ({0})", "Managed ({0})", managedOnlyCount),
+                I18n.Format("纯资源 ({0})", "Asset Only ({0})", report.AssetOnlyModCount)
+            };
+        }
+
+        private static void RefreshDiagnosticFilterDropdown()
+        {
+            if (_diagnosticFilterDropdown?.dropdown == null) return;
+            var options = BuildDiagnosticDropdownOptions();
+            var dd = _diagnosticFilterDropdown.dropdown;
+            dd.ClearOptions();
+            dd.AddOptions(options);
+            int targetVal = Mathf.Clamp((int)_diagnosticFilterMode, 0, options.Count - 1);
+            dd.SetValueWithoutNotify(targetVal);
+            dd.RefreshShownValue();
+            I18n.ApplyFontToDropdown(_diagnosticFilterDropdown, forceCjkCapableList: I18n.IsChinese);
+        }
+
+        private static void OnDiagnosticFilterModeChanged(int index)
+        {
+            if (index >= 0 && index <= (int)DiagnosticFilterMode.AssetOnly)
+            {
+                _diagnosticFilterMode = (DiagnosticFilterMode)index;
                 _diagnosticViewDirty = true;
-                RefreshDiagnosticStickyHeader();
                 RebuildDiagnosticView();
                 ResetScrollToTop();
-            }, null);
-            StyleActionButton(builder.Last, width, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
-            if (isActive)
-            {
-                ApplyButtonTextTheme(builder.Last, ConflictDetector.ConflictColor);
-            }
-            else
-            {
-                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+                RefreshExpandAllButtonState();
             }
         }
 
         private static void BuildDiagnosticStickyHeader(CustomUIBuilder builder)
         {
             var report = _scanReport ?? new ModScanReport();
-            int probedModCount = report.Mods.Count(m => m.ProbedHotkeys.Count > 0);
-            int managedOnlyCount = report.Mods.Count(m => m.Status == ModDiagnosticStatus.Managed);
 
             builder.AddSpace(4f);
+
+            // 第一行：左侧概况标题+指标标签 与 右侧操作按钮水平居中对齐，消除原先高低不一的粗糙感
             builder.BeginRow(6f, TextAnchor.MiddleCenter);
-            AddFixedHorizontalSpace(builder, 8f);
-            string summaryHeader = I18n.Format(
-                "<b>已启用模组排查</b> <color=#99a3b0>(共 {0} 个 | 正常纳管 {1} | </color>" +
-                "<color=#ffd27d>待排查 {2}</color><color=#99a3b0> | 纯资源 {3} | </color><color=#d8b4fe>探测热键 {4}</color><color=#99a3b0>)</color>",
-                "<b>Enabled Mod Diagnostics</b> <color=#99a3b0>({0} total | Managed {1} | </color>" +
-                "<color=#ffd27d>Attention {2}</color><color=#99a3b0> | Assets {3} | </color><color=#d8b4fe>Probed {4}</color><color=#99a3b0>)</color>",
-                report.EnabledModCount,
-                report.ManagedModCount,
-                report.AttentionModCount,
-                report.AssetOnlyModCount,
-                report.ProbedHotkeysCount
-            );
-            builder.AddHeader(summaryHeader, null);
-            I18n.ApplyFontIfRuntime(builder.Last?.text, summaryHeader);
+            AddFixedHorizontalSpace(builder, 10f);
+
+            string titleText = I18n.Get("<b><size=17>模组排查概况</size></b>", "<b><size=17>Diagnostics Overview</size></b>");
+            string statsText = report.AttentionModCount > 0
+                ? I18n.Format(
+                    "  <color=#99a3b0>共 {0} 个模组</color>  <color=#ffd27d><b>· {1} 个待排查</b></color>  <color=#d8b4fe><b>· {2} 个探测键</b></color>",
+                    "  <color=#99a3b0>{0} mods</color>  <color=#ffd27d><b>· {1} need review</b></color>  <color=#d8b4fe><b>· {2} probed keys</b></color>",
+                    report.EnabledModCount, report.AttentionModCount, report.ProbedHotkeysCount)
+                : I18n.Format(
+                    "  <color=#99a3b0>共 {0} 个模组</color>  <color=#7fe0a0><b>· 全部已纳管</b></color>  <color=#d8b4fe><b>· {1} 个探测键</b></color>",
+                    "  <color=#99a3b0>{0} mods</color>  <color=#7fe0a0><b>· All managed</b></color>  <color=#d8b4fe><b>· {1} probed keys</b></color>",
+                    report.EnabledModCount, report.ProbedHotkeysCount);
+
+            string summaryLine = titleText + statsText;
+            builder.AddLabel(summaryLine, "label_diagnostic_summary");
+            var summaryEl = builder.Last;
+            if (summaryEl != null)
+            {
+                I18n.ApplyFontIfRuntime(summaryEl.text, summaryLine);
+                if (summaryEl.root != null)
+                {
+                    var le = summaryEl.root.GetComponent<LayoutElement>() ?? summaryEl.root.AddComponent<LayoutElement>();
+                    le.minWidth = 0f;
+                    le.preferredHeight = 34f;
+                    le.flexibleWidth = 1f;
+                    le.flexibleHeight = 0f;
+                }
+                if (summaryEl.text != null)
+                {
+                    summaryEl.text.alignment = TextAlignmentOptions.MidlineLeft;
+                    summaryEl.text.enableWordWrapping = false;
+                    summaryEl.text.overflowMode = TextOverflowModes.Ellipsis;
+                }
+            }
+
             builder.AddFlexibleSpace();
 
             builder.AddButton(I18n.Get("复制排查汇总", "Copy Summary"), CopyFullDiagnosticSummary, null);
-            StyleActionButton(builder.Last, 134f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+            StyleActionButton(builder.Last, 126f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
             builder.AddButton(I18n.Get("强制全部重扫", "Rescan All"), () =>
@@ -2865,41 +2933,32 @@ namespace ProbablyUnifiedHotkeys
                     targetModId: null,
                     statusMessage: null);
             }, null);
-            StyleActionButton(builder.Last, 134f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+            StyleActionButton(builder.Last, 126f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
             builder.AddButton(I18n.Get("返回设置", "Back"), ToggleDiagnosticMode, null);
-            StyleActionButton(builder.Last, 102f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+            StyleActionButton(builder.Last, 96f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
-            AddFixedHorizontalSpace(builder, 8f);
+            AddFixedHorizontalSpace(builder, 10f);
             builder.End();
 
-            builder.BeginRow(5f, TextAnchor.MiddleLeft);
-            AddFixedHorizontalSpace(builder, 8f);
-            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.All, I18n.Get("全部", "All"), report.Mods.Count, 88f);
-            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.ProbedHotkeysOnly, I18n.Get("探测热键", "Probed Keys"), probedModCount, 122f);
-            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.HasCandidatesOnly, I18n.Get("疑难待确认", "Needs Review"), report.HasCandidatesModCount, 122f);
-            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.UnmanagedOnly, I18n.Get("未配官方", "No Config"), report.UnmanagedCodeModCount, 114f);
-            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.ManagedOnly, I18n.Get("正常纳管", "Managed"), managedOnlyCount, 114f);
-            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.AssetOnly, I18n.Get("纯资源", "Asset Only"), report.AssetOnlyModCount, 102f);
-            builder.AddFlexibleSpace();
-            AddFixedHorizontalSpace(builder, 8f);
-            builder.End();
-
+            // 第二行：精简辅助说明（原先的6个分类按钮已全部收束至最上方置顶栏的下拉选项中）
             AddWrappedDiagnosticLabel(
                 builder,
-                8f,
+                10f,
                 I18n.Get(
-                    "<color=#99a3b0>扫描官方 ModConfig / 注册表，并对无公开热键的代码模组执行静态只读 IL / 本地配置探测。疑难项可「设为按键绑定」或「忽略(非按键)」；顶部搜索栏支持实时过滤本页。</color>",
-                    "<color=#99a3b0>Scans official ModConfig/Registry plus read-only static IL & config probing for code mods without public hotkeys. Promote or ignore raw candidates below; top search filters live.</color>"
+                    "<color=#8c96a3><size=13>扫描官方 ModConfig / 注册表并执行静态只读探测。疑难项可设为按键绑定或忽略；上方下拉框可快速按分类筛选。</size></color>",
+                    "<color=#8c96a3><size=13>Scans official ModConfig/Registry and read-only static probe. Promote or ignore candidates; use top dropdown to filter by category.</size></color>"
                 ));
 
+            // 第三行：状态通知（如果有）
             if (!string.IsNullOrEmpty(_diagnosticStatusMessage))
             {
-                AddWrappedDiagnosticLabel(builder, 8f, $"<color=#7fe0a0><b>{_diagnosticStatusMessage}</b></color>");
+                AddWrappedDiagnosticLabel(builder, 10f, $"<color=#7fe0a0><b>{_diagnosticStatusMessage}</b></color>");
             }
 
+            builder.AddSpace(2f);
             builder.AddSeparator(null, 2);
         }
 
