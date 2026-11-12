@@ -254,6 +254,13 @@ namespace ProbablyUnifiedHotkeys
             if (string.IsNullOrEmpty(query)) return true;
             if (string.IsNullOrEmpty(targetText)) return false;
 
+            if (!ModFeatureConfig.EnablePinyinSearch)
+            {
+                string cleanQuery = query.Trim();
+                if (cleanQuery.Length == 0) return true;
+                return targetText.IndexOf(cleanQuery, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
             string normQuery = ToSimplified(query.Trim()).ToLowerInvariant();
             if (normQuery.Length == 0) return true;
 

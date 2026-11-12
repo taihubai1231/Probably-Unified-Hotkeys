@@ -25,20 +25,21 @@
 
 ## 二、代码模块与 Harmony 补丁清单
 
-### 1. 核心源码模块（13 个 `.cs` + 嵌入资源 `pinyin.bin`）
+### 1. 核心源码模块（14 个 `.cs` + 嵌入资源 `pinyin.bin`）
 
 | 文件 | 行数 | 职责说明 |
 |---|---:|---|
-| `UnifiedOptionUI.cs` | 5,079 | 「选项」整页 UI 重构：顶部统一操作行（展示/排查筛选选项、仅看冲突、模组排查、全部展开）、折叠卡、拼音 A-Z 排序、只读探测行、美化置顶概况栏的「模组排查」与双语渲染 |
-| `ModOptionScanner.cs` | 1,743 | 扫描原版 `GameOptionRegistry`、各模组 `ModConfig`（含非标准命名实例）与回调归属，并归并 `DllKeyProbe` 只读探测结果 |
-| `ModEntry.cs` | 1,312 | `IMod` 入口（`Init` / `OnEnable` / `OnDisable`）、退出钩子、核心 Harmony 补丁、`WorkshopModPatcher` 运行时适配 |
-| `PerformancePatches.cs` | 1,148 | 4 项流畅度优化补丁（选项开窗异步/离线装配、字号缓存、改造件列表行复用、退出流程精简） |
+| `UnifiedOptionUI.cs` | 5,137 | 「选项」整页 UI 重构：顶部统一操作行（展示/排查筛选选项、仅看冲突、模组排查、全部展开）、折叠卡、拼音 A-Z 排序、只读探测行、美化置顶概况栏的「模组排查」与双语渲染 |
+| `ModOptionScanner.cs` | 1,749 | 扫描原版 `GameOptionRegistry`、各模组 `ModConfig`（含非标准命名实例）与回调归属，并按模块开关受控归并 `DllKeyProbe` 只读探测结果 |
+| `ModEntry.cs` | 1,313 | `IMod` 入口（`Init` / `OnEnable` / `OnDisable`）、退出钩子、核心 Harmony 补丁、`WorkshopModPatcher` 运行时适配 |
+| `PerformancePatches.cs` | 1,166 | 4 项流畅度优化补丁（选项开窗异步/离线装配、字号缓存、改造件列表行复用、退出流程精简）与模块化动态开关受控逻辑 |
 | `DllKeyProbe.cs` | 914 | 基于官方 `DseCecil.dll` 与 `ModData`/模组配置文件的只读热键探测器与增量指纹缓存（`dll_probe_cache_v1.txt`） |
-| `ComboKeyStore.cs` | 696 | 组合键（Shift/Ctrl/Alt + 主键/鼠标、Mouse3~Mouse6）、单键修饰门控、「无」空键、强制强转与忽略非按键列表 |
-| `KnownModAdapters.cs` | 688 | 第三方模组专项适配与强转桥接 |
+| `ComboKeyStore.cs` | 697 | 组合键（Shift/Ctrl/Alt + 主键/鼠标、Mouse3~Mouse6）、单键修饰门控（受控于防误触开关）、「无」空键、强制强转与忽略非按键列表 |
+| `KnownModAdapters.cs` | 688 | 第三方模组专项适配与强转桥接（受控于修改器桥接开关） |
 | `ModModel.cs` | 417 | 统一数据模型、视图筛选枚举（`NormalDisplayMode` / `DiagnosticFilterMode`）与快照/默认值/只读探测状态管理 |
 | `I18n.cs` | 292 | 中英双语词典、字体回退应用（`ApplyFontIfRuntime` / `ApplyFontToDropdown`）与语言选项接口 |
-| `PinyinEngine.cs` | 275 | 基于嵌入资源 `pinyin.bin` 的离线汉字转拼音/首字母检索引擎 |
+| `PinyinEngine.cs` | 282 | 基于嵌入资源 `pinyin.bin` 的离线汉字转拼音/首字母检索引擎（受控于拼音检索开关） |
+| `ModFeatureConfig.cs` | 193 | 模组功能模块化配置中心：通过官方 `ModConfig` 注册 6 大功能开关（静态探测、流畅度优化、秒退、拼音、防误触、修改器桥接） |
 | `ModCatalogCache.cs` | 159 | 主菜单闲置预热与配置目录缓存 |
 | `ConflictDetector.cs` | 101 | 精准按键冲突分组（跳过「无」空键，可改键与只读探测键联动冲突排查） |
 | `TradSimpTable.cs` | 73 | 繁简中文互转搜索对照表 |

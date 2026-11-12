@@ -551,6 +551,7 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool ShouldSuppressPlainKey(KeyCode primaryKey)
         {
+            if (!ModFeatureConfig.EnableKeySuppression) return false;
             if (primaryKey == KeyCode.None || ActiveCombosByKey.Count == 0) return false;
             if (!ActiveCombosByKey.TryGetValue(primaryKey, out var list)) return false;
 

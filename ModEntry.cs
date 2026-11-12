@@ -32,6 +32,7 @@ namespace ProbablyUnifiedHotkeys
 
             ComboKeyStore.EnsureLoaded();
             I18n.EnsureRegistered();
+            ModFeatureConfig.EnsureRegistered();
             workshopHarmony = new Harmony("probably_unified_hotkeys.workshop");
             WorkshopModPatcher.Apply(workshopHarmony, log);
         }

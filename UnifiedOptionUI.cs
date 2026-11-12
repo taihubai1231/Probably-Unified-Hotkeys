@@ -123,6 +123,22 @@ namespace ProbablyUnifiedHotkeys
             return list.ToArray();
         }
 
+        static UnifiedOptionUI()
+        {
+            ModFeatureConfig.FeatureConfigChanged += OnFeatureConfigChanged;
+        }
+
+        private static void OnFeatureConfigChanged()
+        {
+            if (_currentWindow != null && _currentWindow.IsAlive && _currentWindow.IsVisible)
+            {
+                PerformFullRescanAndRefreshInPlace(
+                    forceInvalidateCache: true,
+                    targetModId: null,
+                    statusMessage: I18n.Get("已更新功能模块设置", "Updated modular feature settings"));
+            }
+        }
+
         // 窗口开启后后台静默预建游标：按帧耗时预算(<=3.5ms)在折叠态(inactive)容器内批量静默预建，消除"全部展开"首帧卡顿
         private static int _openedFrameCount = -1;
         private static int _prebuildModIndex = 0;
@@ -432,8 +448,8 @@ namespace ProbablyUnifiedHotkeys
                 "unified_search_scope"
             );
             var scopeEl = builder.Last;
-            scopeEl.SetFixedWidth(162f);
-            scopeEl.SetPreferredSize(162f, 36f);
+            scopeEl.SetFixedWidth(158f);
+            scopeEl.SetPreferredSize(158f, 36f);
             I18n.ApplyFontToDropdown(scopeEl, forceCjkCapableList: I18n.IsChinese);
 
             builder.AddInput(
@@ -477,8 +493,8 @@ namespace ProbablyUnifiedHotkeys
                 "unified_display_filter"
             );
             _normalDisplayDropdown = builder.Last;
-            _normalDisplayDropdown.SetFixedWidth(150f);
-            _normalDisplayDropdown.SetPreferredSize(150f, 38f);
+            _normalDisplayDropdown.SetFixedWidth(158f);
+            _normalDisplayDropdown.SetPreferredSize(158f, 36f);
             I18n.ApplyFontToDropdown(_normalDisplayDropdown, forceCjkCapableList: I18n.IsChinese);
 
             // 1-alt. 模组排查分类筛选下拉选项 (全部 / 探测热键 / 疑难待确认 / 未配官方 / 正常纳管 / 纯资源)
@@ -489,8 +505,8 @@ namespace ProbablyUnifiedHotkeys
                 "unified_diagnostic_filter"
             );
             _diagnosticFilterDropdown = builder.Last;
-            _diagnosticFilterDropdown.SetFixedWidth(150f);
-            _diagnosticFilterDropdown.SetPreferredSize(150f, 38f);
+            _diagnosticFilterDropdown.SetFixedWidth(158f);
+            _diagnosticFilterDropdown.SetPreferredSize(158f, 36f);
             I18n.ApplyFontToDropdown(_diagnosticFilterDropdown, forceCjkCapableList: I18n.IsChinese);
             if (_diagnosticFilterDropdown?.root != null)
             {
@@ -537,9 +553,9 @@ namespace ProbablyUnifiedHotkeys
                 windowRoot.SetActive(false);
             }
 
-            StyleActionButton(_conflictToggleBtn, 168f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
-            StyleActionButton(_diagnosticToggleBtn, 140f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
-            StyleActionButton(_expandToggleBtn, 112f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_conflictToggleBtn, 168f, 36f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_diagnosticToggleBtn, 140f, 36f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_expandToggleBtn, 112f, 36f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
 
             UpdateConflictToggleButtonAppearance();
             UpdateDiagnosticToggleButtonAppearance();
@@ -602,6 +618,10 @@ namespace ProbablyUnifiedHotkeys
             if (_scrollRect == null && windowRoot != null)
             {
                 _scrollRect = windowRoot.GetComponentInChildren<ScrollRect>(true);
+            }
+            if (_scrollRect != null)
+            {
+                _scrollRect.scrollSensitivity = 60f;
             }
 
             // --- A. 常规完整设置视图容器 ---
@@ -2657,6 +2677,10 @@ namespace ProbablyUnifiedHotkeys
                 IsConflictViewActive = false;
             }
             IsDiagnosticViewActive = nextDiagnostic;
+            if (_scrollRect != null)
+            {
+                _scrollRect.scrollSensitivity = 60f;
+            }
 
             SyncViewContainersAndToggleButtons();
 
@@ -2835,21 +2859,39 @@ namespace ProbablyUnifiedHotkeys
             builder.End();
         }
 
+        private static readonly List<DiagnosticFilterMode> _activeDiagnosticFilterModes = new List<DiagnosticFilterMode>(6);
+
         private static List<string> BuildDiagnosticDropdownOptions()
         {
             var report = _scanReport ?? new ModScanReport();
             int probedModCount = report.Mods.Count(m => m.ProbedHotkeys.Count > 0);
             int managedOnlyCount = report.Mods.Count(m => m.Status == ModDiagnosticStatus.Managed);
 
-            return new List<string>
+            _activeDiagnosticFilterModes.Clear();
+            var list = new List<string>(6);
+
+            _activeDiagnosticFilterModes.Add(DiagnosticFilterMode.All);
+            list.Add(I18n.Format("全部 ({0})", "All ({0})", report.Mods.Count));
+
+            if (ModFeatureConfig.EnableDllProbe)
             {
-                I18n.Format("全部 ({0})", "All ({0})", report.Mods.Count),
-                I18n.Format("探测热键 ({0})", "Probed ({0})", probedModCount),
-                I18n.Format("疑难待确认 ({0})", "Needs Review ({0})", report.HasCandidatesModCount),
-                I18n.Format("未配官方 ({0})", "No Config ({0})", report.UnmanagedCodeModCount),
-                I18n.Format("正常纳管 ({0})", "Managed ({0})", managedOnlyCount),
-                I18n.Format("纯资源 ({0})", "Asset Only ({0})", report.AssetOnlyModCount)
-            };
+                _activeDiagnosticFilterModes.Add(DiagnosticFilterMode.ProbedHotkeysOnly);
+                list.Add(I18n.Format("探测热键 ({0})", "Probed ({0})", probedModCount));
+            }
+
+            _activeDiagnosticFilterModes.Add(DiagnosticFilterMode.HasCandidatesOnly);
+            list.Add(I18n.Format("疑难待确认 ({0})", "Needs Review ({0})", report.HasCandidatesModCount));
+
+            _activeDiagnosticFilterModes.Add(DiagnosticFilterMode.UnmanagedOnly);
+            list.Add(I18n.Format("未配官方 ({0})", "No Config ({0})", report.UnmanagedCodeModCount));
+
+            _activeDiagnosticFilterModes.Add(DiagnosticFilterMode.ManagedOnly);
+            list.Add(I18n.Format("正常纳管 ({0})", "Managed ({0})", managedOnlyCount));
+
+            _activeDiagnosticFilterModes.Add(DiagnosticFilterMode.AssetOnly);
+            list.Add(I18n.Format("纯资源 ({0})", "Asset Only ({0})", report.AssetOnlyModCount));
+
+            return list;
         }
 
         private static void RefreshDiagnosticFilterDropdown()
@@ -2859,7 +2901,13 @@ namespace ProbablyUnifiedHotkeys
             var dd = _diagnosticFilterDropdown.dropdown;
             dd.ClearOptions();
             dd.AddOptions(options);
-            int targetVal = Mathf.Clamp((int)_diagnosticFilterMode, 0, options.Count - 1);
+
+            int targetVal = _activeDiagnosticFilterModes.IndexOf(_diagnosticFilterMode);
+            if (targetVal < 0)
+            {
+                _diagnosticFilterMode = DiagnosticFilterMode.All;
+                targetVal = 0;
+            }
             dd.SetValueWithoutNotify(targetVal);
             dd.RefreshShownValue();
             I18n.ApplyFontToDropdown(_diagnosticFilterDropdown, forceCjkCapableList: I18n.IsChinese);
@@ -2867,9 +2915,9 @@ namespace ProbablyUnifiedHotkeys
 
         private static void OnDiagnosticFilterModeChanged(int index)
         {
-            if (index >= 0 && index <= (int)DiagnosticFilterMode.AssetOnly)
+            if (index >= 0 && index < _activeDiagnosticFilterModes.Count)
             {
-                _diagnosticFilterMode = (DiagnosticFilterMode)index;
+                _diagnosticFilterMode = _activeDiagnosticFilterModes[index];
                 _diagnosticViewDirty = true;
                 RebuildDiagnosticView();
                 ResetScrollToTop();
@@ -2890,13 +2938,21 @@ namespace ProbablyUnifiedHotkeys
             string titleText = I18n.Get("<b><size=17>模组排查概况</size></b>", "<b><size=17>Diagnostics Overview</size></b>");
             string statsText = report.AttentionModCount > 0
                 ? I18n.Format(
-                    "  <color=#99a3b0>共 {0} 个模组</color>  <color=#ffd27d><b>· {1} 个待排查</b></color>  <color=#d8b4fe><b>· {2} 个探测键</b></color>",
-                    "  <color=#99a3b0>{0} mods</color>  <color=#ffd27d><b>· {1} need review</b></color>  <color=#d8b4fe><b>· {2} probed keys</b></color>",
-                    report.EnabledModCount, report.AttentionModCount, report.ProbedHotkeysCount)
+                    "  <color=#99a3b0>共 {0} 个模组</color>  <color=#ffd27d><b>· {1} 个待排查</b></color>",
+                    "  <color=#99a3b0>{0} mods</color>  <color=#ffd27d><b>· {1} need review</b></color>",
+                    report.EnabledModCount, report.AttentionModCount)
                 : I18n.Format(
-                    "  <color=#99a3b0>共 {0} 个模组</color>  <color=#7fe0a0><b>· 全部已纳管</b></color>  <color=#d8b4fe><b>· {1} 个探测键</b></color>",
-                    "  <color=#99a3b0>{0} mods</color>  <color=#7fe0a0><b>· All managed</b></color>  <color=#d8b4fe><b>· {1} probed keys</b></color>",
-                    report.EnabledModCount, report.ProbedHotkeysCount);
+                    "  <color=#99a3b0>共 {0} 个模组</color>  <color=#7fe0a0><b>· 全部已纳管</b></color>",
+                    "  <color=#99a3b0>{0} mods</color>  <color=#7fe0a0><b>· All managed</b></color>",
+                    report.EnabledModCount);
+
+            if (ModFeatureConfig.EnableDllProbe && report.ProbedHotkeysCount > 0)
+            {
+                statsText += I18n.Format(
+                    "  <color=#d8b4fe><b>· {0} 个探测键</b></color>",
+                    "  <color=#d8b4fe><b>· {0} probed keys</b></color>",
+                    report.ProbedHotkeysCount);
+            }
 
             string summaryLine = titleText + statsText;
             builder.AddLabel(summaryLine, "label_diagnostic_summary");
@@ -2909,14 +2965,14 @@ namespace ProbablyUnifiedHotkeys
                     var le = summaryEl.root.GetComponent<LayoutElement>() ?? summaryEl.root.AddComponent<LayoutElement>();
                     le.minWidth = 0f;
                     le.preferredHeight = 34f;
-                    le.flexibleWidth = 1f;
+                    le.flexibleWidth = 0f;
                     le.flexibleHeight = 0f;
                 }
                 if (summaryEl.text != null)
                 {
                     summaryEl.text.alignment = TextAlignmentOptions.MidlineLeft;
                     summaryEl.text.enableWordWrapping = false;
-                    summaryEl.text.overflowMode = TextOverflowModes.Ellipsis;
+                    summaryEl.text.overflowMode = TextOverflowModes.Overflow;
                 }
             }
 
@@ -2943,14 +2999,16 @@ namespace ProbablyUnifiedHotkeys
             AddFixedHorizontalSpace(builder, 10f);
             builder.End();
 
-            // 第二行：精简辅助说明（原先的6个分类按钮已全部收束至最上方置顶栏的下拉选项中）
-            AddWrappedDiagnosticLabel(
-                builder,
-                10f,
-                I18n.Get(
+            // 第二行：精简辅助说明（分类筛选已收束至最上方置顶栏的下拉选项中）
+            string helpDesc = ModFeatureConfig.EnableDllProbe
+                ? I18n.Get(
                     "<color=#8c96a3><size=13>扫描官方 ModConfig / 注册表并执行静态只读探测。疑难项可设为按键绑定或忽略；上方下拉框可快速按分类筛选。</size></color>",
-                    "<color=#8c96a3><size=13>Scans official ModConfig/Registry and read-only static probe. Promote or ignore candidates; use top dropdown to filter by category.</size></color>"
-                ));
+                    "<color=#8c96a3><size=13>Scans official ModConfig/Registry and read-only static probe. Promote or ignore candidates; use top dropdown to filter by category.</size></color>")
+                : I18n.Get(
+                    "<color=#8c96a3><size=13>扫描官方 ModConfig 与注册表设置项。疑难项可设为按键绑定或忽略；上方下拉框可快速按分类筛选。</size></color>",
+                    "<color=#8c96a3><size=13>Scans official ModConfig and Registry settings. Promote or ignore candidates; use top dropdown to filter by category.</size></color>");
+
+            AddWrappedDiagnosticLabel(builder, 10f, helpDesc);
 
             // 第三行：状态通知（如果有）
             if (!string.IsNullOrEmpty(_diagnosticStatusMessage))
@@ -3065,7 +3123,7 @@ namespace ProbablyUnifiedHotkeys
             switch (_diagnosticFilterMode)
             {
                 case DiagnosticFilterMode.ProbedHotkeysOnly:
-                    return item.ProbedHotkeys.Count > 0;
+                    return ModFeatureConfig.EnableDllProbe && item.ProbedHotkeys.Count > 0;
                 case DiagnosticFilterMode.HasCandidatesOnly:
                     return item.Status == ModDiagnosticStatus.HasCandidates;
                 case DiagnosticFilterMode.UnmanagedOnly:
@@ -3086,7 +3144,7 @@ namespace ProbablyUnifiedHotkeys
             string query = _searchQuery?.Trim() ?? string.Empty;
             bool hasQuery = query.Length > 0;
 
-            if (_diagnosticFilterMode == DiagnosticFilterMode.ProbedHotkeysOnly)
+            if (ModFeatureConfig.EnableDllProbe && _diagnosticFilterMode == DiagnosticFilterMode.ProbedHotkeysOnly)
             {
                 var probedItems = new List<ModDiagnosticItem>();
                 foreach (var item in report.Mods)
@@ -3259,7 +3317,7 @@ namespace ProbablyUnifiedHotkeys
                     "  <color=#9ec4ff>Keys:{0}</color> <color=#a8d8b9>Settings:{1}</color>",
                     item.ManagedHotkeyCount,
                     item.ManagedGeneralCount);
-                if (item.ProbedHotkeys.Count > 0)
+                if (ModFeatureConfig.EnableDllProbe && item.ProbedHotkeys.Count > 0)
                 {
                     statsPart += I18n.Format(
                         " <color=#d8b4fe>探测:{0}</color>",
@@ -3367,14 +3425,14 @@ namespace ProbablyUnifiedHotkeys
             {
                 string authorVer = string.IsNullOrEmpty(item.Author) ? item.Version : $"{item.Author} | v{item.Version}";
                 string meta = string.IsNullOrEmpty(authorVer) ? string.Empty : $"({authorVer}) ";
-                string subDesc = item.ProbedHotkeys.Count > 0
+                string subDesc = (ModFeatureConfig.EnableDllProbe && item.ProbedHotkeys.Count > 0)
                     ? I18n.Format(
                         "<color=#b0b9c4>{0}未检测到官方 ModConfig/注册表配置，但已通过静态只读探测识别 {1} 个疑似按键绑定（仅供只读冲突排查，无法直接代改原模组逻辑；可点「复制信息」反馈作者）。</color>",
                         "<color=#b0b9c4>{0}No official ModConfig/Registry found, but {1} read-only keybind(s) were probed for conflict checking (cannot overwrite hardcoded bindings; click \"Copy Info\" to share).</color>",
                         meta, item.ProbedHotkeys.Count)
                     : I18n.Format(
-                        "<color=#b0b9c4>{0}未检测到官方配置，且静态只读探测暂未发现明确的静态按键字段（可能为鼠标右键/HUD点击/动态绑定），可点「复制信息」反馈作者补充专项适配。</color>",
-                        "<color=#b0b9c4>{0}No official config found and static probing detected no explicit keybinds (may use HUD clicks or dynamic input). Click \"Copy Info\" to share details.</color>",
+                        "<color=#b0b9c4>{0}未检测到官方配置（可能为鼠标右键/HUD点击/自定义按键），可点「复制信息」反馈作者补充官方配置。</color>",
+                        "<color=#b0b9c4>{0}No official config found (may use HUD clicks or custom input). Click \"Copy Info\" to share details.</color>",
                         meta);
                 AddWrappedDiagnosticLabel(builder, 30f, subDesc);
             }
@@ -3413,7 +3471,7 @@ namespace ProbablyUnifiedHotkeys
                     BuildDiagnosticCandidateRow(builder, cand);
                 }
             }
-            if (isExpanded && item.ProbedHotkeys.Count > 0)
+            if (ModFeatureConfig.EnableDllProbe && isExpanded && item.ProbedHotkeys.Count > 0)
             {
                 foreach (var probed in item.ProbedHotkeys)
                 {

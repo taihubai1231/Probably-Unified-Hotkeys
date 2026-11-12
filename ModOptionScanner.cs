@@ -251,6 +251,7 @@ namespace ProbablyUnifiedHotkeys
 
             // 1. 优先扫描已加载模组的标准 ModConfig（含完整 BoxedDefault 默认值与取值范围）
             I18n.EnsureRegistered();
+            ModFeatureConfig.EnsureRegistered();
             List<LoadedMod>? loadedMods = null;
             try
             {
@@ -562,6 +563,11 @@ namespace ProbablyUnifiedHotkeys
             List<ModOptionGroup> groups)
         {
             var result = new Dictionary<string, List<ModHotkeyEntry>>(StringComparer.OrdinalIgnoreCase);
+            if (!ModFeatureConfig.EnableDllProbe)
+            {
+                return result;
+            }
+
             var groupById = new Dictionary<string, ModOptionGroup>(groups.Count, StringComparer.OrdinalIgnoreCase);
             foreach (var g in groups)
             {

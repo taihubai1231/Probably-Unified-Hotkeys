@@ -38,6 +38,10 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static void PrepareFastQuit()
         {
+            if (!ModFeatureConfig.EnableFastQuit)
+            {
+                return;
+            }
             if (_fastQuitPrepared)
             {
                 return;
@@ -89,6 +93,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static void Prefix()
         {
+            if (!ModFeatureConfig.EnableFastQuit) return;
             PerformancePatches.PrepareFastQuit();
         }
     }
@@ -101,6 +106,10 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool Prefix(EscapeUIManager __instance)
         {
+            if (!ModFeatureConfig.EnableFastQuit)
+            {
+                return true;
+            }
             if (__instance == null)
             {
                 return true;
@@ -144,6 +153,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static void Postfix()
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return;
             IdleWarmupRunner.Schedule();
         }
     }
@@ -902,6 +912,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance)
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return true;
             return !ModUIManagerPerfHelper.PopulateLayoutRowsPooled(__instance, invokeFollowups: true);
         }
     }
@@ -911,6 +922,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance)
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return true;
             return !ModUIManagerPerfHelper.RefreshRowIssuesFast(__instance);
         }
     }
@@ -920,6 +932,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(LoadedMod mod, ref string? __result)
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return true;
             if (ModUIManagerPerfHelper.TryComputeModIssueFast(mod, out string? fastIssue))
             {
                 __result = fastIssue;
@@ -934,6 +947,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance)
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return true;
             return !ModUIManagerPerfHelper.ApplyFilterToRowsDiff(__instance);
         }
     }
@@ -943,11 +957,13 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance, LoadedMod? mod)
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return true;
             return !ModUIManagerPerfHelper.ShouldSkipEmptyShowMod(__instance, mod);
         }
 
         public static void Postfix(ModUIManager __instance, LoadedMod? mod)
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return;
             ModUIManagerPerfHelper.RecordEmptyShowMod(__instance, mod);
         }
     }
@@ -979,11 +995,13 @@ namespace ProbablyUnifiedHotkeys
     {
         public static void Prefix()
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return;
             ConflictScannerPerfHelper.BeginModOpenPanel();
         }
 
         public static void Finalizer()
         {
+            if (!ModFeatureConfig.EnablePerformancePatches) return;
             ConflictScannerPerfHelper.EndModOpenPanel();
         }
     }
