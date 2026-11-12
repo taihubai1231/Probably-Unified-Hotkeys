@@ -133,6 +133,8 @@ namespace ProbablyUnifiedHotkeys
         private static ModScanReport _scanReport = new ModScanReport();
         private static string _searchQuery = string.Empty;
         private static SearchScope _searchScope = SearchScope.All;
+        private static NormalDisplayMode _normalDisplayMode = NormalDisplayMode.All;
+        private static DiagnosticFilterMode _diagnosticFilterMode = DiagnosticFilterMode.All;
         private static bool _allExpanded = false;
         private static bool _wasSearchNonEmpty = false;
         private static bool _diagnosticViewDirty = true;
@@ -194,6 +196,7 @@ namespace ProbablyUnifiedHotkeys
         private static CustomUIElement? _conflictToggleBtn;
         private static CustomUIElement? _expandToggleBtn;
         private static CustomUIElement? _diagnosticToggleBtn;
+        private static CustomUIElement? _normalDisplayDropdown;
         private static TMP_InputField? _searchInputField;
 
         // 缓存 ButtonTextColor 私有色彩字段（OnPointerEnter/Exit/Up/Disable 会使用 normal/highlight/pressed 覆写 text.color）
@@ -292,6 +295,8 @@ namespace ProbablyUnifiedHotkeys
             _lastConflictSignature = null;
             _suppressRuleConflictRefresh = false;
             _searchQuery = string.Empty;
+            _normalDisplayMode = NormalDisplayMode.All;
+            _diagnosticFilterMode = DiagnosticFilterMode.All;
             _wasSearchNonEmpty = false;
             ClearPendingScroll();
             _scrollRect = null;
@@ -303,6 +308,7 @@ namespace ProbablyUnifiedHotkeys
             _conflictToggleBtn = null;
             _expandToggleBtn = null;
             _diagnosticToggleBtn = null;
+            _normalDisplayDropdown = null;
             _capturingEntry = null;
             _capturingStartedFrame = -1;
             _restoreCloseOnEscapeFrame = -1;
@@ -385,6 +391,7 @@ namespace ProbablyUnifiedHotkeys
                 _conflictToggleBtn = null;
                 _expandToggleBtn = null;
                 _diagnosticToggleBtn = null;
+                _normalDisplayDropdown = null;
                 ClearPendingScroll();
                 _capturingEntry = null;
                 _restoreCloseOnEscapeFrame = -1;
@@ -470,6 +477,22 @@ namespace ProbablyUnifiedHotkeys
             builder.AddButton(diagBtnText, ToggleDiagnosticMode, "btn_diagnostic_toggle");
             _diagnosticToggleBtn = builder.Last;
 
+            builder.AddDropdown(
+                new List<string>
+                {
+                    I18n.Get("显示: 全部", "Show: All"),
+                    I18n.Get("仅展示按键", "Keys Only"),
+                    I18n.Get("仅展示常规", "Settings Only")
+                },
+                (int)_normalDisplayMode,
+                OnNormalDisplayModeChanged,
+                "unified_display_filter"
+            );
+            _normalDisplayDropdown = builder.Last;
+            _normalDisplayDropdown.SetFixedWidth(138f);
+            _normalDisplayDropdown.SetPreferredSize(138f, 38f);
+            I18n.ApplyFontToDropdown(_normalDisplayDropdown, forceCjkCapableList: I18n.IsChinese);
+
             // 优先抓取原生 ButtonTextColor 默认字色、高亮色、按下色、激活字体与原始字号（每个层级 menu/meta 仅需首开抓取一次）
             if (!hasThemeForLayer)
             {
@@ -491,14 +514,14 @@ namespace ProbablyUnifiedHotkeys
                 windowRoot.SetActive(false);
             }
 
-            StyleActionButton(_conflictToggleBtn, 180f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
-            StyleActionButton(_expandToggleBtn, 116f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
-            StyleActionButton(_diagnosticToggleBtn, 148f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_conflictToggleBtn, 168f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_expandToggleBtn, 112f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_diagnosticToggleBtn, 140f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
 
             UpdateConflictToggleButtonAppearance();
             UpdateDiagnosticToggleButtonAppearance();
 
-            string topHintText = I18n.Get("Ctrl/Shift/Alt组合键与侧键 | Esc=无", "Ctrl/Shift/Alt Combos & Side | Esc=None");
+            string topHintText = I18n.Get("Ctrl/Shift/Alt+侧键 | Esc=无", "Combos/Side | Esc=None");
             builder.AddLabel(topHintText, "label_top_hint");
             var hintEl = builder.Last;
             if (hintEl != null)
@@ -508,7 +531,7 @@ namespace ProbablyUnifiedHotkeys
                 {
                     var hintLe = hintEl.root.GetComponent<LayoutElement>() ?? hintEl.root.AddComponent<LayoutElement>();
                     hintLe.minWidth = 0f;
-                    hintLe.preferredWidth = 265f;
+                    hintLe.preferredWidth = 220f;
                     hintLe.preferredHeight = 34f;
                     hintLe.flexibleWidth = 1f;
                     hintLe.flexibleHeight = 0f;
@@ -522,7 +545,7 @@ namespace ProbablyUnifiedHotkeys
                     float maxHintSize = Mathf.Clamp((_baseButtonFontSize > 0f ? _baseButtonFontSize : 20f) * 0.78f, 12f, 17f);
                     ApplySinglePassFontSize(hintEl.text, hintEl.text.text, new ButtonFitSpec
                     {
-                        AvailWidth = 265f,
+                        AvailWidth = 220f,
                         AvailHeight = 30f,
                         MaxFontSize = maxHintSize,
                         MinFontSize = 11f
@@ -612,8 +635,8 @@ namespace ProbablyUnifiedHotkeys
                 builder.AddSpace(10f);
                 builder.AddFlexibleSpace();
                 string emptySearchText = I18n.Get(
-                    "<color=#99a3b0>未找到匹配的设置项或按键，可尝试更换关键词或切换左侧搜索范围</color>",
-                    "<color=#99a3b0>No matching settings or hotkeys found. Try another keyword or search scope.</color>"
+                    "<color=#99a3b0>未找到匹配的设置项或按键，可尝试更换关键词、切换搜索范围或顶部显示筛选</color>",
+                    "<color=#99a3b0>No matching settings or hotkeys found. Try another keyword, search scope, or display filter.</color>"
                 );
                 builder.AddLabel(emptySearchText, "label_empty_search");
                 I18n.ApplyFontIfRuntime(builder.Last?.text, emptySearchText);
@@ -858,7 +881,11 @@ namespace ProbablyUnifiedHotkeys
                 ModHotkeyEntry? linked = null;
                 if (entry.kind == GameOptionRegistry.Kind.KeyBind)
                 {
-                    _vanillaHotkeyByRawId.TryGetValue(entry.id, out linked);
+                    if (_vanillaHotkeyByRawId.TryGetValue(entry.id, out linked) && linked != null && builder.Handle != null)
+                    {
+                        linked.LabelElement = builder.Handle.Get("label_" + entry.id);
+                        linked.ButtonElement = builder.Handle.Get(entry.id);
+                    }
                 }
 
                 var item = new VanillaOptionItem
@@ -1049,6 +1076,11 @@ namespace ProbablyUnifiedHotkeys
 
                 builder.AddSpace(4f);
                 CardParts[group] = (hkHeaderObj, genHeaderObj, probedHeaderObj, midSepObj, probedSepObj);
+
+                if (_normalDisplayMode != NormalDisplayMode.All || !string.IsNullOrWhiteSpace(_searchQuery))
+                {
+                    ApplySingleGroupVisibility(group);
+                }
             }
         }
 
@@ -1207,6 +1239,12 @@ namespace ProbablyUnifiedHotkeys
 
             if (!string.IsNullOrEmpty(conflictTip))
             {
+                if (hotkey.ModId == "vanilla" && !string.IsNullOrEmpty(hotkey.Tooltip))
+                {
+                    string infoLink = "modkey:" + hotkey.Id;
+                    TMPIconHover.CustomLinks[infoLink] = () => hotkey.Tooltip;
+                    labelText += $" <link=\"{infoLink}\"><sprite name=\"info\" tint=1></link>";
+                }
                 string link = "conflict:" + hotkey.Id;
                 TMPIconHover.CustomLinks[link] = () => conflictTip;
                 labelText += $" <link=\"{link}\"><color=#ffb347><b>[!]</b></color></link>";
@@ -1731,6 +1769,23 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        private static void OnNormalDisplayModeChanged(int index)
+        {
+            if (index >= 0 && index <= (int)NormalDisplayMode.GeneralOnly)
+            {
+                _normalDisplayMode = (NormalDisplayMode)index;
+                if (IsConflictViewActive || IsDiagnosticViewActive)
+                {
+                    IsConflictViewActive = false;
+                    IsDiagnosticViewActive = false;
+                    SyncViewContainersAndToggleButtons();
+                }
+                ApplySearchFilter();
+                RefreshExpandAllButtonState();
+                ResetScrollToTop();
+            }
+        }
+
         private static void OnSearchTyping(string text)
         {
             OnSearchInputUpdated(text);
@@ -2162,12 +2217,40 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        private static void GetActiveDisplayPermissions(
+            bool hasQuery,
+            out bool allowGroupName,
+            out bool allowHotkeys,
+            out bool allowGeneral,
+            out bool modeAllowsHotkeys,
+            out bool modeAllowsGeneral)
+        {
+            modeAllowsHotkeys = _normalDisplayMode != NormalDisplayMode.GeneralOnly;
+            modeAllowsGeneral = _normalDisplayMode != NormalDisplayMode.HotkeysOnly;
+            allowGroupName = _searchScope == SearchScope.All;
+            bool scopeHotkeys = !hasQuery || _searchScope == SearchScope.All || _searchScope == SearchScope.HotkeysAndGeneral || _searchScope == SearchScope.HotkeysOnly;
+            bool scopeGeneral = !hasQuery || _searchScope == SearchScope.All || _searchScope == SearchScope.HotkeysAndGeneral || _searchScope == SearchScope.GeneralOnly;
+            allowHotkeys = modeAllowsHotkeys && scopeHotkeys;
+            allowGeneral = modeAllowsGeneral && scopeGeneral;
+        }
+
+        private static bool GroupHasVisibleItemsInCurrentMode(ModOptionGroup group, bool modeAllowsHotkeys, bool modeAllowsGeneral)
+        {
+            return (modeAllowsHotkeys && (group.Hotkeys.Count > 0 || group.ReadOnlyProbedHotkeys.Count > 0)) ||
+                   (modeAllowsGeneral && group.GeneralSettings.Count > 0);
+        }
+
         private static void ApplySearchFilter()
         {
             bool hasQuery = !string.IsNullOrWhiteSpace(_searchQuery);
-            bool allowGroupName = _searchScope == SearchScope.All;
-            bool allowHotkeys = _searchScope == SearchScope.All || _searchScope == SearchScope.HotkeysAndGeneral || _searchScope == SearchScope.HotkeysOnly;
-            bool allowGeneral = _searchScope == SearchScope.All || _searchScope == SearchScope.HotkeysAndGeneral || _searchScope == SearchScope.GeneralOnly;
+            bool hasDisplayFilter = _normalDisplayMode != NormalDisplayMode.All;
+            GetActiveDisplayPermissions(
+                hasQuery,
+                out bool allowGroupName,
+                out bool allowHotkeys,
+                out bool allowGeneral,
+                out bool modeAllowsHotkeys,
+                out bool modeAllowsGeneral);
 
             _lastSearchScrollTarget = null;
 
@@ -2179,14 +2262,36 @@ namespace ProbablyUnifiedHotkeys
             {
                 using (ComboKeyStore.EnterBypass())
                 {
-                    // 1. 过滤原版官方设置区块（支持四作用域搜索、繁简/拼音/按键名匹配与自动展开）
+                    // 1. 过滤原版官方设置区块（支持显示模式 + 四作用域搜索 + 繁简/拼音/按键名匹配）
                     foreach (var card in _vanillaCards)
                     {
-                        if (!hasQuery)
+                        if (!hasQuery && !hasDisplayFilter)
                         {
                             foreach (var item in card.Entries)
                             {
                                 foreach (var row in item.RowObjects) SetObjectActive(row, true);
+                            }
+                            SetObjectActive(card.HeaderRowObject, true);
+                            SetObjectActive(card.OuterSeparatorObject, true);
+                            bool savedExpanded = VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : true;
+                            card.SetExpanded(savedExpanded);
+                            visibleVanillaCount++;
+                            continue;
+                        }
+
+                        if (!hasQuery && hasDisplayFilter)
+                        {
+                            int visibleRows = 0;
+                            foreach (var item in card.Entries)
+                            {
+                                bool showRow = item.IsKeyBind ? modeAllowsHotkeys : modeAllowsGeneral;
+                                foreach (var row in item.RowObjects) SetObjectActive(row, showRow);
+                                if (showRow) visibleRows++;
+                            }
+                            if (visibleRows == 0)
+                            {
+                                SetCardHiddenForSearch(card);
+                                continue;
                             }
                             SetObjectActive(card.HeaderRowObject, true);
                             SetObjectActive(card.OuterSeparatorObject, true);
@@ -2203,14 +2308,14 @@ namespace ProbablyUnifiedHotkeys
                         bool anyItemMatch = false;
                         foreach (var item in card.Entries)
                         {
+                            bool modeAllowed = item.IsKeyBind ? modeAllowsHotkeys : modeAllowsGeneral;
                             bool scopeAllowed = item.IsKeyBind ? allowHotkeys : allowGeneral;
-                            bool itemMatch = sectionNameMatch || (scopeAllowed && IsVanillaItemMatchQuery(item, _searchQuery));
+                            bool itemMatch = modeAllowed && (sectionNameMatch || (scopeAllowed && IsVanillaItemMatchQuery(item, _searchQuery)));
                             foreach (var row in item.RowObjects) SetObjectActive(row, itemMatch);
                             if (itemMatch) anyItemMatch = true;
                         }
 
-                        bool cardVisible = sectionNameMatch || anyItemMatch;
-                        if (!cardVisible)
+                        if (!anyItemMatch)
                         {
                             SetCardHiddenForSearch(card);
                             continue;
@@ -2230,21 +2335,11 @@ namespace ProbablyUnifiedHotkeys
                     // 2. 过滤创意工坊模组设置卡片（挂起根布局下同步完成，绝不产生多帧依次展开过渡动画）
                     foreach (var group in _modGroups)
                     {
-                        if (!hasQuery)
+                        if (!hasQuery && !hasDisplayFilter)
                         {
                             if (group.IsContentBuilt)
                             {
-                                foreach (var hotkey in group.Hotkeys) SetObjectActive(hotkey.RowObject, true);
-                                foreach (var gen in group.GeneralSettings) SetObjectActive(gen.RowObject, true);
-                                foreach (var probed in group.ReadOnlyProbedHotkeys) SetObjectActive(probed.RowObject, true);
-                                if (CardParts.TryGetValue(group, out var parts))
-                                {
-                                    SetObjectActive(parts.hkHeader, group.Hotkeys.Count > 0);
-                                    SetObjectActive(parts.genHeader, group.GeneralSettings.Count > 0);
-                                    SetObjectActive(parts.probedHeader, group.ReadOnlyProbedHotkeys.Count > 0);
-                                    SetObjectActive(parts.midSep, group.Hotkeys.Count > 0 && group.GeneralSettings.Count > 0);
-                                    SetObjectActive(parts.probedSep, (group.Hotkeys.Count > 0 || group.GeneralSettings.Count > 0) && group.ReadOnlyProbedHotkeys.Count > 0);
-                                }
+                                ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: true, allowGeneral: true);
                             }
 
                             SetObjectActive(group.HeaderRowObject, true);
@@ -2254,7 +2349,26 @@ namespace ProbablyUnifiedHotkeys
                             continue;
                         }
 
-                        bool groupNameMatch = IsModGroupNameMatch(group, _searchQuery, allowGroupName);
+                        bool hasKindInMode = GroupHasVisibleItemsInCurrentMode(group, modeAllowsHotkeys, modeAllowsGeneral);
+                        if (!hasQuery && hasDisplayFilter)
+                        {
+                            if (!hasKindInMode)
+                            {
+                                SetCardHiddenForSearch(group);
+                                continue;
+                            }
+                            SetObjectActive(group.HeaderRowObject, true);
+                            SetObjectActive(group.OuterSeparatorObject, true);
+                            if (group.IsContentBuilt)
+                            {
+                                ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: modeAllowsHotkeys, allowGeneral: modeAllowsGeneral);
+                            }
+                            group.SetExpanded(group.IsExpanded);
+                            visibleModCount++;
+                            continue;
+                        }
+
+                        bool groupNameMatch = hasKindInMode && IsModGroupNameMatch(group, _searchQuery, allowGroupName);
                         bool anyHotkeyMatch = allowHotkeys &&
                             (group.Hotkeys.Any(hk => IsHotkeyMatchQuery(hk, _searchQuery)) ||
                              group.ReadOnlyProbedHotkeys.Any(hk => IsHotkeyMatchQuery(hk, _searchQuery)));
@@ -2284,15 +2398,15 @@ namespace ProbablyUnifiedHotkeys
                 }
 
                 // 3. 联动显隐区域标题栏与空结果提示
-                bool showVanillaBanner = !hasQuery ? _vanillaCards.Count > 0 : visibleVanillaCount > 0;
-                bool showModBanner = !hasQuery ? _modGroups.Count > 0 : visibleModCount > 0;
+                bool showVanillaBanner = (!hasQuery && !hasDisplayFilter) ? _vanillaCards.Count > 0 : visibleVanillaCount > 0;
+                bool showModBanner = (!hasQuery && !hasDisplayFilter) ? _modGroups.Count > 0 : visibleModCount > 0;
                 SetObjectActive(_vanillaHeaderRow, showVanillaBanner);
                 SetObjectActive(_vanillaHeaderSep, showVanillaBanner);
                 SetObjectActive(_modHeaderSpace, showVanillaBanner && showModBanner);
                 SetObjectActive(_modHeaderSep, showModBanner);
                 SetObjectActive(_modHeaderRow, showModBanner);
                 SetObjectActive(_modHeaderBottomSep, showModBanner);
-                SetObjectActive(_emptySearchLabelRow, hasQuery && visibleVanillaCount == 0 && visibleModCount == 0);
+                SetObjectActive(_emptySearchLabelRow, (hasQuery || hasDisplayFilter) && visibleVanillaCount == 0 && visibleModCount == 0);
 
                 if (!hasQuery)
                 {
@@ -2324,12 +2438,32 @@ namespace ProbablyUnifiedHotkeys
                  PinyinEngine.Matches(group.ModId, query));
         }
 
+        private static void ApplySingleGroupVisibility(ModOptionGroup group)
+        {
+            bool hasQuery = !string.IsNullOrWhiteSpace(_searchQuery);
+            GetActiveDisplayPermissions(
+                hasQuery,
+                out bool allowGroupName,
+                out bool allowHotkeys,
+                out bool allowGeneral,
+                out bool modeAllowsHotkeys,
+                out bool modeAllowsGeneral);
+            bool groupNameMatch = !hasQuery || (GroupHasVisibleItemsInCurrentMode(group, modeAllowsHotkeys, modeAllowsGeneral) && IsModGroupNameMatch(group, _searchQuery, allowGroupName));
+            ApplyGroupRowVisibility(group, hasQuery, groupNameMatch, allowHotkeys, allowGeneral);
+        }
+
         private static void ApplyMatchedModGroupRows(ModOptionGroup group, bool groupNameMatch, bool allowHotkeys, bool allowGeneral)
+        {
+            ApplyGroupRowVisibility(group, hasQuery: true, groupNameMatch, allowHotkeys, allowGeneral);
+            ShowCardExpandedVisualOnly(group);
+        }
+
+        private static void ApplyGroupRowVisibility(ModOptionGroup group, bool hasQuery, bool groupNameMatch, bool allowHotkeys, bool allowGeneral)
         {
             int visibleHotkeys = 0;
             foreach (var hotkey in group.Hotkeys)
             {
-                bool match = groupNameMatch || (allowHotkeys && IsHotkeyMatchQuery(hotkey, _searchQuery));
+                bool match = allowHotkeys && (!hasQuery || groupNameMatch || IsHotkeyMatchQuery(hotkey, _searchQuery));
                 SetObjectActive(hotkey.RowObject, match);
                 if (match) visibleHotkeys++;
             }
@@ -2337,7 +2471,7 @@ namespace ProbablyUnifiedHotkeys
             int visibleGeneral = 0;
             foreach (var gen in group.GeneralSettings)
             {
-                bool match = groupNameMatch || (allowGeneral && IsGeneralMatchQuery(gen, _searchQuery));
+                bool match = allowGeneral && (!hasQuery || groupNameMatch || IsGeneralMatchQuery(gen, _searchQuery));
                 SetObjectActive(gen.RowObject, match);
                 if (match) visibleGeneral++;
             }
@@ -2345,7 +2479,7 @@ namespace ProbablyUnifiedHotkeys
             int visibleProbed = 0;
             foreach (var probed in group.ReadOnlyProbedHotkeys)
             {
-                bool match = groupNameMatch || (allowHotkeys && IsHotkeyMatchQuery(probed, _searchQuery));
+                bool match = allowHotkeys && (!hasQuery || groupNameMatch || IsHotkeyMatchQuery(probed, _searchQuery));
                 SetObjectActive(probed.RowObject, match);
                 if (match) visibleProbed++;
             }
@@ -2358,8 +2492,6 @@ namespace ProbablyUnifiedHotkeys
                 SetObjectActive(matchedParts.midSep, visibleHotkeys > 0 && visibleGeneral > 0);
                 SetObjectActive(matchedParts.probedSep, (visibleHotkeys > 0 || visibleGeneral > 0) && visibleProbed > 0);
             }
-
-            ShowCardExpandedVisualOnly(group);
         }
 
         private static void ClearPendingScroll()
@@ -2452,6 +2584,7 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
             if (_diagnosticContentRoot != null) _diagnosticContentRoot.SetActive(IsDiagnosticViewActive);
+            if (_normalDisplayDropdown?.root != null) _normalDisplayDropdown.root.SetActive(showNormal);
 
             UpdateConflictToggleButtonAppearance();
             UpdateDiagnosticToggleButtonAppearance();
@@ -2669,9 +2802,39 @@ namespace ProbablyUnifiedHotkeys
             builder.End();
         }
 
+        private static void AddDiagnosticFilterTabButton(
+            CustomUIBuilder builder,
+            DiagnosticFilterMode mode,
+            string title,
+            int count,
+            float width)
+        {
+            bool isActive = _diagnosticFilterMode == mode;
+            builder.AddButton($"{title} ({count})", () =>
+            {
+                if (_diagnosticFilterMode == mode) return;
+                _diagnosticFilterMode = mode;
+                _diagnosticViewDirty = true;
+                RefreshDiagnosticStickyHeader();
+                RebuildDiagnosticView();
+                ResetScrollToTop();
+            }, null);
+            StyleActionButton(builder.Last, width, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
+            if (isActive)
+            {
+                ApplyButtonTextTheme(builder.Last, ConflictDetector.ConflictColor);
+            }
+            else
+            {
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+            }
+        }
+
         private static void BuildDiagnosticStickyHeader(CustomUIBuilder builder)
         {
             var report = _scanReport ?? new ModScanReport();
+            int probedModCount = report.Mods.Count(m => m.ProbedHotkeys.Count > 0);
+            int managedOnlyCount = report.Mods.Count(m => m.Status == ModDiagnosticStatus.Managed);
 
             builder.AddSpace(4f);
             builder.BeginRow(6f, TextAnchor.MiddleCenter);
@@ -2709,6 +2872,18 @@ namespace ProbablyUnifiedHotkeys
             StyleActionButton(builder.Last, 102f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
+            AddFixedHorizontalSpace(builder, 8f);
+            builder.End();
+
+            builder.BeginRow(5f, TextAnchor.MiddleLeft);
+            AddFixedHorizontalSpace(builder, 8f);
+            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.All, I18n.Get("全部", "All"), report.Mods.Count, 88f);
+            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.ProbedHotkeysOnly, I18n.Get("探测热键", "Probed Keys"), probedModCount, 122f);
+            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.HasCandidatesOnly, I18n.Get("疑难待确认", "Needs Review"), report.HasCandidatesModCount, 122f);
+            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.UnmanagedOnly, I18n.Get("未配官方", "No Config"), report.UnmanagedCodeModCount, 114f);
+            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.ManagedOnly, I18n.Get("正常纳管", "Managed"), managedOnlyCount, 114f);
+            AddDiagnosticFilterTabButton(builder, DiagnosticFilterMode.AssetOnly, I18n.Get("纯资源", "Asset Only"), report.AssetOnlyModCount, 102f);
+            builder.AddFlexibleSpace();
             AddFixedHorizontalSpace(builder, 8f);
             builder.End();
 
@@ -2760,11 +2935,13 @@ namespace ProbablyUnifiedHotkeys
             ModDiagnosticStatus status,
             List<ModDiagnosticItem> items,
             string query,
-            bool hasQuery)
+            bool hasQuery,
+            bool forceExpandSection = false,
+            string? overrideTitle = null)
         {
             if (items.Count == 0) return;
 
-            bool initialExpanded = hasQuery || (_diagnosticSectionExpanded.TryGetValue(status, out bool saved) && saved);
+            bool initialExpanded = hasQuery || forceExpandSection || (_diagnosticSectionExpanded.TryGetValue(status, out bool saved) && saved);
 
             CustomUIElement? foldBtn = null;
             GameObject? bodyObj = null;
@@ -2778,7 +2955,7 @@ namespace ProbablyUnifiedHotkeys
                 bool nextExpanded = !bodyObj.activeSelf;
                 bodyObj.SetActive(nextExpanded);
                 foldBtn.SetText(nextExpanded ? "▼" : "▶");
-                if (!hasQuery)
+                if (!hasQuery && !forceExpandSection)
                 {
                     _diagnosticSectionExpanded[status] = nextExpanded;
                 }
@@ -2796,7 +2973,7 @@ namespace ProbablyUnifiedHotkeys
             foldBtn = builder.Last;
             StyleFoldButton(foldBtn, 36f);
 
-            string catTitle = GetDiagnosticCategoryTitle(status, items.Count);
+            string catTitle = overrideTitle ?? GetDiagnosticCategoryTitle(status, items.Count);
             builder.AddLabel(catTitle, null);
             ConfigureWrappedDiagnosticLabel(builder.Last, catTitle);
             AddFixedHorizontalSpace(builder, 6f);
@@ -2824,12 +3001,63 @@ namespace ProbablyUnifiedHotkeys
             builder.AddSeparator(null, 2);
         }
 
+        private static bool MatchesDiagnosticFilterMode(ModDiagnosticItem item)
+        {
+            switch (_diagnosticFilterMode)
+            {
+                case DiagnosticFilterMode.ProbedHotkeysOnly:
+                    return item.ProbedHotkeys.Count > 0;
+                case DiagnosticFilterMode.HasCandidatesOnly:
+                    return item.Status == ModDiagnosticStatus.HasCandidates;
+                case DiagnosticFilterMode.UnmanagedOnly:
+                    return item.Status == ModDiagnosticStatus.UnmanagedCodeMod;
+                case DiagnosticFilterMode.ManagedOnly:
+                    return item.Status == ModDiagnosticStatus.Managed;
+                case DiagnosticFilterMode.AssetOnly:
+                    return item.Status == ModDiagnosticStatus.AssetOnlyMod;
+                default:
+                    return true;
+            }
+        }
+
         private static void BuildDiagnosticViewContent(CustomUIBuilder builder)
         {
             var report = _scanReport ?? new ModScanReport();
 
             string query = _searchQuery?.Trim() ?? string.Empty;
             bool hasQuery = query.Length > 0;
+
+            if (_diagnosticFilterMode == DiagnosticFilterMode.ProbedHotkeysOnly)
+            {
+                var probedItems = new List<ModDiagnosticItem>();
+                foreach (var item in report.Mods)
+                {
+                    if (!MatchesDiagnosticFilterMode(item)) continue;
+                    if (hasQuery && !MatchesDiagnosticItemFilter(item, query)) continue;
+                    probedItems.Add(item);
+                }
+
+                if (probedItems.Count == 0)
+                {
+                    builder.AddSpace(8f);
+                    AddWrappedDiagnosticLabel(
+                        builder,
+                        10f,
+                        I18n.Get(
+                            "<color=#99a3b0>未找到包含只读探测热键的模组（或不符合当前搜索词）</color>",
+                            "<color=#99a3b0>No mods with read-only probed hotkeys found matching the filter.</color>"
+                        ));
+                    return;
+                }
+
+                string probedTitle = I18n.Format(
+                    "<color=#d8b4fe>[只读探测热键]</color> <b>含自动探测热键模组</b> <color=#99a3b0>({0} 个模组 | 共 {1} 项探测热键)</color>",
+                    "<color=#d8b4fe>[Probed Hotkeys]</color> <b>Mods With Probed Hotkeys</b> <color=#99a3b0>({0} mods | {1} probed keys)</color>",
+                    probedItems.Count,
+                    probedItems.Sum(x => x.ProbedHotkeys.Count));
+                BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.UnmanagedCodeMod, probedItems, query, hasQuery, forceExpandSection: true, overrideTitle: probedTitle);
+                return;
+            }
 
             var reviewItems = new List<ModDiagnosticItem>();
             var unmanagedItems = new List<ModDiagnosticItem>();
@@ -2838,6 +3066,7 @@ namespace ProbablyUnifiedHotkeys
 
             foreach (var item in report.Mods)
             {
+                if (!MatchesDiagnosticFilterMode(item)) continue;
                 if (hasQuery && !MatchesDiagnosticItemFilter(item, query))
                 {
                     continue;
@@ -2873,11 +3102,12 @@ namespace ProbablyUnifiedHotkeys
                 return;
             }
 
-            // 按 4 个同类分组依次渲染可折叠卡片，减少同屏杂乱并保留折叠记忆
-            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.HasCandidates, reviewItems, query, hasQuery);
-            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.UnmanagedCodeMod, unmanagedItems, query, hasQuery);
-            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.Managed, managedItems, query, hasQuery);
-            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.AssetOnlyMod, assetItems, query, hasQuery);
+            bool singleCategoryMode = _diagnosticFilterMode != DiagnosticFilterMode.All;
+            // 按分组依次渲染可折叠卡片，减少同屏杂乱并保留折叠记忆
+            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.HasCandidates, reviewItems, query, hasQuery, singleCategoryMode);
+            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.UnmanagedCodeMod, unmanagedItems, query, hasQuery, singleCategoryMode);
+            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.Managed, managedItems, query, hasQuery, singleCategoryMode);
+            BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.AssetOnlyMod, assetItems, query, hasQuery, singleCategoryMode);
         }
 
         private static bool MatchesDiagnosticItemFilter(ModDiagnosticItem item, string query)
@@ -2950,7 +3180,8 @@ namespace ProbablyUnifiedHotkeys
         {
             bool anyCandMatchedQuery = hasQuery && item.CandidateEntries.Any(c => MatchesDiagnosticCandidateFilter(c, query));
             bool anyProbedMatchedQuery = hasQuery && item.ProbedHotkeys.Any(p => MatchesDiagnosticProbedFilter(p, query));
-            bool isExpanded = _expandedDiagnosticModIds.Contains(item.ModId) || anyCandMatchedQuery || anyProbedMatchedQuery;
+            bool forceProbedOnly = _diagnosticFilterMode == DiagnosticFilterMode.ProbedHotkeysOnly;
+            bool isExpanded = _expandedDiagnosticModIds.Contains(item.ModId) || anyCandMatchedQuery || anyProbedMatchedQuery || forceProbedOnly;
 
             builder.BeginRow(6f, TextAnchor.MiddleLeft);
             AddFixedHorizontalSpace(builder, 18f);
@@ -2960,6 +3191,7 @@ namespace ProbablyUnifiedHotkeys
                 ? I18n.Get(" <color=#99a3b0>(独立 ModConfig)</color>", " <color=#99a3b0>(Standalone ModConfig)</color>")
                 : string.Empty;
 
+            int pendingSusCount = item.CandidateEntries.Count(c => c.IsSuspiciousCandidate && !c.IsIgnoredCandidate && !c.IsForcedHotkey);
             string statsPart = string.Empty;
             if (item.Status != ModDiagnosticStatus.AssetOnlyMod)
             {
@@ -2975,11 +3207,25 @@ namespace ProbablyUnifiedHotkeys
                         " <color=#d8b4fe>Probed:{0}</color>",
                         item.ProbedHotkeys.Count);
                 }
-                if (item.CandidateEntries.Count > 0)
+                if (pendingSusCount > 0)
                 {
                     statsPart += I18n.Format(
-                        " <color=#ffd27d>候选:{0}</color>",
-                        " <color=#ffd27d>Raw:{0}</color>",
+                        " <color=#ffd27d>待确认:{0}</color>",
+                        " <color=#ffd27d>Pending:{0}</color>",
+                        pendingSusCount);
+                    if (item.CandidateEntries.Count > pendingSusCount)
+                    {
+                        statsPart += I18n.Format(
+                            "<color=#99a3b0> (原始:{0})</color>",
+                            "<color=#99a3b0> (Raw:{0})</color>",
+                            item.CandidateEntries.Count);
+                    }
+                }
+                else if (item.CandidateEntries.Count > 0)
+                {
+                    statsPart += I18n.Format(
+                        " <color=#99a3b0>原始:{0}</color>",
+                        " <color=#99a3b0>Raw:{0}</color>",
                         item.CandidateEntries.Count);
                 }
                 if (item.IgnoredCandidateCount > 0)
@@ -3097,7 +3343,7 @@ namespace ProbablyUnifiedHotkeys
             }
 
             // 展开后的疑难/候选原始条目列表及只读探测条目列表
-            if (isExpanded && item.CandidateEntries.Count > 0)
+            if (isExpanded && !forceProbedOnly && item.CandidateEntries.Count > 0)
             {
                 foreach (var cand in item.CandidateEntries)
                 {
@@ -3132,8 +3378,10 @@ namespace ProbablyUnifiedHotkeys
                     : (cand.IsCurrentlyHotkey
                         ? I18n.Get("<color=#9ec4ff>[已纳管按键]</color>", "<color=#9ec4ff>[Managed Key]</color>")
                         : (cand.WasDroppedFromMainUI
-                            ? I18n.Get("<color=#ffb347>[原UI未显示]</color>", "<color=#ffb347>[Hidden in Main UI]</color>")
-                            : I18n.Get("<color=#a8d8b9>[常规选项]</color>", "<color=#a8d8b9>[General Setting]</color>"))));
+                            ? I18n.Get("<color=#ffb347>[原UI未显示·待确认]</color>", "<color=#ffb347>[Hidden · Pending]</color>")
+                            : (cand.IsSuspiciousCandidate
+                                ? I18n.Get("<color=#ffd27d>[疑难待确认]</color>", "<color=#ffd27d>[Suspicious · Pending]</color>")
+                                : I18n.Get("<color=#a8d8b9>[常规选项·可强转]</color>", "<color=#a8d8b9>[General · Promotable]</color>")))));
 
             string detailText = I18n.Format(
                 "{0} <b>{1}</b>  <color=#99a3b0>键:{2} | {3} | 当前:{4} | 默认:{5}</color>",
@@ -3204,20 +3452,23 @@ namespace ProbablyUnifiedHotkeys
                 StyleActionButton(builder.Last, 134f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
                 ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
-                builder.AddButton(I18n.Get("忽略(非按键)", "Ignore"), () =>
+                if (cand.IsSuspiciousCandidate)
                 {
-                    ComboKeyStore.SetIgnoredCandidate(cand.CanonicalId, true);
-                    _expandedDiagnosticModIds.Add(cand.OwnerModId);
-                    PerformFullRescanAndRefreshInPlace(
-                        forceInvalidateCache: true,
-                        targetModId: null,
-                        statusMessage: I18n.Format(
-                            "已忽略 [{0}] {1}（不再归入待排查项，可随时点「恢复提醒」还原）",
-                            "Ignored [{0}] {1} (excluded from review list; click Restore anytime)",
-                            cand.ModDisplayName, cand.Label));
-                }, null);
-                StyleActionButton(builder.Last, 118f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
-                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+                    builder.AddButton(I18n.Get("忽略(非按键)", "Ignore"), () =>
+                    {
+                        ComboKeyStore.SetIgnoredCandidate(cand.CanonicalId, true);
+                        _expandedDiagnosticModIds.Add(cand.OwnerModId);
+                        PerformFullRescanAndRefreshInPlace(
+                            forceInvalidateCache: true,
+                            targetModId: null,
+                            statusMessage: I18n.Format(
+                                "已忽略 [{0}] {1}（不再归入待排查项，可随时点「恢复提醒」还原）",
+                                "Ignored [{0}] {1} (excluded from review list; click Restore anytime)",
+                                cand.ModDisplayName, cand.Label));
+                    }, null);
+                    StyleActionButton(builder.Last, 118f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
+                    ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+                }
             }
             else if (cand.IsCurrentlyHotkey)
             {
@@ -3343,12 +3594,23 @@ namespace ProbablyUnifiedHotkeys
             }
             _wasSearchNonEmpty = false;
 
-            SyncViewContainersAndToggleButtons();
-            ApplySearchFilter();
-
             ModOptionGroup? targetGroup = _modGroups.FirstOrDefault(g =>
                 string.Equals(g.ModId, ownerModId, StringComparison.OrdinalIgnoreCase) ||
                 (g.ExtraNotifyModIds != null && g.ExtraNotifyModIds.Any(id => string.Equals(id, ownerModId, StringComparison.OrdinalIgnoreCase))));
+
+            bool needResetDisplayMode = _normalDisplayMode != NormalDisplayMode.All &&
+                (targetGroup == null || !GroupHasVisibleItemsInCurrentMode(
+                    targetGroup,
+                    _normalDisplayMode != NormalDisplayMode.GeneralOnly,
+                    _normalDisplayMode != NormalDisplayMode.HotkeysOnly));
+            if (needResetDisplayMode)
+            {
+                _normalDisplayMode = NormalDisplayMode.All;
+                _normalDisplayDropdown?.SetIndex(0, false);
+            }
+
+            SyncViewContainersAndToggleButtons();
+            ApplySearchFilter();
 
             if (targetGroup == null)
             {
@@ -3593,17 +3855,18 @@ namespace ProbablyUnifiedHotkeys
         private static bool AllVisibleCardsExpanded()
         {
             bool hasQuery = !string.IsNullOrWhiteSpace(_searchQuery);
+            bool isFiltered = hasQuery || _normalDisplayMode != NormalDisplayMode.All;
             int counted = 0;
 
             foreach (var c in _vanillaCards)
             {
-                if (hasQuery && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
+                if (isFiltered && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
                 counted++;
                 if (hasQuery ? !IsCardCurrentlyExpanded(c) : !c.IsExpanded) return false;
             }
             foreach (var g in _modGroups)
             {
-                if (hasQuery && (g.HeaderRowObject == null || !g.HeaderRowObject.activeSelf)) continue;
+                if (isFiltered && (g.HeaderRowObject == null || !g.HeaderRowObject.activeSelf)) continue;
                 counted++;
                 if (hasQuery ? !IsCardCurrentlyExpanded(g) : !g.IsExpanded) return false;
             }
@@ -3625,11 +3888,12 @@ namespace ProbablyUnifiedHotkeys
             {
                 bool nextExpanded = !AllVisibleDiagnosticSectionsExpanded();
                 bool hasDiagnosticQuery = !string.IsNullOrWhiteSpace(_searchQuery);
+                bool singleSectionFilter = _diagnosticFilterMode != DiagnosticFilterMode.All;
 
                 for (int i = 0; i < _diagnosticSectionViews.Count; i++)
                 {
                     var sec = _diagnosticSectionViews[i];
-                    if (!hasDiagnosticQuery)
+                    if (!hasDiagnosticQuery && !singleSectionFilter)
                     {
                         _diagnosticSectionExpanded[sec.Status] = nextExpanded;
                     }
@@ -3663,7 +3927,7 @@ namespace ProbablyUnifiedHotkeys
             _allExpanded = !_allExpanded;
             SetButtonTextFast(_expandToggleBtn, _allExpanded ? I18n.Get("全部收起", "Collapse All") : I18n.Get("全部展开", "Expand All"));
 
-            bool hasQuery = !string.IsNullOrWhiteSpace(_searchQuery);
+            bool isFiltered = !string.IsNullOrWhiteSpace(_searchQuery) || _normalDisplayMode != NormalDisplayMode.All;
 
             // 临时挂起外层容器、Viewport 及卡片标题栏 LayoutGroup，确保全部卡片在单帧内零过渡动画瞬间切换完毕，仅触发 1 次集中排布
             WithSuspendedRootLayout(() =>
@@ -3672,7 +3936,7 @@ namespace ProbablyUnifiedHotkeys
                 {
                     foreach (var c in _vanillaCards)
                     {
-                        if (hasQuery && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
+                        if (isFiltered && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
                         c.SetExpanded(_allExpanded);
                         VanillaExpandedStates[c.SectionId] = _allExpanded;
                         if (_allExpanded) SyncCompactActionButton(c.ResetButtonElement);
@@ -3680,7 +3944,7 @@ namespace ProbablyUnifiedHotkeys
 
                     foreach (var g in _modGroups)
                     {
-                        if (hasQuery && (g.HeaderRowObject == null || !g.HeaderRowObject.activeSelf)) continue;
+                        if (isFiltered && (g.HeaderRowObject == null || !g.HeaderRowObject.activeSelf)) continue;
                         SetGroupExpanded(g, _allExpanded);
                         if (_allExpanded) SyncCompactActionButton(g.ResetButtonElement);
                     }
@@ -4029,9 +4293,17 @@ namespace ProbablyUnifiedHotkeys
             {
                 if (hk.ModId != "vanilla" || string.IsNullOrEmpty(hk.RawOptionId)) continue;
 
-                var uiEl = _currentWindow.Get(hk.RawOptionId);
+                var labelEl = hk.LabelElement ?? _currentWindow.Get("label_" + hk.RawOptionId);
+                if (labelEl != null)
+                {
+                    hk.LabelElement = labelEl;
+                    SetTextIfChanged(labelEl, BuildHotkeyLabelText(hk));
+                }
+
+                var uiEl = hk.ButtonElement ?? _currentWindow.Get(hk.RawOptionId);
                 if (uiEl != null && _capturingEntry != hk)
                 {
+                    hk.ButtonElement = uiEl;
                     SetButtonTextFast(uiEl, FormatHotkeyComboText(hk));
                     ApplySingleButtonColor(uiEl, hk.EffectiveCombo);
                 }
@@ -4516,6 +4788,10 @@ namespace ProbablyUnifiedHotkeys
 
         private static void UpdateHotkeyButtonVisual(ModHotkeyEntry hotkey)
         {
+            if (hotkey.LabelElement == null && hotkey.ModId == "vanilla" && !string.IsNullOrEmpty(hotkey.RawOptionId) && _currentWindow != null)
+            {
+                hotkey.LabelElement = _currentWindow.Get("label_" + hotkey.RawOptionId);
+            }
             if (hotkey.LabelElement != null)
             {
                 SetTextIfChanged(hotkey.LabelElement, BuildHotkeyLabelText(hotkey));

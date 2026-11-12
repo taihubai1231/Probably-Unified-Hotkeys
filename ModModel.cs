@@ -21,6 +21,23 @@ namespace ProbablyUnifiedHotkeys
         GeneralOnly = 3        // 仅搜索常规设置
     }
 
+    public enum NormalDisplayMode
+    {
+        All = 0,         // 全部展示
+        HotkeysOnly = 1, // 仅展示按键
+        GeneralOnly = 2  // 仅展示常规
+    }
+
+    public enum DiagnosticFilterMode
+    {
+        All = 0,               // 全部模组
+        ProbedHotkeysOnly = 1, // 仅含只读探测热键
+        HasCandidatesOnly = 2, // 仅待确认/疑难模组
+        UnmanagedOnly = 3,     // 仅未检测到官方配置
+        ManagedOnly = 4,       // 仅已正常纳管
+        AssetOnly = 5          // 仅纯资源/无代码
+    }
+
     /// <summary>
     /// 统一可折叠配置卡片接口（供原版官方区块与创意工坊模组卡片共用）
     /// </summary>

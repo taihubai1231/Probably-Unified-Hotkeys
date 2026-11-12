@@ -29,14 +29,14 @@
 
 | 文件 | 行数 | 职责说明 |
 |---|---:|---|
-| `UnifiedOptionUI.cs` | 4,743 | 「选项」整页 UI 重构：搜索栏/作用域、折叠卡、拼音 A-Z 排序、「仅看冲突」、只读探测行、置顶反馈栏的「模组排查」（含忽略非按键/一键复制汇总）与双语渲染 |
+| `UnifiedOptionUI.cs` | 5,020 | 「选项」整页 UI 重构：搜索栏/展示模式切换、折叠卡、拼音 A-Z 排序、「仅看冲突」、只读探测行、置顶反馈+分类筛选的「模组排查」（含忽略非按键/复制汇总）与双语渲染 |
 | `ModOptionScanner.cs` | 1,743 | 扫描原版 `GameOptionRegistry`、各模组 `ModConfig`（含非标准命名实例）与回调归属，并归并 `DllKeyProbe` 只读探测结果 |
 | `ModEntry.cs` | 1,312 | `IMod` 入口（`Init` / `OnEnable` / `OnDisable`）、退出钩子、核心 Harmony 补丁、`WorkshopModPatcher` 运行时适配 |
 | `PerformancePatches.cs` | 1,148 | 4 项流畅度优化补丁（选项开窗异步/离线装配、字号缓存、改造件列表行复用、退出流程精简） |
 | `DllKeyProbe.cs` | 914 | 基于官方 `DseCecil.dll` 与 `ModData`/模组配置文件的只读热键探测器与增量指纹缓存（`dll_probe_cache_v1.txt`） |
 | `ComboKeyStore.cs` | 696 | 组合键（Shift/Ctrl/Alt + 主键/鼠标、Mouse3~Mouse6）、单键修饰门控、「无」空键、强制强转与忽略非按键列表 |
 | `KnownModAdapters.cs` | 688 | 第三方模组专项适配与强转桥接 |
-| `ModModel.cs` | 403 | 统一数据模型与快照/默认值/只读探测状态管理 |
+| `ModModel.cs` | 417 | 统一数据模型、视图筛选枚举（`NormalDisplayMode` / `DiagnosticFilterMode`）与快照/默认值/只读探测状态管理 |
 | `I18n.cs` | 292 | 中英双语词典、字体回退应用（`ApplyFontIfRuntime` / `ApplyFontToDropdown`）与语言选项接口 |
 | `PinyinEngine.cs` | 275 | 基于嵌入资源 `pinyin.bin` 的离线汉字转拼音/首字母检索引擎 |
 | `ModCatalogCache.cs` | 159 | 主菜单闲置预热与配置目录缓存 |

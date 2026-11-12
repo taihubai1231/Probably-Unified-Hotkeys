@@ -59,7 +59,7 @@
 - **单次宽高双重字体测量 + 缓存挂起布局（「全部展开 / 收起」）**：全面移除 50~100+ 颗按键与 `恢复默认` 按钮上的 `TMP_Text.enableAutoSizing` 多次二分测量循环，改为基于 `GetPreferredValues` 宽高双约束结果缓存与 `HorizontalLayoutGroup` 内边距精确控制的单次字号自适应；闲置帧预建以约 `7.5ms/帧` 预算连续完成多张折叠卡片构建；一键展开/收起直接复用已缓存的各级容器/标题行/内容容器 `LayoutGroup` / `ContentSizeFitter` 列表进行单帧无过渡瞬间切换，零每点击 `GetComponents` 扫描。
 - **列表对象池化、O(1) 依赖索引与冲突引擎去重（「改造件」面板）**：在 `ModUIManager.PopulateLayoutList` 引入按模组 ID 复用的 `Row` 对象池，避免每次开关面板销毁并重建 40+ 个模组条目（120+ 个子对象）；在 `RefreshRowIssues` / `GetModIssue` 期间建立前置依赖 O(1) 查找字典以消除 `ModLoader.Mods.Find` 带来的 O(N²) 列表拷贝分配；对同时装有 `ConflictScanner` 的环境消除 `OpenPanel` 期间两次重复 `ConflictEngine.Invalidate + EnsureBuilt(true)`（全量 40+ DLL 的 `DseCecil` 同步解析）并以内存模组状态签名跨次开窗缓存。
 - **秒级退出流程（「退出游戏」）**：主菜单退出、暂停菜单退出与窗口关闭前统一安全触发各模组 `OnDisable()` 以保存配置，随后清空已卸载模组持有的一次性 `HarmonyInstance` 引用以跳过 `ModLoader.OnApplicationQuit()` 在进程销毁前的 40+ 次同步 `UnpatchAll` 动态方法重编译；同时在游戏禁用遥测（`OVERWRITE_DISABLE_ANALYTICS == true`）时跳过暂停菜单 `QuitWithAnalytics()` 无意义的 1 秒固定空等，实现流畅秒退。
-- **全面委托化热点钩子 & `ModScanner` 全绿**：全代码库零 `FindObjectsOfType` / `GameObject.Find`，所有 `AccessTools.TypeByName` 与热点 `MethodInfo` 均在启动/epoch 初始化阶段一次性绑定为静态 `Delegate.CreateDelegate` 强类型委托，消除每帧与热路径反射查找；工坊程序集监听通过 `O(1)` 名称白名单过滤，严格遵守官方 `ModScanner` 静态扫描 **0 Findings / 0 Capabilities / 0 HardFlags / Refused: False**。
+- **全面委托化热点钩子 & `ModScanner` 全绿**：全代码库零 `FindObjectsOfType` / `GameObject.Find`，所有 `AccessTools.TypeByName` 与热点 `MethodInfo` 均在启动/epoch 初始化阶段一次性绑定为静态 `Delegate.CreateDelegate` 强类型委托，消除每帧与热路径反射查找；工坊程序集监听通过 `O(1)` 名称白名单过滤，严格遵守官方 `ModScanner` 静态扫描（仅声明合法的 `<Capability>files</Capability>` 用于静态只读热键探测，保持 `0 HardFlags / 0 Deprecated / UsesDeprecatedReflection: False / Refused: False`）。
 
 ### 9. 模组排查、只读热键探测与疑难设置接管（v1.4.3 ~ v1.4.4）
 - **官方渠道全量恢复**：在遵循官方 `ModScanner` 安全边界前提下，深入官方 `ModConfig.configs` 注册字典与 `GameOptionRegistry` 条目回调归属，自动找回作者命名不规范（“野 `ModConfig.For(...)` ID”或错配 `source`）导致的漏检设定，并在应用/还原时联动通知全部关联配置 ID 生效。
@@ -108,11 +108,15 @@
    - 新增 `DllKeyProbe.cs`，基于游戏自带静态 IL 解析器 `DseCecil.dll` 与 `ModData` / 本地小型 `.json/.cfg/.ini` 配置扫描，为未通过官方 `ModConfig` / `GameOptionRegistry` 公开热键的第三方代码模组自动提取硬编码或自定义保存的按键占用（覆盖 `Input.GetKey*` 字面量、静态字段、`PlayerPrefs.GetInt` 默认键以及 `KeyBindHelper.GetKeyDown("...")`）。
    - 按各模组 `manifest.ModVersion` + DLL/配置大小与修改时间建立增量指纹缓存并持久化至 `ModData/probably_unified_hotkeys/dll_probe_cache_v1.txt`，主设置开窗零重复解析开销，并支持在「模组排查」中点击 **`强制全部重扫`** / **`复查此模组`** 按需失效重探。
    - 在模组卡片头部显示 `探测: N` 徽章，卡片内新增 **「自动探测热键 (只读 · 仅供冲突排查)」** 分区与 **`[探测·只读]`** 不可改键行；已探测按键实时并入全局 **`[!] 仅看冲突`** 检测（提示标注来源，避免“硬编码+已配模组”静默撞键），并保持仅探测-vs-可改键的实用冲突降噪。
-2. **「模组排查」疑难收口与诊断效率提升**：
+2. **「模组排查」疑难收口、分类筛选与诊断效率提升**：
    - 扩充非按键整数关键词黑名单并收紧键码整数启发式（自动跳过 `50/60/100/110/120` 常见数值滑块与 ASCII 数字范围），显著减少常规数值设置误入 `[有疑难/待确认项]`。
-   - 候选项操作行新增 **`忽略(非按键)`** 按钮与 **`[已忽略非按键]` / `恢复提醒`** 状态切换（持久化于 `probably_unified_hotkeys.ignored_candidates.v1`），已全部忽略误报的模组自动退回 `[已正常纳管]`，彻底告别永久黄标。
-   - 「模组排查」置顶汇总栏新增 **探测热键总数** 与 **`复制排查汇总`** 一键复制按钮；展开明细后同步列出只读探测按键并支持 **`定位`** 跳转至对应模组卡片。
-3. **合规声明与扫描工具同步**：
+   - 修复忽略误报时的计数混淆：清晰区分 **`待确认: N (原始: M)`**（需人工确认的 `[疑难待确认]` / `[原UI未显示·待确认]` 条目）与已通过启发式筛选的 **`[常规选项·可强转]`** 行；**`忽略(非按键)`** 与 **`恢复提醒`** 按钮仅出现在真正需要确认的疑难行上，避免“忽略 1 项待确认后卡片仍显示未归零候选数却已变绿”的困惑。
+   - 候选项忽略状态持久化于 `probably_unified_hotkeys.ignored_candidates.v1`，待确认项全部处理完毕的模组自动收口至 `[已正常纳管]`。
+   - 「模组排查」置顶汇总栏新增 **探测热键总数**、**`复制排查汇总`** 一键复制按钮，以及一行 **快速分类筛选栏**（`全部`、`探测热键`、`疑难待确认`、`未配官方`、`正常纳管`、`纯资源`）；切换到 `探测热键` 时自动展开明细并支持 **`定位`** 跳转至对应模组卡片。
+3. **完整设置展示筛选与原版冲突徽章同步修复**：
+   - 完整设置顶部操作行新增 **`显示: 全部` / `仅展示按键` / `仅展示常规`** 下拉筛选器（位于 **`模组排查`** 右侧），可一键将当前全部原版/模组卡片聚焦为纯按键视图或纯常规视图；空组自动折叠隐藏，搜索、展开/收起与冲突跳转无缝联动。
+   - 修复原版官方快捷键冲突时仅按键变橙但前方缺少 **`[!]` 叹号徽章** 与鼠标悬浮冲突详情提示的漏绑问题（同步更新原版行 `"label_" + entry.id` 文本并保留原版 `info` 图标）。
+4. **合规声明与扫描工具同步**：
    - `manifest.xml` 显式声明 `<Capabilities><Capability>files</Capability></Capabilities>` 并附中英双语权限说明；全程不触碰任何废弃能力（`0 HardFlags / 0 Deprecated / UsesDeprecatedReflection=False / Refused=False`）。
 
 ### v1.4.3
