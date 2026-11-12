@@ -2,7 +2,7 @@
 <Manifest>
   <ID>probably_unified_hotkeys</ID>
   <Name>可能是按键统一优化 / Probably Unified Hotkeys</Name>
-  <Author>Antigravity &amp; taihubai1231</Author>
+  <Author>太湖白1231</Author>
   <ModVersion>1.4.3</ModVersion>
   <Description>将原版与所有模组的快捷键与常规设置统一整合进官方 ESC「选项」页，并全面重构「选项 / 全部展开 / 改造件 / 退出游戏」四大核心交互流畅度。
 
