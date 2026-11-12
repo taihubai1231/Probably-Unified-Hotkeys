@@ -374,8 +374,8 @@ namespace ProbablyUnifiedHotkeys
 
         public static void Apply(Harmony harmony, ModLog? log)
         {
-            // 对官方泛型 ModConfig 热键（ConfigEntry<KeyCode>.Value）挂接运行时组合键过滤
-            PatchConfigEntryKeyCode(harmony, log);
+            // 对官方泛型 ModConfig 热键（KeyCode / string / int）挂接运行时组合键过滤
+            PatchConfigEntryHotkeys(harmony, log);
 
             // 扫描当前已加载的程序集
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
@@ -390,7 +390,7 @@ namespace ProbablyUnifiedHotkeys
             };
         }
 
-        private static void PatchConfigEntryKeyCode(Harmony harmony, ModLog? log)
+        private static void PatchConfigEntryHotkeys(Harmony harmony, ModLog? log)
         {
             try
             {
@@ -407,6 +407,36 @@ namespace ProbablyUnifiedHotkeys
             {
                 log?.Warning($"[WorkshopModPatcher] Failed to patch ConfigEntry<KeyCode>.Value: {ex.Message}");
             }
+
+            try
+            {
+                PropertyInfo? strProp = AccessTools.Property(typeof(ConfigEntry<string>), nameof(ConfigEntry<string>.Value));
+                MethodInfo? strGetter = strProp?.GetGetMethod(true);
+                if (strGetter != null)
+                {
+                    MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ConfigEntryString_GetValue_Postfix));
+                    harmony.Patch(strGetter, postfix: new HarmonyMethod(postfix));
+                }
+            }
+            catch (Exception ex)
+            {
+                log?.Warning($"[WorkshopModPatcher] Failed to patch ConfigEntry<string>.Value: {ex.Message}");
+            }
+
+            try
+            {
+                PropertyInfo? intProp = AccessTools.Property(typeof(ConfigEntry<int>), nameof(ConfigEntry<int>.Value));
+                MethodInfo? intGetter = intProp?.GetGetMethod(true);
+                if (intGetter != null)
+                {
+                    MethodInfo postfix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(ConfigEntryInt_GetValue_Postfix));
+                    harmony.Patch(intGetter, postfix: new HarmonyMethod(postfix));
+                }
+            }
+            catch (Exception ex)
+            {
+                log?.Warning($"[WorkshopModPatcher] Failed to patch ConfigEntry<int>.Value: {ex.Message}");
+            }
         }
 
         public static void ConfigEntryKeyCode_GetValue_Postfix(ConfigEntry<KeyCode> __instance, ref KeyCode __result)
@@ -416,6 +446,53 @@ namespace ProbablyUnifiedHotkeys
             string? modId = __instance.Config?.ModId;
             string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
             ComboKeyStore.FilterRuntimeKey(ref __result, fullId, __instance.Key);
+        }
+
+        public static void ConfigEntryString_GetValue_Postfix(ConfigEntry<string> __instance, ref string __result)
+        {
+            if (string.IsNullOrEmpty(__result) || ComboKeyStore.IsBypassed || __instance == null) return;
+            string? modId = __instance.Config?.ModId;
+            string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
+            if (!ComboKeyStore.IsManagedStringHotkey(fullId, __instance.Key)) return;
+
+            if (!ModOptionScanner.TryParseComboString(__result, out KeyModifierMask embeddedMods, out KeyCode parsedKey) ||
+                parsedKey == KeyCode.None)
+            {
+                return;
+            }
+
+            if (embeddedMods != KeyModifierMask.None)
+            {
+                if (!ComboKeyStore.AreModifiersExactMatch(embeddedMods, parsedKey))
+                {
+                    __result = "None";
+                }
+            }
+            else
+            {
+                KeyCode filtered = parsedKey;
+                ComboKeyStore.FilterRuntimeKey(ref filtered, fullId, __instance.Key);
+                if (filtered == KeyCode.None)
+                {
+                    __result = "None";
+                }
+            }
+        }
+
+        public static void ConfigEntryInt_GetValue_Postfix(ConfigEntry<int> __instance, ref int __result)
+        {
+            if (__result == 0 || ComboKeyStore.IsBypassed || __instance == null) return;
+            string? modId = __instance.Config?.ModId;
+            string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
+            if (!ComboKeyStore.IsManagedIntHotkey(fullId, __instance.Key)) return;
+            if (!Enum.IsDefined(typeof(KeyCode), __result)) return;
+
+            KeyCode filtered = (KeyCode)__result;
+            ComboKeyStore.FilterRuntimeKey(ref filtered, fullId, __instance.Key);
+            if (filtered == KeyCode.None)
+            {
+                __result = 0;
+            }
         }
 
         private static readonly HashSet<string> SupportedWorkshopAssemblies = new HashSet<string>(StringComparer.Ordinal)

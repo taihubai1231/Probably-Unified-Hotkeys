@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using UnityEngine;
 
@@ -47,9 +48,21 @@ namespace ProbablyUnifiedHotkeys
     public static class ComboKeyStore
     {
         private const string PrefsKey = "probably_unified_hotkeys.combos.v1";
+        private const string ForcedHotkeysPrefsKey = "probably_unified_hotkeys.forced_hotkeys.v1";
 
         private static readonly Dictionary<string, (KeyModifierMask Modifiers, KeyCode Key)> SavedCombos
             = new Dictionary<string, (KeyModifierMask, KeyCode)>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly HashSet<string> ForcedHotkeyIds
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static HashSet<string> _managedStringHotkeyIds
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static HashSet<string> _managedIntHotkeyIds
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static int _forcedHotkeysRevision = 0;
 
         private static readonly Dictionary<KeyCode, List<KeyModifierMask>> ActiveCombosByKey
             = new Dictionary<KeyCode, List<KeyModifierMask>>();
@@ -80,6 +93,57 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        internal static bool UseInMemoryPrefsForTests = false;
+        internal static Func<KeyCode, KeyModifierMask>? HeldModifiersOverride = null;
+        private static readonly Dictionary<string, string> InMemoryTestPrefs = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        private static string ReadPrefString(string key)
+        {
+            if (UseInMemoryPrefsForTests)
+            {
+                return InMemoryTestPrefs.TryGetValue(key, out string? v) ? v : string.Empty;
+            }
+            return ReadPlayerPrefRaw(key);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static string ReadPlayerPrefRaw(string key) => PlayerPrefs.GetString(key, string.Empty);
+
+        private static void WritePrefString(string key, string value)
+        {
+            if (UseInMemoryPrefsForTests)
+            {
+                InMemoryTestPrefs[key] = value;
+                return;
+            }
+            WritePlayerPrefRaw(key, value);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void WritePlayerPrefRaw(string key, string value) => PlayerPrefs.SetString(key, value);
+
+        private static void DeletePrefKey(string key)
+        {
+            if (UseInMemoryPrefsForTests)
+            {
+                InMemoryTestPrefs.Remove(key);
+                return;
+            }
+            DeletePlayerPrefRaw(key);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void DeletePlayerPrefRaw(string key) => PlayerPrefs.DeleteKey(key);
+
+        private static void SavePrefsStorage()
+        {
+            if (UseInMemoryPrefsForTests) return;
+            SavePlayerPrefsRaw();
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void SavePlayerPrefsRaw() => PlayerPrefs.Save();
+
         public static void EnsureLoaded()
         {
             if (_loaded) return;
@@ -90,9 +154,10 @@ namespace ProbablyUnifiedHotkeys
         public static void Load()
         {
             SavedCombos.Clear();
+            ForcedHotkeyIds.Clear();
             try
             {
-                string raw = PlayerPrefs.GetString(PrefsKey, string.Empty);
+                string raw = ReadPrefString(PrefsKey);
                 if (!string.IsNullOrEmpty(raw))
                 {
                     string[] parts = raw.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
@@ -119,6 +184,20 @@ namespace ProbablyUnifiedHotkeys
                         }
                     }
                 }
+
+                string forcedRaw = ReadPrefString(ForcedHotkeysPrefsKey);
+                if (!string.IsNullOrEmpty(forcedRaw))
+                {
+                    string[] parts = forcedRaw.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (string part in parts)
+                    {
+                        string id = Uri.UnescapeDataString(part).Trim();
+                        if (!string.IsNullOrEmpty(id))
+                        {
+                            ForcedHotkeyIds.Add(id);
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -128,13 +207,150 @@ namespace ProbablyUnifiedHotkeys
             RebuildRuntimeFromSaved();
         }
 
+        public static void SaveForcedHotkeys()
+        {
+            try
+            {
+                if (ForcedHotkeyIds.Count == 0)
+                {
+                    DeletePrefKey(ForcedHotkeysPrefsKey);
+                }
+                else
+                {
+                    var sb = new StringBuilder(128);
+                    foreach (string id in ForcedHotkeyIds)
+                    {
+                        if (string.IsNullOrEmpty(id)) continue;
+                        if (sb.Length > 0) sb.Append(';');
+                        sb.Append(Uri.EscapeDataString(id));
+                    }
+                    string encoded = sb.ToString();
+                    if (string.IsNullOrEmpty(encoded)) DeletePrefKey(ForcedHotkeysPrefsKey);
+                    else WritePrefString(ForcedHotkeysPrefsKey, encoded);
+                }
+                SavePrefsStorage();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[ProbablyUnifiedHotkeys] Error saving forced hotkeys: {ex.Message}");
+            }
+        }
+
+        public static bool IsForcedHotkey(string? canonicalId)
+        {
+            EnsureLoaded();
+            if (string.IsNullOrEmpty(canonicalId)) return false;
+            return ForcedHotkeyIds.Contains(canonicalId);
+        }
+
+        public static void SetForcedHotkey(string? canonicalId, bool forced)
+        {
+            EnsureLoaded();
+            if (string.IsNullOrEmpty(canonicalId)) return;
+
+            bool changed = forced
+                ? ForcedHotkeyIds.Add(canonicalId)
+                : ForcedHotkeyIds.Remove(canonicalId);
+
+            if (changed)
+            {
+                _forcedHotkeysRevision++;
+                if (!forced)
+                {
+                    if (SavedCombos.Remove(canonicalId))
+                    {
+                        Save();
+                        RebuildRuntimeFromSaved();
+                    }
+                }
+                SaveForcedHotkeys();
+            }
+        }
+
+        public static int GetForcedHotkeysRevision()
+        {
+            EnsureLoaded();
+            return _forcedHotkeysRevision;
+        }
+
+        public static void RegisterManagedConfigKeyIds(IEnumerable<string>? stringIds, IEnumerable<string>? intIds)
+        {
+            var nextStr = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (stringIds != null)
+            {
+                foreach (string id in stringIds)
+                {
+                    if (!string.IsNullOrEmpty(id)) nextStr.Add(id);
+                }
+            }
+
+            var nextInt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (intIds != null)
+            {
+                foreach (string id in intIds)
+                {
+                    if (!string.IsNullOrEmpty(id)) nextInt.Add(id);
+                }
+            }
+
+            _managedStringHotkeyIds = nextStr;
+            _managedIntHotkeyIds = nextInt;
+        }
+
+        public static bool IsManagedStringHotkey(string? fullId, string? keyName = null)
+        {
+            EnsureLoaded();
+            var strSet = _managedStringHotkeyIds;
+            if (!string.IsNullOrEmpty(fullId))
+            {
+                if (strSet.Contains(fullId) || ForcedHotkeyIds.Contains(fullId) || SavedCombos.ContainsKey(fullId))
+                {
+                    return true;
+                }
+            }
+            if (!string.IsNullOrEmpty(keyName) && strSet.Contains(keyName))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public static bool IsManagedIntHotkey(string? fullId, string? keyName = null)
+        {
+            EnsureLoaded();
+            var intSet = _managedIntHotkeyIds;
+            if (!string.IsNullOrEmpty(fullId))
+            {
+                if (intSet.Contains(fullId) || ForcedHotkeyIds.Contains(fullId) || SavedCombos.ContainsKey(fullId))
+                {
+                    return true;
+                }
+            }
+            if (!string.IsNullOrEmpty(keyName) && intSet.Contains(keyName))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public static bool HasActiveComboConflictForPlainKey(KeyCode primaryKey)
+        {
+            return ShouldSuppressPlainKey(primaryKey);
+        }
+
+        public static bool HasSavedComboFor(string? fullId)
+        {
+            EnsureLoaded();
+            return !string.IsNullOrEmpty(fullId) && SavedCombos.ContainsKey(fullId);
+        }
+
         public static void Save()
         {
             try
             {
                 if (SavedCombos.Count == 0)
                 {
-                    PlayerPrefs.DeleteKey(PrefsKey);
+                    DeletePrefKey(PrefsKey);
                 }
                 else
                 {
@@ -150,10 +366,10 @@ namespace ProbablyUnifiedHotkeys
                           .Append(';');
                     }
                     string encoded = sb.ToString();
-                    if (string.IsNullOrEmpty(encoded)) PlayerPrefs.DeleteKey(PrefsKey);
-                    else PlayerPrefs.SetString(PrefsKey, encoded);
+                    if (string.IsNullOrEmpty(encoded)) DeletePrefKey(PrefsKey);
+                    else WritePrefString(PrefsKey, encoded);
                 }
-                PlayerPrefs.Save();
+                SavePrefsStorage();
             }
             catch (Exception ex)
             {
@@ -261,6 +477,11 @@ namespace ProbablyUnifiedHotkeys
 
         public static KeyModifierMask GetHeldModifiersMask(KeyCode excludeModifierKey = KeyCode.None)
         {
+            if (HeldModifiersOverride != null)
+            {
+                return HeldModifiersOverride(excludeModifierKey);
+            }
+
             KeyModifierMask mask = KeyModifierMask.None;
 
             bool shift = (excludeModifierKey != KeyCode.LeftShift && Input.GetKey(KeyCode.LeftShift)) ||

@@ -15,7 +15,19 @@ namespace ProbablyUnifiedHotkeys
     {
         private static readonly HashSet<string> ExactHotkeyTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "Key", "Hotkey", "Shortcut", "Keybind", "Bind", "ToggleKey", "OpenKey", "TriggerKey"
+            "Key", "Hotkey", "Hotkeys", "Shortcut", "Shortcuts", "Keybind", "Keybinds", "Keybinding",
+            "Bind", "ToggleKey", "OpenKey", "TriggerKey", "KeyCode", "InputKey", "QuickKey", "FastKey",
+            "Btn", "ButtonKey", "Mapping", "KeyMapping", "Accelerator", "ActivationKey", "MenuKey",
+            "PanelKey", "UiKey", "ActionKey", "InteractKey", "ConfirmKey", "CancelKey", "ResetKey",
+            "SortKey", "HoldKey", "PressKey"
+        };
+
+        private static readonly HashSet<string> ExcludedNonHotkeyIntTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Count", "Max", "Min", "Size", "Width", "Height", "Delay", "Interval", "Cooldown",
+            "Duration", "Speed", "Scale", "Alpha", "Opacity", "Port", "Index", "Page", "Slot",
+            "Limit", "Amount", "Price", "Rate", "Percent", "Level", "Day", "Days", "Step",
+            "Radius", "Distance", "Font"
         };
 
         private static readonly string[] ChineseHotkeyKeywords =
@@ -28,6 +40,7 @@ namespace ProbablyUnifiedHotkeys
             "keyword", "keycard", "key_card", "关键词", "关键字", "门禁卡", "房卡"
         };
 
+        private static readonly FieldInfo? ModConfigConfigsField = AccessTools.Field(typeof(ModConfig), "configs");
         private static readonly MethodInfo? ApplyBoxedMethod = AccessTools.Method(typeof(ConfigEntry), "ApplyBoxed", new Type[] { typeof(object) });
         private static readonly Func<ConfigEntry, object, bool>? ApplyBoxedDelegate =
             ApplyBoxedMethod != null ? CreateOpenDelegate<Func<ConfigEntry, object, bool>>(ApplyBoxedMethod) : null;
@@ -174,16 +187,74 @@ namespace ProbablyUnifiedHotkeys
         }
 
         /// <summary>
+        /// 获取当前内存中已注册的 ModConfig 数量（供轻量环境指纹感知“野 ID”或懒加载配置变动）
+        /// </summary>
+        internal static int GetRegisteredModConfigCount()
+        {
+            var dict = TryGetAllModConfigs();
+            return dict != null ? dict.Count : 0;
+        }
+
+        private static Dictionary<string, ModConfig>? TryGetAllModConfigs()
+        {
+            try
+            {
+                return ModConfigConfigsField?.GetValue(null) as Dictionary<string, ModConfig>;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        internal static string GetCanonicalConfigId(string fallbackModId, ConfigEntry entry)
+        {
+            string? cfgModId = entry?.Config?.ModId;
+            string modPrefix = !string.IsNullOrEmpty(cfgModId) ? cfgModId! : fallbackModId;
+            return $"{modPrefix}.{entry?.Key}";
+        }
+
+        /// <summary>
         /// 扫描全量已启用模组，构建设置树
         /// </summary>
         public static List<ModOptionGroup> ScanAll(out List<ModHotkeyEntry> allHotkeysForConflict)
         {
+            return ScanAll(out allHotkeysForConflict, out _);
+        }
+
+        /// <summary>
+        /// 扫描全量已启用模组，构建设置树并输出详尽的扫描诊断报告（0 安全警告）
+        /// </summary>
+        public static List<ModOptionGroup> ScanAll(out List<ModHotkeyEntry> allHotkeysForConflict, out ModScanReport scanReport)
+        {
             ComboKeyStore.EnsureLoaded();
             using var _bypass = ComboKeyStore.EnterBypass();
             var groups = new List<ModOptionGroup>();
+            scanReport = new ModScanReport();
 
-            // 1. 优先扫描官方 ModConfig（含完整 BoxedDefault 默认值与取值范围）
-            var loadedMods = ModLoader.Mods;
+            var managedStringIds = new List<string>(32);
+            var managedIntIds = new List<string>(16);
+            var matchedConfigsByGroupId = new Dictionary<string, List<ModConfig>>(StringComparer.OrdinalIgnoreCase);
+            var candidatesByGroupId = new Dictionary<string, List<DiagnosticCandidateEntry>>(StringComparer.OrdinalIgnoreCase);
+            var registryMatchedModIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var adapterMatchedModIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var consumedConfigIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var unmatchedWildConfigs = new List<ModConfig>();
+
+            // 1. 优先扫描已加载模组的标准 ModConfig（含完整 BoxedDefault 默认值与取值范围）
+            List<LoadedMod>? loadedMods = null;
+            try
+            {
+                loadedMods = ModLoader.Mods;
+            }
+            catch
+            {
+                loadedMods = null;
+            }
+
+            var enabledLoadedMods = new List<LoadedMod>();
+            var enabledModById = new Dictionary<string, LoadedMod>(StringComparer.OrdinalIgnoreCase);
+
             if (loadedMods != null)
             {
                 foreach (var mod in loadedMods)
@@ -192,41 +263,84 @@ namespace ProbablyUnifiedHotkeys
                     string modId = mod.Manifest.ID;
                     if (IsSelfModId(modId)) continue;
 
+                    bool isEnabled = IsLoadedModActive(mod, modId);
+                    if (isEnabled)
+                    {
+                        enabledLoadedMods.Add(mod);
+                        if (!string.IsNullOrEmpty(modId) && !enabledModById.ContainsKey(modId))
+                        {
+                            enabledModById[modId] = mod;
+                        }
+                    }
+
                     ModConfig? config = ModConfig.Find(modId);
                     if (config == null || !config.HasEntries) continue;
 
+                    consumedConfigIds.Add(modId);
                     string displayName = string.IsNullOrEmpty(mod.Manifest.Name) ? modId : mod.Manifest.Name;
                     var group = GetOrCreateGroup(groups, modId, displayName);
+                    ScanModConfigIntoGroup(
+                        group,
+                        config,
+                        matchedConfigsByGroupId,
+                        candidatesByGroupId,
+                        managedStringIds,
+                        managedIntIds
+                    );
+                }
+            }
 
-                    foreach (var entry in config.Entries)
+            // 1B. 打捞所有未按 Manifest.ID 命名注册的“野 ID” ModConfig（如 AI 随手写成 ModConfig.For("my_mod_cfg")）
+            var allConfigs = TryGetAllModConfigs();
+            if (allConfigs != null)
+            {
+                foreach (var kvp in allConfigs)
+                {
+                    string cfgId = kvp.Key;
+                    ModConfig config = kvp.Value;
+                    if (string.IsNullOrEmpty(cfgId) || config == null || !config.HasEntries) continue;
+                    if (IsSelfModId(cfgId) || consumedConfigIds.Contains(cfgId)) continue;
+
+                    consumedConfigIds.Add(cfgId);
+
+                    LoadedMod? ownerMod = TryMatchWildConfigToLoadedMod(cfgId, enabledLoadedMods, matchedConfigsByGroupId);
+                    if (ownerMod != null && ownerMod.Manifest != null)
                     {
-                        if (entry == null) continue;
-                        string entryKey = entry.Key;
-                        string label = entry.Label?.Invoke() ?? entryKey;
-                        string tooltip = entry.Tooltip?.Invoke() ?? string.Empty;
-
-                        if (IsHotkeyEntry(entry))
+                        string ownerId = ownerMod.Manifest.ID;
+                        string displayName = string.IsNullOrEmpty(ownerMod.Manifest.Name) ? ownerId : ownerMod.Manifest.Name;
+                        var group = GetOrCreateGroup(groups, ownerId, displayName);
+                        if (!string.Equals(group.ModId, cfgId, StringComparison.OrdinalIgnoreCase) &&
+                            !group.ExtraNotifyModIds.Any(id => string.Equals(id, cfgId, StringComparison.OrdinalIgnoreCase)))
                         {
-                            var hotkey = CreateHotkeyFromConfigEntry(group, entry, label, tooltip);
-                            if (hotkey != null && !ContainsHotkey(group, hotkey.Id, hotkey.DisplayName))
-                            {
-                                group.Hotkeys.Add(hotkey);
-                            }
+                            group.ExtraNotifyModIds.Add(cfgId);
                         }
-                        else
-                        {
-                            var general = CreateGeneralFromConfigEntry(group, entry, label, tooltip);
-                            if (general != null && !ContainsGeneral(group, general.Id, general.DisplayName))
-                            {
-                                group.GeneralSettings.Add(general);
-                            }
-                        }
+                        ScanModConfigIntoGroup(
+                            group,
+                            config,
+                            matchedConfigsByGroupId,
+                            candidatesByGroupId,
+                            managedStringIds,
+                            managedIntIds
+                        );
+                    }
+                    else
+                    {
+                        var group = GetOrCreateGroup(groups, cfgId, cfgId);
+                        unmatchedWildConfigs.Add(config);
+                        ScanModConfigIntoGroup(
+                            group,
+                            config,
+                            matchedConfigsByGroupId,
+                            candidatesByGroupId,
+                            managedStringIds,
+                            managedIntIds
+                        );
                     }
                 }
             }
 
             // 2. 全面扫描 GameOptionRegistry 中的所有第三方模组配置与快捷键（含未指定 source 的外部程序集条目）
-            ScanGameOptionRegistryModEntries(groups);
+            ScanGameOptionRegistryModEntries(groups, registryMatchedModIds);
 
             // 3. 记录已被覆盖的模组（针对未走 GameOptionRegistry / ModConfig 的旧版独立适配器做兜底补充）
             var handledAdapterIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -243,6 +357,7 @@ namespace ProbablyUnifiedHotkeys
 
             foreach (var extra in extraAdapterGroups)
             {
+                adapterMatchedModIds.Add(extra.ModId);
                 var existing = groups.FirstOrDefault(g => string.Equals(g.ModId, extra.ModId, StringComparison.OrdinalIgnoreCase));
                 if (existing == null)
                 {
@@ -266,6 +381,9 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
             }
+
+            // 注册运行时需要拦截组合键防误触的 string / int ConfigEntry 标识
+            ComboKeyStore.RegisterManagedConfigKeyIds(managedStringIds, managedIntIds);
 
             // 移出无有效配置项的空组
             groups.RemoveAll(g => g.TotalItemCount == 0);
@@ -322,14 +440,33 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
 
-                ModConfig? modCfg = ModConfig.Find(group.ModId);
+                List<ModConfig>? groupConfigs = null;
+                if (matchedConfigsByGroupId.TryGetValue(group.ModId, out var foundCfgs) && foundCfgs.Count > 0)
+                {
+                    groupConfigs = foundCfgs;
+                }
+                else
+                {
+                    ModConfig? fallbackCfg = ModConfig.Find(group.ModId);
+                    if (fallbackCfg != null && fallbackCfg.HasEntries)
+                    {
+                        groupConfigs = new List<ModConfig>(1) { fallbackCfg };
+                    }
+                }
+
                 var capturedGroup = group;
                 capturedGroup.ResetToDefaultsAction = () =>
                 {
-                    if (modCfg != null && modCfg.HasEntries)
+                    if (groupConfigs != null)
                     {
-                        modCfg.ResetToDefaults();
-                        modCfg.Save();
+                        foreach (var cfg in groupConfigs)
+                        {
+                            if (cfg != null && cfg.HasEntries)
+                            {
+                                cfg.ResetToDefaults();
+                                cfg.Save();
+                            }
+                        }
                     }
 
                     foreach (var hk in capturedGroup.Hotkeys)
@@ -350,12 +487,13 @@ namespace ProbablyUnifiedHotkeys
                     }
                     ComboKeyStore.Save();
 
+                    bool hasAnyConfig = groupConfigs != null && groupConfigs.Count > 0;
                     foreach (var gen in capturedGroup.GeneralSettings)
                     {
                         gen.PendingBool = null;
                         gen.PendingFloat = null;
                         gen.PendingIndex = null;
-                        if (modCfg == null || gen.ResetToDefault == null)
+                        if (!hasAnyConfig || gen.ResetToDefault == null)
                         {
                             gen.ResetToSnapshot();
                         }
@@ -380,7 +518,407 @@ namespace ProbablyUnifiedHotkeys
             }
             ComboKeyStore.RebuildRuntimeLookup(allHotkeysForConflict);
 
+            // 7. 构建零安全警告的全量模组扫描与疑难项诊断报告
+            scanReport = BuildModScanReport(
+                groups,
+                enabledLoadedMods,
+                matchedConfigsByGroupId,
+                candidatesByGroupId,
+                registryMatchedModIds,
+                adapterMatchedModIds,
+                unmatchedWildConfigs
+            );
+
             return groups;
+        }
+
+        private static bool IsLoadedModActive(LoadedMod mod, string modId)
+        {
+            if (mod.IsEnabled) return true;
+            try
+            {
+                return !string.IsNullOrEmpty(modId) && ModLoader.IsModEnabled(modId);
+            }
+            catch
+            {
+                return mod.IsEnabled;
+            }
+        }
+
+        private static void ScanModConfigIntoGroup(
+            ModOptionGroup group,
+            ModConfig config,
+            Dictionary<string, List<ModConfig>> matchedConfigsByGroupId,
+            Dictionary<string, List<DiagnosticCandidateEntry>> candidatesByGroupId,
+            List<string> managedStringIds,
+            List<string> managedIntIds)
+        {
+            if (!matchedConfigsByGroupId.TryGetValue(group.ModId, out var cfgList))
+            {
+                cfgList = new List<ModConfig>(1);
+                matchedConfigsByGroupId[group.ModId] = cfgList;
+            }
+            if (!cfgList.Contains(config))
+            {
+                cfgList.Add(config);
+            }
+
+            if (!candidatesByGroupId.TryGetValue(group.ModId, out var candList))
+            {
+                candList = new List<DiagnosticCandidateEntry>();
+                candidatesByGroupId[group.ModId] = candList;
+            }
+
+            foreach (var entry in config.Entries)
+            {
+                if (entry == null) continue;
+                string entryKey = entry.Key;
+                string label = entry.Label?.Invoke() ?? entryKey;
+                string tooltip = entry.Tooltip?.Invoke() ?? string.Empty;
+                string canonicalId = GetCanonicalConfigId(group.ModId, entry);
+                bool isForced = ComboKeyStore.IsForcedHotkey(canonicalId);
+
+                bool isHotkey = false;
+                bool isGeneral = false;
+                bool dropped = false;
+
+                if (IsHotkeyEntry(entry, canonicalId))
+                {
+                    var hotkey = CreateHotkeyFromConfigEntry(group, entry, canonicalId, label, tooltip);
+                    if (hotkey != null)
+                    {
+                        if (!ContainsHotkey(group, hotkey.Id, hotkey.DisplayName))
+                        {
+                            group.Hotkeys.Add(hotkey);
+                        }
+                        isHotkey = true;
+                        if (entry.ValueType == typeof(string))
+                        {
+                            managedStringIds.Add(canonicalId);
+                        }
+                        else if (entry.ValueType == typeof(int))
+                        {
+                            managedIntIds.Add(canonicalId);
+                        }
+                    }
+                }
+                else
+                {
+                    var general = CreateGeneralFromConfigEntry(group, entry, label, tooltip);
+                    if (general != null)
+                    {
+                        if (!ContainsGeneral(group, general.Id, general.DisplayName))
+                        {
+                            group.GeneralSettings.Add(general);
+                        }
+                        isGeneral = true;
+                    }
+                    else
+                    {
+                        dropped = true;
+                    }
+                }
+
+                // 收集潜在可转为按键的候选/被丢弃/已强转条目（用于诊断面板人工纠偏）
+                bool isPromotableType = entry.ValueType == typeof(string) ||
+                                        (entry.ValueType == typeof(int) && !entry.HasRange && (entry.Choices == null || entry.Choices.Length == 0));
+
+                if (isForced || dropped || (isPromotableType && isGeneral))
+                {
+                    bool suspicious = isForced || dropped;
+                    if (!suspicious && entry.ValueType == typeof(int))
+                    {
+                        suspicious = (IsLikelyKeyCodeInt(entry.BoxedValue) || IsLikelyKeyCodeInt(entry.BoxedDefault)) &&
+                                     !HasNonHotkeyIntToken(entryKey, label);
+                    }
+
+                    candList.Add(new DiagnosticCandidateEntry
+                    {
+                        CanonicalId = canonicalId,
+                        ConfigModId = config.ModId ?? group.ModId,
+                        OwnerModId = group.ModId,
+                        ModDisplayName = group.DisplayName,
+                        EntryKey = entryKey,
+                        Label = label,
+                        Tooltip = tooltip,
+                        ValueTypeName = entry.ValueType?.Name ?? "Unknown",
+                        CurrentValuePreview = FormatValuePreview(entry.BoxedValue),
+                        DefaultValuePreview = FormatValuePreview(entry.BoxedDefault),
+                        IsForcedHotkey = isForced,
+                        IsCurrentlyHotkey = isHotkey,
+                        IsCurrentlyGeneral = isGeneral,
+                        WasDroppedFromMainUI = dropped,
+                        CanPromoteToHotkey = isPromotableType || entry.ValueType == typeof(KeyCode),
+                        IsSuspiciousCandidate = suspicious
+                    });
+                }
+            }
+        }
+
+        private static LoadedMod? TryMatchWildConfigToLoadedMod(
+            string cfgId,
+            List<LoadedMod> enabledMods,
+            Dictionary<string, List<ModConfig>> matchedConfigsByGroupId)
+        {
+            string normCfg = NormalizeModToken(StripCommonConfigAffixes(cfgId));
+            string normCfgRaw = NormalizeModToken(cfgId);
+            if (string.IsNullOrEmpty(normCfg) && string.IsNullOrEmpty(normCfgRaw)) return null;
+
+            LoadedMod? matched = null;
+            int matchCount = 0;
+
+            foreach (var mod in enabledMods)
+            {
+                if (mod?.Manifest == null) continue;
+                string id = mod.Manifest.ID ?? string.Empty;
+                if (matchedConfigsByGroupId.ContainsKey(id)) continue; // 已有正式 ModConfig 的模组不抢占野 ID
+
+                string name = mod.Manifest.Name ?? string.Empty;
+                string idTail = StripAuthorPrefix(id);
+
+                bool hit = string.Equals(NormalizeModToken(id), normCfgRaw, StringComparison.Ordinal) ||
+                           string.Equals(NormalizeModToken(idTail), normCfgRaw, StringComparison.Ordinal) ||
+                           (!string.IsNullOrEmpty(normCfg) &&
+                            (string.Equals(NormalizeModToken(id), normCfg, StringComparison.Ordinal) ||
+                             string.Equals(NormalizeModToken(idTail), normCfg, StringComparison.Ordinal) ||
+                             string.Equals(NormalizeModToken(name), normCfg, StringComparison.Ordinal)));
+
+                if (hit)
+                {
+                    matched = mod;
+                    matchCount++;
+                }
+            }
+
+            return matchCount == 1 ? matched : null;
+        }
+
+        private static string StripAuthorPrefix(string id)
+        {
+            int dot = id.IndexOf('.');
+            return (dot >= 0 && dot + 1 < id.Length) ? id.Substring(dot + 1) : id;
+        }
+
+        private static string StripCommonConfigAffixes(string raw)
+        {
+            string s = StripAuthorPrefix(raw.Trim());
+            string[] suffixes = { "_config", "-config", "config", "_cfg", "-cfg", "cfg", "_settings", "-settings", "settings", "_setting", "setting", "_options", "options" };
+            foreach (string suf in suffixes)
+            {
+                if (s.Length > suf.Length && s.EndsWith(suf, StringComparison.OrdinalIgnoreCase))
+                {
+                    s = s.Substring(0, s.Length - suf.Length);
+                    break;
+                }
+            }
+            return s;
+        }
+
+        private static string NormalizeModToken(string? raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return string.Empty;
+            var sb = new StringBuilder(raw!.Length);
+            for (int i = 0; i < raw.Length; i++)
+            {
+                char c = raw[i];
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                {
+                    sb.Append(c);
+                }
+                else if (c >= 'A' && c <= 'Z')
+                {
+                    sb.Append((char)(c - 'A' + 'a'));
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static bool IsLikelyKeyCodeInt(object? boxed)
+        {
+            if (boxed is not int intVal) return false;
+            // 排除常见小整数配置 0..8 避免把天数/数量滑块误判，重点关注字母/数字/功能键/鼠标侧键码位
+            if (intVal == (int)KeyCode.Tab || intVal == (int)KeyCode.Return || intVal == (int)KeyCode.Space || intVal == (int)KeyCode.BackQuote)
+            {
+                return true;
+            }
+            if ((intVal >= (int)KeyCode.Alpha0 && intVal <= (int)KeyCode.Alpha9) ||
+                (intVal >= (int)KeyCode.A && intVal <= (int)KeyCode.Z) ||
+                (intVal >= (int)KeyCode.Keypad0 && intVal <= (int)KeyCode.KeypadEquals) ||
+                (intVal >= (int)KeyCode.UpArrow && intVal <= (int)KeyCode.PageDown) ||
+                (intVal >= (int)KeyCode.F1 && intVal <= (int)KeyCode.F15) ||
+                (intVal >= (int)KeyCode.RightShift && intVal <= (int)KeyCode.LeftAlt) ||
+                (intVal >= (int)KeyCode.Mouse0 && intVal <= (int)KeyCode.Mouse6))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private static string FormatValuePreview(object? val)
+        {
+            if (val == null) return "null";
+            string s = val.ToString() ?? string.Empty;
+            if (s.Length == 0) return "<空>";
+            return s.Length > 28 ? s.Substring(0, 28) + "..." : s;
+        }
+
+        private static ModScanReport BuildModScanReport(
+            List<ModOptionGroup> groups,
+            List<LoadedMod> enabledLoadedMods,
+            Dictionary<string, List<ModConfig>> matchedConfigsByGroupId,
+            Dictionary<string, List<DiagnosticCandidateEntry>> candidatesByGroupId,
+            HashSet<string> registryMatchedModIds,
+            HashSet<string> adapterMatchedModIds,
+            List<ModConfig> unmatchedWildConfigs)
+        {
+            var report = new ModScanReport();
+            var groupById = new Dictionary<string, ModOptionGroup>(groups.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var g in groups)
+            {
+                if (!string.IsNullOrEmpty(g.ModId) && !groupById.ContainsKey(g.ModId))
+                {
+                    groupById[g.ModId] = g;
+                }
+                report.TotalHotkeysCount += g.Hotkeys.Count;
+                report.TotalGeneralsCount += g.GeneralSettings.Count;
+            }
+
+            foreach (var mod in enabledLoadedMods)
+            {
+                if (mod?.Manifest == null) continue;
+                string modId = mod.Manifest.ID ?? string.Empty;
+                string disp = string.IsNullOrEmpty(mod.Manifest.Name) ? modId : mod.Manifest.Name;
+                bool hasAsm = mod.Assembly != null || (mod.Manifest.Assemblies != null && mod.Manifest.Assemblies.Count > 0);
+
+                groupById.TryGetValue(modId, out var grp);
+                int hkCount = grp?.Hotkeys.Count ?? 0;
+                int genCount = grp?.GeneralSettings.Count ?? 0;
+                int managedTotal = hkCount + genCount;
+
+                var item = new ModDiagnosticItem
+                {
+                    ModId = modId,
+                    DisplayName = disp,
+                    Author = mod.Manifest.Author ?? string.Empty,
+                    Version = mod.Manifest.ModVersion ?? string.Empty,
+                    Description = mod.Manifest.Description ?? string.Empty,
+                    WorkshopId = mod.WorkshopId,
+                    HasAssembly = hasAsm,
+                    ManagedHotkeyCount = hkCount,
+                    ManagedGeneralCount = genCount,
+                    UsedGameOptionRegistry = registryMatchedModIds.Contains(modId),
+                    UsedKnownAdapter = adapterMatchedModIds.Contains(modId)
+                };
+
+                if (matchedConfigsByGroupId.TryGetValue(modId, out var cfgs))
+                {
+                    foreach (var c in cfgs)
+                    {
+                        if (c != null && !string.IsNullOrEmpty(c.ModId))
+                        {
+                            item.MatchedConfigIds.Add(c.ModId);
+                        }
+                    }
+                }
+
+                bool hasActionableCandidate = false;
+                if (candidatesByGroupId.TryGetValue(modId, out var cands))
+                {
+                    foreach (var c in cands)
+                    {
+                        item.CandidateEntries.Add(c);
+                        report.AllCandidates.Add(c);
+                        if (c.IsSuspiciousCandidate || c.IsForcedHotkey)
+                        {
+                            hasActionableCandidate = true;
+                        }
+                    }
+                }
+
+                if (!hasAsm && managedTotal == 0 && item.CandidateEntries.Count == 0)
+                {
+                    item.Status = ModDiagnosticStatus.AssetOnlyMod;
+                    report.AssetOnlyModCount++;
+                }
+                else if (hasActionableCandidate)
+                {
+                    item.Status = ModDiagnosticStatus.HasCandidates;
+                    report.HasCandidatesModCount++;
+                    if (managedTotal > 0) report.ManagedModCount++;
+                }
+                else if (managedTotal == 0)
+                {
+                    item.Status = ModDiagnosticStatus.UnmanagedCodeMod;
+                    report.UnmanagedCodeModCount++;
+                }
+                else
+                {
+                    item.Status = ModDiagnosticStatus.Managed;
+                    report.ManagedModCount++;
+                }
+
+                report.EnabledModCount++;
+                report.Mods.Add(item);
+            }
+
+            // 额外附上无法反向绑定回 Manifest 的独立野 ModConfig
+            foreach (var wildCfg in unmatchedWildConfigs)
+            {
+                if (wildCfg == null || string.IsNullOrEmpty(wildCfg.ModId)) continue;
+                report.OrphanConfigCount++;
+                groupById.TryGetValue(wildCfg.ModId, out var grp);
+
+                var item = new ModDiagnosticItem
+                {
+                    ModId = wildCfg.ModId,
+                    DisplayName = wildCfg.ModId,
+                    HasAssembly = true,
+                    IsWildOrphanConfig = true,
+                    ManagedHotkeyCount = grp?.Hotkeys.Count ?? 0,
+                    ManagedGeneralCount = grp?.GeneralSettings.Count ?? 0
+                };
+                item.MatchedConfigIds.Add(wildCfg.ModId);
+
+                bool hasActionable = false;
+                if (candidatesByGroupId.TryGetValue(wildCfg.ModId, out var cands))
+                {
+                    foreach (var c in cands)
+                    {
+                        item.CandidateEntries.Add(c);
+                        report.AllCandidates.Add(c);
+                        if (c.IsSuspiciousCandidate || c.IsForcedHotkey)
+                        {
+                            hasActionable = true;
+                        }
+                    }
+                }
+
+                item.Status = hasActionable ? ModDiagnosticStatus.HasCandidates : ModDiagnosticStatus.Managed;
+                if (hasActionable) report.HasCandidatesModCount++;
+                report.Mods.Add(item);
+            }
+
+            report.AttentionModCount = report.HasCandidatesModCount + report.UnmanagedCodeModCount;
+
+            report.Mods.Sort((a, b) =>
+            {
+                int cmp = ((int)GetSortPriority(a.Status)).CompareTo((int)GetSortPriority(b.Status));
+                if (cmp != 0) return cmp;
+                return string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
+            });
+
+            return report;
+
+            static int GetSortPriority(ModDiagnosticStatus s)
+            {
+                switch (s)
+                {
+                    case ModDiagnosticStatus.HasCandidates: return 0;
+                    case ModDiagnosticStatus.UnmanagedCodeMod: return 1;
+                    case ModDiagnosticStatus.Managed: return 2;
+                    default: return 3;
+                }
+            }
         }
 
         private static ModOptionGroup GetOrCreateGroup(List<ModOptionGroup> groups, string modId, string displayName)
@@ -511,10 +1049,15 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
-            return ContainsExactHotkeyToken(key) || ContainsExactHotkeyToken(label);
+            return ContainsAnyExactToken(key, ExactHotkeyTokens) || ContainsAnyExactToken(label, ExactHotkeyTokens);
         }
 
-        private static bool ContainsExactHotkeyToken(string? text)
+        private static bool HasNonHotkeyIntToken(string key, string label)
+        {
+            return ContainsAnyExactToken(key, ExcludedNonHotkeyIntTokens) || ContainsAnyExactToken(label, ExcludedNonHotkeyIntTokens);
+        }
+
+        private static bool ContainsAnyExactToken(string? text, HashSet<string> tokenSet)
         {
             if (string.IsNullOrEmpty(text)) return false;
 
@@ -531,7 +1074,7 @@ namespace ProbablyUnifiedHotkeys
                     if (!isWordChar || camelBoundary)
                     {
                         string token = text.Substring(start, i - start);
-                        if (ExactHotkeyTokens.Contains(token))
+                        if (tokenSet.Contains(token))
                         {
                             return true;
                         }
@@ -653,7 +1196,20 @@ namespace ProbablyUnifiedHotkeys
 
         internal static bool IsHotkeyEntry(ConfigEntry entry)
         {
+            return IsHotkeyEntry(entry, null);
+        }
+
+        internal static bool IsHotkeyEntry(ConfigEntry entry, string? canonicalId)
+        {
             if (entry.ValueType == typeof(KeyCode)) return true;
+
+            // 用户在“模组排查”视图中主动标记为快捷键的 string / int 配置项无条件接入
+            if (!string.IsNullOrEmpty(canonicalId) &&
+                (entry.ValueType == typeof(string) || entry.ValueType == typeof(int)) &&
+                ComboKeyStore.IsForcedHotkey(canonicalId))
+            {
+                return true;
+            }
 
             // 布尔开关、浮点滑块或有范围限制的数值条绝不是按键绑定
             if (entry.ValueType == typeof(bool) ||
@@ -711,13 +1267,16 @@ namespace ProbablyUnifiedHotkeys
                 bool hasNonEmptyVal = !string.IsNullOrWhiteSpace(sVal);
                 KeyModifierMask defMods = KeyModifierMask.None;
                 KeyModifierMask valMods = KeyModifierMask.None;
-                bool defParses = hasNonEmptyDef && TryParseComboString(sDef, out defMods, out _);
-                bool valParses = hasNonEmptyVal && TryParseComboString(sVal, out valMods, out _);
+                KeyCode defKey = KeyCode.None;
+                KeyCode valKey = KeyCode.None;
+                bool defParses = hasNonEmptyDef && TryParseComboString(sDef, out defMods, out defKey);
+                bool valParses = hasNonEmptyVal && TryParseComboString(sVal, out valMods, out valKey);
 
                 if (hasNonEmptyVal && !valParses) return false;
                 if (hasNonEmptyDef && !defParses) return false;
 
-                if ((defParses && defMods != KeyModifierMask.None) || (valParses && valMods != KeyModifierMask.None))
+                if ((defParses && (defMods != KeyModifierMask.None || IsUnambiguousKeyCodeStringTarget(defKey))) ||
+                    (valParses && (valMods != KeyModifierMask.None || IsUnambiguousKeyCodeStringTarget(valKey))))
                 {
                     return true;
                 }
@@ -725,10 +1284,29 @@ namespace ProbablyUnifiedHotkeys
                 return HasHotkeyIdentifier(key, label);
             }
 
+            if (HasNonHotkeyIntToken(key, label))
+            {
+                return false;
+            }
+
             return HasHotkeyIdentifier(key, label);
         }
 
-        private static ModHotkeyEntry? CreateHotkeyFromConfigEntry(ModOptionGroup group, ConfigEntry entry, string label, string tooltip)
+        private static bool IsUnambiguousKeyCodeStringTarget(KeyCode kc)
+        {
+            if (kc == KeyCode.None) return false;
+            return (kc >= KeyCode.F1 && kc <= KeyCode.F15) ||
+                   (kc >= KeyCode.Mouse0 && kc <= KeyCode.Mouse6) ||
+                   (kc >= KeyCode.Keypad0 && kc <= KeyCode.KeypadEquals) ||
+                   (kc >= KeyCode.RightShift && kc <= KeyCode.LeftAlt) ||
+                   (kc >= KeyCode.UpArrow && kc <= KeyCode.LeftArrow) ||
+                   kc == KeyCode.BackQuote ||
+                   kc == KeyCode.CapsLock ||
+                   kc == KeyCode.PageUp ||
+                   kc == KeyCode.PageDown;
+        }
+
+        private static ModHotkeyEntry? CreateHotkeyFromConfigEntry(ModOptionGroup group, ConfigEntry entry, string canonicalId, string label, string tooltip)
         {
             bool usesComboString = entry.ValueType == typeof(string) &&
                 (string.Equals(group.ModId, "nicokobo.speed-up", StringComparison.OrdinalIgnoreCase) ||
@@ -751,7 +1329,7 @@ namespace ProbablyUnifiedHotkeys
 
             var hk = new ModHotkeyEntry
             {
-                Id = $"{group.ModId}.{entry.Key}",
+                Id = canonicalId,
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
                 DisplayName = label,
@@ -851,14 +1429,15 @@ namespace ProbablyUnifiedHotkeys
         /// <summary>
         /// 扫描官方 GameOptionRegistry 中由第三方模组注册的所有配置与快捷键（含直接注入原版区且未填 source 的条项）
         /// </summary>
-        private static void ScanGameOptionRegistryModEntries(List<ModOptionGroup> groups)
+        private static void ScanGameOptionRegistryModEntries(List<ModOptionGroup> groups, HashSet<string>? registryMatchedModIds = null)
         {
             try
             {
                 var sections = GameOptionRegistry.Sections;
                 if (sections == null) return;
 
-                var loadedMods = ModLoader.Mods;
+                List<LoadedMod>? loadedMods = null;
+                try { loadedMods = ModLoader.Mods; } catch { }
                 Dictionary<string, LoadedMod>? modById = null;
                 Dictionary<Assembly, LoadedMod>? modByAsm = null;
                 if (loadedMods != null)
@@ -890,18 +1469,30 @@ namespace ProbablyUnifiedHotkeys
                         if (entry == null) continue;
                         if (IsPureVanillaEntry(sec, entry)) continue;
 
-                        string source = !string.IsNullOrEmpty(entry.source)
+                        string rawSource = !string.IsNullOrEmpty(entry.source)
                             ? entry.source
                             : (!isVanillaSec && !string.IsNullOrEmpty(sec.source) ? sec.source : string.Empty);
 
+                        string source = rawSource;
                         string disp = string.Empty;
 
                         if (!string.IsNullOrEmpty(source))
                         {
                             if (IsSelfModId(source)) continue;
-                            if (modById != null && modById.TryGetValue(source, out var m) && m?.Manifest != null && !string.IsNullOrEmpty(m.Manifest.Name))
+                            if (modById != null && modById.TryGetValue(source, out var m) && m?.Manifest != null)
                             {
-                                disp = m.Manifest.Name;
+                                if (!string.IsNullOrEmpty(m.Manifest.Name)) disp = m.Manifest.Name;
+                            }
+                            else if (modByAsm != null)
+                            {
+                                // 若 source 写错或与 Manifest.ID 不一致，通过入口委托归属程序集找回真实模组
+                                Assembly? extAsm = GetEntryExternalAssembly(entry);
+                                if (extAsm == SelfAssembly) continue;
+                                if (extAsm != null && modByAsm.TryGetValue(extAsm, out var asmMod) && asmMod?.Manifest != null)
+                                {
+                                    source = asmMod.Manifest.ID;
+                                    if (!string.IsNullOrEmpty(asmMod.Manifest.Name)) disp = asmMod.Manifest.Name;
+                                }
                             }
                         }
                         else
@@ -934,6 +1525,13 @@ namespace ProbablyUnifiedHotkeys
                         }
 
                         var group = GetOrCreateGroup(groups, source, disp);
+                        if (!string.IsNullOrEmpty(rawSource) &&
+                            !string.Equals(rawSource, group.ModId, StringComparison.OrdinalIgnoreCase) &&
+                            !group.ExtraNotifyModIds.Any(id => string.Equals(id, rawSource, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            group.ExtraNotifyModIds.Add(rawSource);
+                        }
+                        registryMatchedModIds?.Add(group.ModId);
                         string label = entry.label?.Invoke() ?? entry.id;
                         string tooltip = entry.tooltip?.Invoke() ?? string.Empty;
 

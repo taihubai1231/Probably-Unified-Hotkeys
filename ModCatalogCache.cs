@@ -15,6 +15,7 @@ namespace ProbablyUnifiedHotkeys
         private static string _lastFingerprint = string.Empty;
         private static List<ModOptionGroup>? _cachedGroups;
         private static List<ModHotkeyEntry>? _cachedAllHotkeys;
+        private static ModScanReport? _cachedScanReport;
         private static readonly object _lock = new object();
 
         /// <summary>
@@ -22,7 +23,7 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static void Prewarm()
         {
-            GetOrScanGroups(out _);
+            GetOrScanGroups(out _, out _);
         }
 
         /// <summary>
@@ -30,23 +31,34 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static List<ModOptionGroup> GetOrScanGroups(out List<ModHotkeyEntry> allHotkeys)
         {
+            return GetOrScanGroups(out allHotkeys, out _);
+        }
+
+        /// <summary>
+        /// 获取当前生效的模组配置组列表及扫描诊断报告（自动利用缓存）
+        /// </summary>
+        public static List<ModOptionGroup> GetOrScanGroups(out List<ModHotkeyEntry> allHotkeys, out ModScanReport scanReport)
+        {
             lock (_lock)
             {
                 string currentFingerprint = ComputeCurrentFingerprint();
 
-                if (_cachedGroups != null && _cachedAllHotkeys != null && string.Equals(_lastFingerprint, currentFingerprint, StringComparison.Ordinal))
+                if (_cachedGroups != null && _cachedAllHotkeys != null && _cachedScanReport != null &&
+                    string.Equals(_lastFingerprint, currentFingerprint, StringComparison.Ordinal))
                 {
                     // 指纹完全匹配，重置旧会话 UI 引用与未应用的待定状态后直接复用缓存
                     ResetUiSessionState(_cachedGroups, _cachedAllHotkeys);
                     allHotkeys = _cachedAllHotkeys;
+                    scanReport = _cachedScanReport;
                     return _cachedGroups;
                 }
 
                 // 首次运行或检测到模组变动，执行一次轻量化扫描
-                _cachedGroups = ModOptionScanner.ScanAll(out _cachedAllHotkeys);
+                _cachedGroups = ModOptionScanner.ScanAll(out _cachedAllHotkeys, out _cachedScanReport);
                 _lastFingerprint = currentFingerprint;
                 ResetUiSessionState(_cachedGroups, _cachedAllHotkeys);
                 allHotkeys = _cachedAllHotkeys;
+                scanReport = _cachedScanReport;
 
                 return _cachedGroups;
             }
@@ -96,6 +108,7 @@ namespace ProbablyUnifiedHotkeys
                 _lastFingerprint = string.Empty;
                 _cachedGroups = null;
                 _cachedAllHotkeys = null;
+                _cachedScanReport = null;
             }
         }
 
@@ -107,6 +120,9 @@ namespace ProbablyUnifiedHotkeys
             try
             {
                 var sb = new StringBuilder(512);
+                sb.Append("FORCED:").Append(ComboKeyStore.GetForcedHotkeysRevision()).Append(";");
+                sb.Append("MCFG:").Append(ModOptionScanner.GetRegisteredModConfigCount()).Append(";");
+
                 var mods = ModLoader.Mods;
                 if (mods != null)
                 {
@@ -115,7 +131,7 @@ namespace ProbablyUnifiedHotkeys
                     {
                         if (mod?.Manifest == null) continue;
                         string id = mod.Manifest.ID;
-                        bool enabled = ModLoader.IsModEnabled(id);
+                        bool enabled = mod.IsEnabled || ModLoader.IsModEnabled(id);
                         ModConfig? cfg = ModConfig.Find(id);
                         int cfgCount = cfg?.Entries != null ? cfg.Entries.Count : 0;
                         sb.Append(id).Append("@").Append(mod.Manifest.ModVersion)

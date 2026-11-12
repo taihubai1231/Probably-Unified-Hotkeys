@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
 
@@ -67,6 +68,15 @@ namespace ProbablyUnifiedHotkeys
         private static int _smartArrangeEpoch = -1;
         private static PropertyInfo? _smartArrangeEnabledProp;
 
+        // 7. Probably Stolen 修改器 (probablystolen.trainer) 缓存与持久化常量
+        private const string TrainerModId = "probablystolen.trainer";
+        private const string TrainerHotkeyFile = "hotkey-v1.txt";
+        private const string TrainerHostName = "ProbablyStolenTrainer";
+        private static bool _trainerBootSynced = false;
+        private static KeyCode _trainerCachedKey = KeyCode.F7;
+        private static bool _trainerHasCachedKey = false;
+        private static GameObject? _trainerHostCache;
+
         private static void EnsureAssemblyHook()
         {
             if (!_assemblyHooked)
@@ -86,6 +96,7 @@ namespace ProbablyUnifiedHotkeys
             if (!handledModIds.Contains("hollow.clientdemandhighlight")) TryAdaptClientDemandHighlight(groups, handledModIds);
             if (!handledModIds.Contains("Pen_mod_QoL_Tweaks")) TryAdaptPenQoL(groups, handledModIds);
             if (!handledModIds.Contains("smart_inventory_arrange")) TryAdaptSmartInventoryArrange(groups, handledModIds);
+            if (!handledModIds.Contains(TrainerModId)) TryAdaptProbablyStolenTrainer(groups, handledModIds);
 
             // 若扫描自身触发了框架程序集延迟加载导致 epoch 推进，同步本轮各适配器缓存版本号，避免下次重复扫描
             int exitEpoch = _assemblyEpoch;
@@ -452,6 +463,212 @@ namespace ProbablyUnifiedHotkeys
                 Kind = OptionKind.Toggle,
                 GetBool = () => (bool)(enabledProp.GetValue(null) ?? true),
                 SetBool = (val) => { if (enabledProp.CanWrite) enabledProp.SetValue(null, val); }
+            });
+
+            if (group.TotalItemCount > 0)
+            {
+                groups.Add(group);
+                handledModIds.Add(group.ModId);
+            }
+        }
+
+        // 7. Probably Stolen 修改器 (probablystolen.trainer)
+        // 无命名空间、未使用 ModConfig/GameOptionRegistry；严格遵守 ModScanner 边界：
+        // 只读 ModHelper.ReadModDataFileText 读取键位，运行时通过 GameObject.SendMessage("SetHotkey") 安全写入与持久化
+        private static bool IsTrainerNativeKeyboardKey(KeyCode key)
+        {
+            int code = (int)key;
+            if (code == 0 || code == 27) return false; // None 或 Escape
+            if (code >= 323 && code <= 329) return false; // Mouse0..Mouse6
+            return !key.ToString().StartsWith("Joystick", StringComparison.OrdinalIgnoreCase);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static GameObject? FindTrainerHostCore()
+        {
+            if (_trainerHostCache != null)
+            {
+                return _trainerHostCache;
+            }
+            _trainerHostCache = GameObject.Find(TrainerHostName);
+            return _trainerHostCache;
+        }
+
+        private static GameObject? TryFindTrainerHost()
+        {
+            try { return FindTrainerHostCore(); }
+            catch { return null; }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void SendTrainerHotkeyCore(GameObject host, KeyCode key)
+        {
+            host.SendMessage("SetHotkey", key, SendMessageOptions.DontRequireReceiver);
+        }
+
+        private static bool TrySendTrainerHotkey(GameObject host, KeyCode key, out Exception? error)
+        {
+            error = null;
+            try
+            {
+                SendTrainerHotkeyCore(host, key);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                return false;
+            }
+        }
+
+        private static bool TryReadTrainerSavedHotkey(out KeyCode key)
+        {
+            key = KeyCode.F7;
+            try
+            {
+                string? raw = ModHelper.ReadModDataFileText(TrainerModId, TrainerHotkeyFile);
+                if (!string.IsNullOrWhiteSpace(raw) && Enum.TryParse<KeyCode>(raw.Trim(), ignoreCase: true, out KeyCode parsed))
+                {
+                    key = parsed;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 在主菜单空闲预热或首扫时补同步“清空(None) / 鼠标侧键(Mouse3~6)”等原版 LoadHotkey 会跳过的持久键位。
+        /// </summary>
+        public static void SyncExternalNonConfigHotkeysOnBoot()
+        {
+            if (_trainerBootSynced) return;
+
+            GameObject? host = TryFindTrainerHost();
+            if (host == null) return;
+
+            _trainerBootSynced = true;
+            if (TryReadTrainerSavedHotkey(out KeyCode savedKey))
+            {
+                _trainerCachedKey = savedKey;
+                _trainerHasCachedKey = true;
+                if (!IsTrainerNativeKeyboardKey(savedKey))
+                {
+                    TrySendTrainerHotkey(host, savedKey, out _);
+                }
+            }
+        }
+
+        private static void TryAdaptProbablyStolenTrainer(List<ModOptionGroup> groups, HashSet<string> handledModIds)
+        {
+            LoadedMod? trainerMod = null;
+            try
+            {
+                var mods = ModLoader.Mods;
+                if (mods != null)
+                {
+                    for (int i = 0; i < mods.Count; i++)
+                    {
+                        var lm = mods[i];
+                        if (lm?.Manifest != null && string.Equals(lm.Manifest.ID, TrainerModId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            trainerMod = lm;
+                            break;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            bool isEnabled = false;
+            if (trainerMod != null)
+            {
+                try
+                {
+                    var enabled = ModLoader.EnabledMods;
+                    if (enabled != null)
+                    {
+                        foreach (string id in enabled)
+                        {
+                            if (string.Equals(id, TrainerModId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                isEnabled = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            GameObject? hostCheck = TryFindTrainerHost();
+            if (!isEnabled && hostCheck == null)
+            {
+                return;
+            }
+
+            SyncExternalNonConfigHotkeysOnBoot();
+
+            string displayName = trainerMod?.Manifest != null && !string.IsNullOrEmpty(trainerMod.Manifest.Name)
+                ? trainerMod.Manifest.Name
+                : "Probably Stolen 修改器";
+
+            if (TryReadTrainerSavedHotkey(out KeyCode diskKey))
+            {
+                _trainerCachedKey = diskKey;
+                _trainerHasCachedKey = true;
+            }
+            else if (!_trainerHasCachedKey)
+            {
+                _trainerCachedKey = KeyCode.F7;
+                _trainerHasCachedKey = true;
+            }
+
+            var group = new ModOptionGroup
+            {
+                ModId = TrainerModId,
+                DisplayName = displayName,
+                PinyinSortKey = PinyinEngine.ToInitials(displayName)
+            };
+
+            group.Hotkeys.Add(new ModHotkeyEntry
+            {
+                Id = "probablystolen.trainer.toggle",
+                ModId = group.ModId,
+                ModDisplayName = group.DisplayName,
+                DisplayName = "开关修改器窗口",
+                Tooltip = "打开/关闭修改器悬浮窗（支持单键、鼠标侧键与 Esc 清空为无；因原模组未使用官方配置与命名空间，受安全扫描限制暂不支持组合键前缀）",
+                DefaultKey = KeyCode.F7,
+                DefaultModifiers = KeyModifierMask.None,
+                HasExplicitDefault = true,
+                SupportsModifierCombos = false,
+                GetKey = () =>
+                {
+                    if (TryReadTrainerSavedHotkey(out KeyCode latest))
+                    {
+                        _trainerCachedKey = latest;
+                        _trainerHasCachedKey = true;
+                        return latest;
+                    }
+                    return _trainerHasCachedKey ? _trainerCachedKey : KeyCode.F7;
+                },
+                SetKey = (val) =>
+                {
+                    _trainerCachedKey = val;
+                    _trainerHasCachedKey = true;
+                    _trainerBootSynced = true;
+                    GameObject? host = TryFindTrainerHost();
+                    if (host != null && !TrySendTrainerHotkey(host, val, out Exception? ex) && ex != null)
+                    {
+                        Debug.LogWarning($"[ProbablyUnifiedHotkeys] 同步修改器热键失败: {ex.Message}");
+                    }
+                }
             });
 
             if (group.TotalItemCount > 0)

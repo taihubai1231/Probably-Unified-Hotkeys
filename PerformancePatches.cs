@@ -195,7 +195,8 @@ namespace ProbablyUnifiedHotkeys
                         return;
 
                     case 1:
-                        // 第 2 步：预热模组设置目录缓存（含适配类型反射缓存）
+                        // 第 2 步：预热模组设置目录缓存（含适配类型反射缓存）并同步非标准模组热键
+                        KnownModAdapters.SyncExternalNonConfigHotkeysOnBoot();
                         ModCatalogCache.Prewarm();
                         _stage = 2;
                         return;

@@ -129,10 +129,15 @@ namespace ProbablyUnifiedHotkeys
 
         // 视图与搜索状态
         public static bool IsConflictViewActive { get; private set; } = false;
+        public static bool IsDiagnosticViewActive { get; private set; } = false;
+        private static ModScanReport _scanReport = new ModScanReport();
         private static string _searchQuery = string.Empty;
         private static SearchScope _searchScope = SearchScope.All;
         private static bool _allExpanded = false;
         private static bool _wasSearchNonEmpty = false;
+        private static bool _diagnosticViewDirty = true;
+        private static string? _diagnosticStatusMessage = null;
+        private static readonly HashSet<string> _expandedDiagnosticModIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // 统一增强按键捕获状态机（同时服务上方原版设置项与下方模组卡片）
         private static ModHotkeyEntry? _capturingEntry;
@@ -163,8 +168,12 @@ namespace ProbablyUnifiedHotkeys
         // 各种容器与控件引用
         private static ScrollRect? _scrollRect;
         private static GameObject? _pendingScrollTarget;
+        private static int _pendingScrollMinFrame = -1;
+        private static int _pendingScrollRemainingPasses = 0;
         private static GameObject? _normalContentRoot;
+        private static GameObject? _modCardsContainer;
         private static GameObject? _conflictContentRoot;
+        private static GameObject? _diagnosticContentRoot;
         private static GameObject? _vanillaHeaderRow;
         private static GameObject? _vanillaHeaderSep;
         private static GameObject? _modHeaderSpace;
@@ -174,6 +183,7 @@ namespace ProbablyUnifiedHotkeys
         private static GameObject? _emptySearchLabelRow;
         private static CustomUIElement? _conflictToggleBtn;
         private static CustomUIElement? _expandToggleBtn;
+        private static CustomUIElement? _diagnosticToggleBtn;
         private static TMP_InputField? _searchInputField;
 
         // 缓存 ButtonTextColor 私有色彩字段（OnPointerEnter/Exit/Up/Disable 会使用 normal/highlight/pressed 覆写 text.color）
@@ -254,13 +264,24 @@ namespace ProbablyUnifiedHotkeys
             _currentManager = manager;
             _currentWindow = null;
             IsConflictViewActive = false;
+            IsDiagnosticViewActive = false;
             _conflictViewDirty = true;
+            _diagnosticViewDirty = true;
+            _diagnosticStatusMessage = null;
+            _expandedDiagnosticModIds.Clear();
             _lastConflictSignature = null;
             _suppressRuleConflictRefresh = false;
             _searchQuery = string.Empty;
             _wasSearchNonEmpty = false;
-            _pendingScrollTarget = null;
+            ClearPendingScroll();
             _scrollRect = null;
+            _normalContentRoot = null;
+            _modCardsContainer = null;
+            _conflictContentRoot = null;
+            _diagnosticContentRoot = null;
+            _conflictToggleBtn = null;
+            _expandToggleBtn = null;
+            _diagnosticToggleBtn = null;
             _capturingEntry = null;
             _capturingStartedFrame = -1;
             _restoreCloseOnEscapeFrame = -1;
@@ -297,7 +318,7 @@ namespace ProbablyUnifiedHotkeys
             SetKeyBindStatusDelegate?.Invoke(manager, string.Empty);
 
             // 2. 加载全量模组配置并分析按键冲突
-            _modGroups = ModCatalogCache.GetOrScanGroups(out _allHotkeys);
+            _modGroups = ModCatalogCache.GetOrScanGroups(out _allHotkeys, out _scanReport);
             foreach (var hk in _allHotkeys)
             {
                 if (hk.ModId == "vanilla" && !string.IsNullOrEmpty(hk.RawOptionId))
@@ -335,12 +356,21 @@ namespace ProbablyUnifiedHotkeys
             {
                 _currentWindow = null;
                 _scrollRect = null;
-                _pendingScrollTarget = null;
+                _normalContentRoot = null;
+                _modCardsContainer = null;
+                _conflictContentRoot = null;
+                _diagnosticContentRoot = null;
+                _conflictToggleBtn = null;
+                _expandToggleBtn = null;
+                _diagnosticToggleBtn = null;
+                ClearPendingScroll();
                 _capturingEntry = null;
                 _restoreCloseOnEscapeFrame = -1;
                 _waitingMouseRelease = false;
                 _pendingStandaloneModifier = KeyCode.None;
                 _hadMultipleModifiers = false;
+                IsConflictViewActive = false;
+                IsDiagnosticViewActive = false;
                 _vanillaCards.Clear();
                 _vanillaHotkeyByRawId.Clear();
                 _openedFrameCount = -1;
@@ -385,8 +415,8 @@ namespace ProbablyUnifiedHotkeys
 
             builder.AddSpace(6f);
 
-            // 第二行：仅看冲突按钮 + 全部展开/收起按钮 + 快捷提示
-            builder.BeginRow(12f, TextAnchor.MiddleCenter);
+            // 第二行：仅看冲突按钮 + 全部展开/收起按钮 + 模组排查按钮 + 快捷提示（单行紧凑排版，避免右侧提示折行拉高表头）
+            builder.BeginRow(6f, TextAnchor.MiddleCenter);
             builder.AddSpace(10f);
 
             string conflictBtnText = _conflicts.Count > 0
@@ -397,6 +427,11 @@ namespace ProbablyUnifiedHotkeys
 
             builder.AddButton(_allExpanded ? "全部收起" : "全部展开", ToggleExpandAll, "btn_expand_all");
             _expandToggleBtn = builder.Last;
+
+            int diagCount = _scanReport?.AttentionModCount ?? 0;
+            string diagBtnText = diagCount > 0 ? $"模组排查 ({diagCount})" : "模组排查";
+            builder.AddButton(diagBtnText, ToggleDiagnosticMode, "btn_diagnostic_toggle");
+            _diagnosticToggleBtn = builder.Last;
 
             // 优先抓取原生 ButtonTextColor 默认字色、高亮色、按下色、激活字体与原始字号（每个层级 menu/meta 仅需首开抓取一次）
             if (!hasThemeForLayer)
@@ -415,13 +450,42 @@ namespace ProbablyUnifiedHotkeys
                 windowRoot.SetActive(false);
             }
 
-            StyleActionButton(_conflictToggleBtn, 228f, 40f, lrMargin: 10f, tbMargin: 3f, fontScale: 0.88f);
-            StyleActionButton(_expandToggleBtn, 146f, 40f, lrMargin: 10f, tbMargin: 3f, fontScale: 0.88f);
+            StyleActionButton(_conflictToggleBtn, 180f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_expandToggleBtn, 116f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
+            StyleActionButton(_diagnosticToggleBtn, 148f, 38f, lrMargin: 8f, tbMargin: 3f, fontScale: 0.85f);
 
             UpdateConflictToggleButtonAppearance();
+            UpdateDiagnosticToggleButtonAppearance();
 
-            builder.AddFlexibleSpace();
-            builder.AddLabel("<color=#99a3b0>支持 Shift/Ctrl/Alt 组合键与鼠标侧键 | Esc=无</color>", "label_top_hint");
+            builder.AddLabel("Ctrl/Shift/Alt组合键与侧键 | Esc=无", "label_top_hint");
+            var hintEl = builder.Last;
+            if (hintEl != null)
+            {
+                if (hintEl.root != null)
+                {
+                    var hintLe = hintEl.root.GetComponent<LayoutElement>() ?? hintEl.root.AddComponent<LayoutElement>();
+                    hintLe.minWidth = 0f;
+                    hintLe.preferredWidth = 265f;
+                    hintLe.preferredHeight = 34f;
+                    hintLe.flexibleWidth = 1f;
+                    hintLe.flexibleHeight = 0f;
+                }
+                if (hintEl.text != null)
+                {
+                    hintEl.text.enableWordWrapping = false;
+                    hintEl.text.overflowMode = TextOverflowModes.Ellipsis;
+                    hintEl.text.alignment = TextAlignmentOptions.MidlineRight;
+                    hintEl.text.color = new Color(0.60f, 0.64f, 0.69f, 1f);
+                    float maxHintSize = Mathf.Clamp((_baseButtonFontSize > 0f ? _baseButtonFontSize : 20f) * 0.78f, 12f, 17f);
+                    ApplySinglePassFontSize(hintEl.text, hintEl.text.text, new ButtonFitSpec
+                    {
+                        AvailWidth = 265f,
+                        AvailHeight = 30f,
+                        MaxFontSize = maxHintSize,
+                        MinFontSize = 11f
+                    });
+                }
+            }
             builder.AddSpace(10f);
             builder.End();
 
@@ -431,7 +495,12 @@ namespace ProbablyUnifiedHotkeys
             // 5. 滚动视窗核心区域（折叠卡片懒加载，消除打开选项页卡顿）
             // =================================================================
             builder.BeginScrollFlexible(0f);
-            _scrollRect = builder.CurrentContainer.GetComponentInParent<ScrollRect>();
+            // OpenEnhancedUI 在此之前已调用 windowRoot.SetActive(false) 做离线批量装配，必须传 includeInactive: true 才能获取到 ScrollRect
+            _scrollRect = builder.CurrentContainer.GetComponentInParent<ScrollRect>(true);
+            if (_scrollRect == null && windowRoot != null)
+            {
+                _scrollRect = windowRoot.GetComponentInChildren<ScrollRect>(true);
+            }
 
             // --- A. 常规完整设置视图容器 ---
             builder.BeginColumn(2f, TextAnchor.UpperLeft);
@@ -466,13 +535,16 @@ namespace ProbablyUnifiedHotkeys
             builder.AddSeparator(null, 2);
             _modHeaderBottomSep = GetLastChildGameObject(normalColumnRt);
 
-            // (3) 创意工坊模组折叠卡片列表（初始仅构建卡片头部外壳，展开/搜索时按需懒构建内部控件）
+            // (3) 创意工坊模组折叠卡片列表（置于独立子容器以支持热重扫原地重建，初始仅构建头部外壳）
             using (ComboKeyStore.EnterBypass())
             {
+                builder.BeginColumn(2f, TextAnchor.UpperLeft);
+                _modCardsContainer = builder.CurrentContainer.gameObject;
                 foreach (var group in _modGroups)
                 {
                     BuildModGroupCardShell(builder, group);
                 }
+                builder.End(); // 结束 _modCardsContainer Column
 
                 // 空搜索结果提示（默认隐藏）
                 builder.BeginRow(4f, TextAnchor.MiddleCenter);
@@ -491,9 +563,15 @@ namespace ProbablyUnifiedHotkeys
                 builder.BeginColumn(2f, TextAnchor.UpperLeft);
                 _conflictContentRoot = builder.CurrentContainer.gameObject;
                 _conflictContentRoot.SetActive(false);
+                builder.End(); // 结束 _conflictContentRoot Column
+
+                // --- C. 模组排查与疑难接管视图容器（初始为空并隐藏，点击“模组排查”时按需懒构建） ---
+                builder.BeginColumn(4f, TextAnchor.UpperLeft);
+                _diagnosticContentRoot = builder.CurrentContainer.gameObject;
+                _diagnosticContentRoot.SetActive(false);
             }
 
-            builder.End(); // 结束 _conflictContentRoot Column
+            builder.End(); // 结束 _diagnosticContentRoot Column
             builder.End(); // 结束 BeginScrollFlexible
 
             // =================================================================
@@ -736,7 +814,7 @@ namespace ProbablyUnifiedHotkeys
                         RefreshCardUI(group);
                         ComboKeyStore.RebuildRuntimeLookup(_allHotkeys);
                     }
-                    NotifyModConfigApplied(group.ModId);
+                    NotifyGroupConfigsApplied(group);
                 }
                 : null;
 
@@ -1127,10 +1205,10 @@ namespace ProbablyUnifiedHotkeys
 
             if (_currentManager != null)
             {
-                SetKeyBindStatusDelegate?.Invoke(
-                    _currentManager,
-                    $"正在为 [{entry.ModDisplayName}: {entry.DisplayName}] 绑定按键 (支持组合键与鼠标侧键；按 Esc 设为空，左键取消)"
-                );
+                string statusPrompt = entry.SupportsModifierCombos
+                    ? $"正在为 [{entry.ModDisplayName}: {entry.DisplayName}] 绑定按键 (支持组合键与鼠标侧键；按 Esc 设为空，左键取消)"
+                    : $"正在为 [{entry.ModDisplayName}: {entry.DisplayName}] 绑定按键 (支持单键与鼠标侧键；按 Esc 设为空，左键取消；此模组暂不支持组合键前缀)";
+                SetKeyBindStatusDelegate?.Invoke(_currentManager, statusPrompt);
             }
         }
 
@@ -1165,7 +1243,7 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         private static void PrebuildNextCollapsedModCard()
         {
-            if (_currentWindow == null || IsConflictViewActive || _capturingEntry != null || !string.IsNullOrWhiteSpace(_searchQuery))
+            if (_currentWindow == null || IsConflictViewActive || IsDiagnosticViewActive || _capturingEntry != null || _pendingScrollTarget != null || !string.IsNullOrWhiteSpace(_searchQuery))
             {
                 return;
             }
@@ -1197,12 +1275,23 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static void TickCapture()
         {
-            // 搜索后延迟 1 帧滚动校准，确保 ContentSizeFitter 与 VerticalLayoutGroup 已更新最新高度
+            // 搜索 / 跨视图跳转后跨帧滚动校准：等待至下一帧 Canvas 提交后再执行多次重排定位，防止点击当帧布局尚未刷新而提前清空
             if (_pendingScrollTarget != null && _currentWindow != null)
             {
-                var target = _pendingScrollTarget;
-                _pendingScrollTarget = null;
-                ScrollToTargetImmediate(target);
+                if (Mathf.Abs(Input.mouseScrollDelta.y) > 0.01f || IsConflictViewActive || IsDiagnosticViewActive)
+                {
+                    ClearPendingScroll();
+                }
+                else if (Time.frameCount >= _pendingScrollMinFrame)
+                {
+                    var target = _pendingScrollTarget;
+                    ScrollToTargetImmediate(target);
+                    _pendingScrollRemainingPasses--;
+                    if (_pendingScrollRemainingPasses <= 0)
+                    {
+                        ClearPendingScroll();
+                    }
+                }
             }
 
             // 闲置时每帧在折叠容器内悄然预建 1 张未建卡片（无动画、零重建开销）
@@ -1245,7 +1334,8 @@ namespace ProbablyUnifiedHotkeys
                 _waitingMouseRelease = false;
             }
 
-            KeyModifierMask heldModifiers = ComboKeyStore.GetHeldModifiersMask();
+            bool allowCombos = _capturingEntry.SupportsModifierCombos;
+            KeyModifierMask heldModifiers = allowCombos ? ComboKeyStore.GetHeldModifiersMask() : KeyModifierMask.None;
 
             // 1. 仅 Esc 用于解除绑定（清空为无），Backspace 与 Delete 均作为普通可绑定按键
             if (Input.GetKeyDown(KeyCode.Escape))
@@ -1322,7 +1412,7 @@ namespace ProbablyUnifiedHotkeys
                     KeyCode kc = BindableKeyboardKeys[i];
                     if (Input.GetKeyDown(kc))
                     {
-                        KeyModifierMask finalMods = ComboKeyStore.GetHeldModifiersMask(kc);
+                        KeyModifierMask finalMods = allowCombos ? ComboKeyStore.GetHeldModifiersMask(kc) : KeyModifierMask.None;
                         FinishCapture(finalMods, kc, fromMouseClick: false);
                         return;
                     }
@@ -1335,7 +1425,7 @@ namespace ProbablyUnifiedHotkeys
                 KeyCode standalone = _pendingStandaloneModifier;
                 _pendingStandaloneModifier = KeyCode.None;
 
-                KeyModifierMask afterMods = ComboKeyStore.GetHeldModifiersMask();
+                KeyModifierMask afterMods = allowCombos ? ComboKeyStore.GetHeldModifiersMask() : KeyModifierMask.None;
                 if (!_hadMultipleModifiers && afterMods == KeyModifierMask.None)
                 {
                     FinishCapture(KeyModifierMask.None, standalone, fromMouseClick: false);
@@ -1397,6 +1487,7 @@ namespace ProbablyUnifiedHotkeys
             if (_capturingEntry == null) return;
 
             var entry = _capturingEntry;
+            if (!entry.SupportsModifierCombos) newMods = KeyModifierMask.None;
             entry.PendingModifiers = newKey == KeyCode.None ? KeyModifierMask.None : newMods;
             entry.PendingKey = newKey;
             entry.HasPendingChange = true;
@@ -1438,23 +1529,41 @@ namespace ProbablyUnifiedHotkeys
             if (index >= 0 && index <= (int)SearchScope.GeneralOnly)
             {
                 _searchScope = (SearchScope)index;
+                if (IsConflictViewActive || IsDiagnosticViewActive)
+                {
+                    IsConflictViewActive = false;
+                    IsDiagnosticViewActive = false;
+                    SyncViewContainersAndToggleButtons();
+                }
                 ApplySearchFilter();
             }
         }
 
         private static void OnSearchTyping(string text)
         {
-            _searchQuery = text;
-            if (IsConflictViewActive && !string.IsNullOrWhiteSpace(text))
-            {
-                ToggleConflictMode();
-            }
-            ApplySearchFilter();
+            OnSearchInputUpdated(text);
         }
 
-        private static void OnSearchChanged(string text)
+        private static void OnSearchChanged(string? text)
+        {
+            string safeText = text ?? string.Empty;
+            // onValueChanged (OnSearchTyping) 已即时同步过 _searchQuery；失焦触发 onEndEdit 时若文本未变直接返回，防止点击按钮前被整页清空重建吞掉 onClick
+            if (string.Equals(safeText, _searchQuery ?? string.Empty, StringComparison.Ordinal))
+            {
+                return;
+            }
+            OnSearchInputUpdated(safeText);
+        }
+
+        private static void OnSearchInputUpdated(string text)
         {
             _searchQuery = text;
+            if (IsDiagnosticViewActive)
+            {
+                _diagnosticViewDirty = true;
+                RebuildDiagnosticView();
+                return;
+            }
             if (IsConflictViewActive && !string.IsNullOrWhiteSpace(text))
             {
                 ToggleConflictMode();
@@ -1992,11 +2101,13 @@ namespace ProbablyUnifiedHotkeys
                 _lastSearchScrollTarget = firstMatchedHeader;
                 ScrollToTargetImmediate(firstMatchedHeader);
                 _pendingScrollTarget = firstMatchedHeader;
+                _pendingScrollMinFrame = Time.frameCount + 1;
+                _pendingScrollRemainingPasses = 1;
             }
             else if (!hasQuery && _wasSearchNonEmpty)
             {
                 _wasSearchNonEmpty = false;
-                _pendingScrollTarget = null;
+                ClearPendingScroll();
                 ResetScrollToTop();
             }
         }
@@ -2036,9 +2147,16 @@ namespace ProbablyUnifiedHotkeys
             ShowCardExpandedVisualOnly(group);
         }
 
+        private static void ClearPendingScroll()
+        {
+            _pendingScrollTarget = null;
+            _pendingScrollMinFrame = -1;
+            _pendingScrollRemainingPasses = 0;
+        }
+
         private static void ScrollToTargetImmediate(GameObject targetObj)
         {
-            if (_scrollRect == null || targetObj == null) return;
+            if (_scrollRect == null || targetObj == null || !targetObj.activeInHierarchy) return;
             var contentRt = _scrollRect.content;
             var targetRt = targetObj.GetComponent<RectTransform>();
             var viewportRt = _scrollRect.viewport != null
@@ -2046,13 +2164,34 @@ namespace ProbablyUnifiedHotkeys
                 : (_scrollRect.transform as RectTransform);
             if (contentRt == null || targetRt == null || viewportRt == null) return;
 
-            if (_normalContentRoot != null)
+            _scrollRect.StopMovement();
+
+            // 跨视图切换/展开懒加载卡片后，需先刷新画布(含 TMP 首帧度量)，再自底向上逐层重排，最后再次同步画布尺寸
+            Canvas.ForceUpdateCanvases();
+
+            var parentRt = targetRt.parent as RectTransform;
+            int guard = 0;
+            while (parentRt != null && guard < 12)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(parentRt);
+                if (parentRt == contentRt) break;
+                parentRt = parentRt.parent as RectTransform;
+                guard++;
+            }
+
+            if (_modCardsContainer != null && _modCardsContainer.activeInHierarchy)
+            {
+                var cardsRt = _modCardsContainer.GetComponent<RectTransform>();
+                if (cardsRt != null) LayoutRebuilder.ForceRebuildLayoutImmediate(cardsRt);
+            }
+            if (_normalContentRoot != null && _normalContentRoot.activeInHierarchy)
             {
                 var normalRt = _normalContentRoot.GetComponent<RectTransform>();
                 if (normalRt != null) LayoutRebuilder.ForceRebuildLayoutImmediate(normalRt);
             }
             LayoutRebuilder.ForceRebuildLayoutImmediate(contentRt);
             Canvas.ForceUpdateCanvases();
+            LayoutRebuilder.ForceRebuildLayoutImmediate(contentRt);
 
             float viewportHeight = viewportRt.rect.height;
             float contentHeight = contentRt.rect.height;
@@ -2060,6 +2199,7 @@ namespace ProbablyUnifiedHotkeys
             if (scrollableHeight <= 1f)
             {
                 _scrollRect.verticalNormalizedPosition = 1f;
+                _scrollRect.StopMovement();
                 return;
             }
 
@@ -2069,11 +2209,13 @@ namespace ProbablyUnifiedHotkeys
             float distanceFromTop = Mathf.Max(0f, contentRt.rect.yMax - itemTopInContent.y - 8f);
             float normalized = 1f - Mathf.Clamp01(distanceFromTop / scrollableHeight);
             _scrollRect.verticalNormalizedPosition = normalized;
+            _scrollRect.StopMovement();
         }
 
         private static void ResetScrollToTop()
         {
             if (_scrollRect == null) return;
+            _scrollRect.StopMovement();
             Canvas.ForceUpdateCanvases();
             _scrollRect.verticalNormalizedPosition = 1f;
         }
@@ -2081,21 +2223,65 @@ namespace ProbablyUnifiedHotkeys
         // =====================================================================
         // 辅助切换与全量色彩 / 冲突同步 + 按钮字体样式与悬停持久染色
         // =====================================================================
+        private static void SyncViewContainersAndToggleButtons()
+        {
+            bool showNormal = !IsConflictViewActive && !IsDiagnosticViewActive;
+            if (_normalContentRoot != null) _normalContentRoot.SetActive(showNormal);
+            if (_conflictContentRoot != null) _conflictContentRoot.SetActive(IsConflictViewActive);
+            if (_diagnosticContentRoot != null) _diagnosticContentRoot.SetActive(IsDiagnosticViewActive);
+
+            UpdateConflictToggleButtonAppearance();
+            UpdateDiagnosticToggleButtonAppearance();
+        }
+
         private static void ToggleConflictMode()
         {
             CancelCapture();
-            IsConflictViewActive = !IsConflictViewActive;
+            ClearPendingScroll();
+            bool nextConflict = !IsConflictViewActive;
+            if (nextConflict)
+            {
+                IsDiagnosticViewActive = false;
+            }
+            IsConflictViewActive = nextConflict;
 
             if (IsConflictViewActive)
             {
                 RefreshConflicts();
                 RebuildConflictView();
             }
+            else if (!string.IsNullOrWhiteSpace(_searchQuery) || _wasSearchNonEmpty)
+            {
+                ApplySearchFilter();
+            }
 
-            if (_normalContentRoot != null) _normalContentRoot.SetActive(!IsConflictViewActive);
-            if (_conflictContentRoot != null) _conflictContentRoot.SetActive(IsConflictViewActive);
+            SyncViewContainersAndToggleButtons();
+            ResetScrollToTop();
+        }
 
-            UpdateConflictToggleButtonAppearance();
+        private static void ToggleDiagnosticMode()
+        {
+            CancelCapture();
+            ClearPendingScroll();
+            bool nextDiagnostic = !IsDiagnosticViewActive;
+            if (nextDiagnostic)
+            {
+                IsConflictViewActive = false;
+            }
+            IsDiagnosticViewActive = nextDiagnostic;
+
+            SyncViewContainersAndToggleButtons();
+
+            if (IsDiagnosticViewActive)
+            {
+                _diagnosticViewDirty = true;
+                RebuildDiagnosticView();
+            }
+            else
+            {
+                ApplySearchFilter();
+            }
+
             ResetScrollToTop();
         }
 
@@ -2120,6 +2306,652 @@ namespace ProbablyUnifiedHotkeys
                 {
                     ApplyButtonTextTheme(_conflictToggleBtn, Color.white, useDefaultTheme: true);
                 }
+            }
+        }
+
+        private static void UpdateDiagnosticToggleButtonAppearance()
+        {
+            if (_diagnosticToggleBtn == null) return;
+
+            if (IsDiagnosticViewActive)
+            {
+                SetButtonTextFast(_diagnosticToggleBtn, "返回完整设置");
+                ApplyButtonTextTheme(_diagnosticToggleBtn, Color.white, useDefaultTheme: true);
+            }
+            else
+            {
+                int attentionCount = _scanReport?.AttentionModCount ?? 0;
+                string text = attentionCount > 0 ? $"模组排查 ({attentionCount})" : "模组排查";
+                SetButtonTextFast(_diagnosticToggleBtn, text);
+                ApplyButtonTextTheme(_diagnosticToggleBtn, Color.white, useDefaultTheme: true);
+            }
+        }
+
+        private static void RebuildDiagnosticView()
+        {
+            if (!IsDiagnosticViewActive || _diagnosticContentRoot == null || _currentWindow == null || CustomUIManager.Instance == null)
+            {
+                return;
+            }
+
+            var rt = _diagnosticContentRoot.GetComponent<RectTransform>();
+            if (rt == null) return;
+
+            if (!_diagnosticViewDirty && rt.childCount > 0)
+            {
+                return;
+            }
+
+            CustomUIBuilder.ClearContainer(rt);
+
+            using (ComboKeyStore.EnterBypass())
+            {
+                var diagBuilder = new CustomUIBuilder(CustomUIManager.Instance, _currentWindow, rt);
+                BuildDiagnosticViewContent(diagBuilder);
+            }
+
+            _diagnosticViewDirty = false;
+            LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
+            if (_scrollRect != null && _scrollRect.content != null)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_scrollRect.content);
+            }
+        }
+
+        private static void AddWrappedDiagnosticLabel(CustomUIBuilder builder, float leftIndent, string text, string? id = null)
+        {
+            builder.BeginRow(4f, TextAnchor.MiddleLeft);
+            if (leftIndent > 0f) builder.AddSpace(leftIndent);
+            builder.AddLabel(text, id);
+            var el = builder.Last;
+            if (el != null)
+            {
+                el.SetFlexible(1f, 0f);
+                if (el.text != null)
+                {
+                    el.text.enableWordWrapping = true;
+                    el.text.overflowMode = TextOverflowModes.Overflow;
+                }
+            }
+            builder.AddSpace(8f);
+            builder.End();
+        }
+
+        private static void BuildDiagnosticViewContent(CustomUIBuilder builder)
+        {
+            var report = _scanReport ?? new ModScanReport();
+
+            // 1. 顶部汇总栏与快捷操作按钮
+            builder.BeginRow(6f, TextAnchor.MiddleCenter);
+            builder.AddSpace(8f);
+            string summaryHeader = $"<b>已启用模组排查</b> <color=#99a3b0>(共 {report.EnabledModCount} 个 | 正常纳管 {report.ManagedModCount} | </color>" +
+                                   $"<color=#ffd27d>待排查 {report.AttentionModCount}</color><color=#99a3b0> | 纯资源 {report.AssetOnlyModCount})</color>";
+            builder.AddHeader(summaryHeader, null);
+            builder.AddFlexibleSpace();
+
+            builder.AddButton("强制全部重扫", () =>
+            {
+                PerformFullRescanAndRefreshInPlace(
+                    forceInvalidateCache: true,
+                    targetModId: null,
+                    statusMessage: null);
+            }, null);
+            StyleActionButton(builder.Last, 134f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+            ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+
+            builder.AddButton("返回设置", ToggleDiagnosticMode, null);
+            StyleActionButton(builder.Last, 102f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+            ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+
+            builder.AddSpace(8f);
+            builder.End();
+
+            AddWrappedDiagnosticLabel(
+                builder,
+                8f,
+                "<color=#99a3b0>仅扫描官方 ModConfig 与注册表渠道（保持 0 安全警告）。可点击「查看原始项」将异常 string / 无范围整数条目强转为快捷键并启用组合键防护；顶部搜索栏支持实时过滤本页。</color>");
+
+            if (!string.IsNullOrEmpty(_diagnosticStatusMessage))
+            {
+                AddWrappedDiagnosticLabel(builder, 8f, $"<color=#7fe0a0><b>{_diagnosticStatusMessage}</b></color>");
+            }
+
+            builder.AddSeparator(null, 2);
+
+            string query = _searchQuery?.Trim() ?? string.Empty;
+            bool hasQuery = query.Length > 0;
+
+            var primaryItems = new List<ModDiagnosticItem>();
+            var assetItems = new List<ModDiagnosticItem>();
+
+            foreach (var item in report.Mods)
+            {
+                if (hasQuery && !MatchesDiagnosticItemFilter(item, query))
+                {
+                    continue;
+                }
+
+                if (item.Status == ModDiagnosticStatus.AssetOnlyMod && !hasQuery)
+                {
+                    assetItems.Add(item);
+                }
+                else
+                {
+                    primaryItems.Add(item);
+                }
+            }
+
+            if (primaryItems.Count == 0 && assetItems.Count == 0)
+            {
+                builder.AddSpace(8f);
+                AddWrappedDiagnosticLabel(builder, 10f, "<color=#99a3b0>未在模组排查列表中找到匹配的模组、配置 ID 或原始设置项</color>");
+                return;
+            }
+
+            // 2. 主体模组诊断卡片（待排查 -> 正常纳管；搜索时亦包含匹配的纯资源模组）
+            foreach (var item in primaryItems)
+            {
+                BuildDiagnosticModCard(builder, item, query, hasQuery);
+            }
+
+            // 3. 底部紧凑汇总：纯资源 / 无代码模组
+            if (assetItems.Count > 0)
+            {
+                builder.AddSpace(6f);
+                var names = new System.Text.StringBuilder(assetItems.Count * 16);
+                for (int i = 0; i < assetItems.Count; i++)
+                {
+                    if (i > 0) names.Append("、");
+                    names.Append(assetItems[i].DisplayName);
+                }
+                AddWrappedDiagnosticLabel(
+                    builder,
+                    8f,
+                    $"<color=#99a3b0><b>纯资源 / 无代码模组 ({assetItems.Count} 个，无需排查设置)：</b>{names}</color>");
+                builder.AddSpace(4f);
+            }
+        }
+
+        private static bool MatchesDiagnosticItemFilter(ModDiagnosticItem item, string query)
+        {
+            if (PinyinEngine.Matches(item.DisplayName, query) ||
+                PinyinEngine.Matches(item.ModId, query) ||
+                PinyinEngine.Matches(item.Author, query))
+            {
+                return true;
+            }
+
+            foreach (var cfgId in item.MatchedConfigIds)
+            {
+                if (PinyinEngine.Matches(cfgId, query))
+                {
+                    return true;
+                }
+            }
+
+            foreach (var cand in item.CandidateEntries)
+            {
+                if (MatchesDiagnosticCandidateFilter(cand, query))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool MatchesDiagnosticCandidateFilter(DiagnosticCandidateEntry cand, string query)
+        {
+            return PinyinEngine.Matches(cand.Label, query) ||
+                   PinyinEngine.Matches(cand.EntryKey, query) ||
+                   PinyinEngine.Matches(cand.ConfigModId, query) ||
+                   PinyinEngine.Matches(cand.ValueTypeName, query);
+        }
+
+        private static string GetDiagnosticStatusBadge(ModDiagnosticStatus status)
+        {
+            switch (status)
+            {
+                case ModDiagnosticStatus.HasCandidates:
+                    return "<color=#ffd27d>[有疑难/待确认项]</color>";
+                case ModDiagnosticStatus.UnmanagedCodeMod:
+                    return "<color=#ffb347>[未检测到官方配置]</color>";
+                case ModDiagnosticStatus.Managed:
+                    return "<color=#7fe0a0>[已正常纳管]</color>";
+                default:
+                    return "<color=#99a3b0>[纯资源/无代码]</color>";
+            }
+        }
+
+        private static void BuildDiagnosticModCard(CustomUIBuilder builder, ModDiagnosticItem item, string query, bool hasQuery)
+        {
+            bool anyCandMatchedQuery = hasQuery && item.CandidateEntries.Any(c => MatchesDiagnosticCandidateFilter(c, query));
+            bool isExpanded = _expandedDiagnosticModIds.Contains(item.ModId) || anyCandMatchedQuery;
+
+            builder.BeginRow(6f, TextAnchor.MiddleLeft);
+            builder.AddSpace(8f);
+
+            string titleBadge = GetDiagnosticStatusBadge(item.Status);
+            string idSuffix = item.IsWildOrphanConfig
+                ? " <color=#99a3b0>(独立 ModConfig)</color>"
+                : string.Empty;
+
+            string statsPart = string.Empty;
+            if (item.Status != ModDiagnosticStatus.AssetOnlyMod)
+            {
+                statsPart = $"  <color=#9ec4ff>按键:{item.ManagedHotkeyCount}</color> <color=#a8d8b9>常规:{item.ManagedGeneralCount}</color>";
+                if (item.CandidateEntries.Count > 0)
+                {
+                    statsPart += $" <color=#ffd27d>候选:{item.CandidateEntries.Count}</color>";
+                }
+            }
+
+            builder.AddLabel($"{titleBadge} <b>{item.DisplayName}</b>{idSuffix}{statsPart}", null);
+            var titleEl = builder.Last;
+            if (titleEl != null)
+            {
+                titleEl.SetFlexible(1f, 0f);
+                if (titleEl.text != null)
+                {
+                    titleEl.text.enableWordWrapping = true;
+                    titleEl.text.overflowMode = TextOverflowModes.Overflow;
+                }
+            }
+
+            if (item.CandidateEntries.Count > 0)
+            {
+                builder.AddButton(isExpanded ? "收起明细" : "查看原始项", () =>
+                {
+                    if (_expandedDiagnosticModIds.Contains(item.ModId))
+                    {
+                        _expandedDiagnosticModIds.Remove(item.ModId);
+                    }
+                    else
+                    {
+                        _expandedDiagnosticModIds.Add(item.ModId);
+                    }
+                    _diagnosticViewDirty = true;
+                    RebuildDiagnosticView();
+                }, null);
+                StyleActionButton(builder.Last, 114f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+            }
+
+            if (item.ManagedHotkeyCount > 0 || item.ManagedGeneralCount > 0)
+            {
+                string jumpText = item.ManagedHotkeyCount > 0 ? "前去改键" : "查看设置";
+                builder.AddButton(jumpText, () =>
+                {
+                    JumpToModInNormalView(item.ModId, null);
+                }, null);
+                StyleActionButton(builder.Last, 98f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+            }
+
+            if (item.Status == ModDiagnosticStatus.UnmanagedCodeMod)
+            {
+                builder.AddButton("复查此模组", () =>
+                {
+                    PerformFullRescanAndRefreshInPlace(
+                        forceInvalidateCache: true,
+                        targetModId: item.ModId,
+                        statusMessage: null);
+                }, null);
+                StyleActionButton(builder.Last, 114f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+
+                builder.AddButton("复制信息", () =>
+                {
+                    CopyModDiagnosticInfo(item);
+                }, null);
+                StyleActionButton(builder.Last, 98f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+            }
+
+            builder.AddSpace(8f);
+            builder.End();
+
+            // 副标题与排查说明
+            if (item.Status == ModDiagnosticStatus.UnmanagedCodeMod)
+            {
+                string authorVer = string.IsNullOrEmpty(item.Author) ? item.Version : $"{item.Author} | v{item.Version}";
+                string meta = string.IsNullOrEmpty(authorVer) ? string.Empty : $"({authorVer}) ";
+                AddWrappedDiagnosticLabel(
+                    builder,
+                    22f,
+                    $"<color=#b0b9c4>{meta}该模组含程序集代码但未通过 ModConfig / GameOptionRegistry 注册官方配置（多为自绘热键、独立响应或硬编码功能）。受官方安全扫描限制无法盲反照未知私有类，可点「复制信息」反馈作者补充专项适配。</color>");
+            }
+            else if (item.Status == ModDiagnosticStatus.AssetOnlyMod)
+            {
+                AddWrappedDiagnosticLabel(
+                    builder,
+                    22f,
+                    "<color=#99a3b0>该模组不包含代码程序集，属于纯资源/数据模组，无需快捷键或设置。</color>");
+            }
+            else if (item.MatchedConfigIds.Count > 0 &&
+                     (item.MatchedConfigIds.Count > 1 ||
+                      !string.Equals(item.MatchedConfigIds[0], item.ModId, StringComparison.OrdinalIgnoreCase) ||
+                      item.IsWildOrphanConfig))
+            {
+                AddWrappedDiagnosticLabel(
+                    builder,
+                    22f,
+                    $"<color=#9ec4ff>已关联 ModConfig ID: {string.Join(", ", item.MatchedConfigIds)}</color>");
+            }
+
+            // 展开后的疑难/候选原始条目列表
+            if (isExpanded && item.CandidateEntries.Count > 0)
+            {
+                foreach (var cand in item.CandidateEntries)
+                {
+                    if (hasQuery && anyCandMatchedQuery && !MatchesDiagnosticCandidateFilter(cand, query))
+                    {
+                        continue;
+                    }
+                    BuildDiagnosticCandidateRow(builder, cand);
+                }
+            }
+
+            builder.AddSeparator(null, 1);
+        }
+
+        private static void BuildDiagnosticCandidateRow(CustomUIBuilder builder, DiagnosticCandidateEntry cand)
+        {
+            string tag = cand.IsForcedHotkey
+                ? "<color=#ffd27d>[已强转按键]</color>"
+                : (cand.IsCurrentlyHotkey
+                    ? "<color=#9ec4ff>[已纳管按键]</color>"
+                    : (cand.WasDroppedFromMainUI ? "<color=#ffb347>[原UI未显示]</color>" : "<color=#a8d8b9>[常规选项]</color>"));
+
+            string detailText = $"{tag} <b>{cand.Label}</b>  <color=#99a3b0>键:{cand.EntryKey} | {cand.ValueTypeName} | 当前:{cand.CurrentValuePreview} | 默认:{cand.DefaultValuePreview}</color>";
+
+            builder.BeginRow(6f, TextAnchor.MiddleLeft);
+            builder.AddSpace(26f);
+
+            builder.AddLabel(detailText, null);
+            var el = builder.Last;
+            if (el != null)
+            {
+                el.SetFlexible(1f, 0f);
+                if (el.text != null)
+                {
+                    el.text.enableWordWrapping = true;
+                    el.text.overflowMode = TextOverflowModes.Overflow;
+                }
+            }
+
+            if (cand.IsForcedHotkey)
+            {
+                builder.AddButton("前去改键", () =>
+                {
+                    JumpToModInNormalView(cand.OwnerModId, cand.Label);
+                }, null);
+                StyleActionButton(builder.Last, 98f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+
+                builder.AddButton("还原", () =>
+                {
+                    ComboKeyStore.SetForcedHotkey(cand.CanonicalId, false);
+                    _expandedDiagnosticModIds.Add(cand.OwnerModId);
+                    PerformFullRescanAndRefreshInPlace(
+                        forceInvalidateCache: true,
+                        targetModId: null,
+                        statusMessage: $"已还原 [{cand.ModDisplayName}] {cand.Label} 为默认识别类型");
+                }, null);
+                StyleActionButton(builder.Last, 74f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+            }
+            else if (cand.CanPromoteToHotkey && !cand.IsCurrentlyHotkey)
+            {
+                builder.AddButton("设为按键绑定", () =>
+                {
+                    ComboKeyStore.SetForcedHotkey(cand.CanonicalId, true);
+                    _expandedDiagnosticModIds.Add(cand.OwnerModId);
+                    PerformFullRescanAndRefreshInPlace(
+                        forceInvalidateCache: true,
+                        targetModId: null,
+                        statusMessage: $"已将 [{cand.ModDisplayName}] {cand.Label} 设为按键绑定，可点击「前去改键」编辑组合键或空键");
+                }, null);
+                StyleActionButton(builder.Last, 134f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+            }
+            else if (cand.IsCurrentlyHotkey)
+            {
+                builder.AddButton("前去改键", () =>
+                {
+                    JumpToModInNormalView(cand.OwnerModId, cand.Label);
+                }, null);
+                StyleActionButton(builder.Last, 98f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
+                ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
+            }
+
+            builder.AddSpace(8f);
+            builder.End();
+        }
+
+        private static void CopyModDiagnosticInfo(ModDiagnosticItem item)
+        {
+            string info = $"ModName={item.DisplayName} | ModId={item.ModId} | Author={item.Author} | Version={item.Version} | WorkshopId={item.WorkshopId} | Status={item.Status}";
+            GUIUtility.systemCopyBuffer = info;
+            _diagnosticStatusMessage = $"已复制 [{item.DisplayName}] 的模组排查信息到剪贴板";
+            _diagnosticViewDirty = true;
+            RebuildDiagnosticView();
+        }
+
+        private static void JumpToModInNormalView(string ownerModId, string? hotkeyLabelHint)
+        {
+            CancelCapture();
+            ClearPendingScroll();
+            if (_scrollRect != null) _scrollRect.StopMovement();
+            IsDiagnosticViewActive = false;
+            IsConflictViewActive = false;
+
+            if (!string.IsNullOrEmpty(_searchQuery))
+            {
+                _searchQuery = string.Empty;
+                _searchInputField?.SetTextWithoutNotify(string.Empty);
+            }
+            _wasSearchNonEmpty = false;
+
+            SyncViewContainersAndToggleButtons();
+            ApplySearchFilter();
+
+            ModOptionGroup? targetGroup = _modGroups.FirstOrDefault(g =>
+                string.Equals(g.ModId, ownerModId, StringComparison.OrdinalIgnoreCase) ||
+                (g.ExtraNotifyModIds != null && g.ExtraNotifyModIds.Any(id => string.Equals(id, ownerModId, StringComparison.OrdinalIgnoreCase))));
+
+            if (targetGroup == null)
+            {
+                ResetScrollToTop();
+                return;
+            }
+
+            WithSuspendedRootLayout(() =>
+            {
+                using (ComboKeyStore.EnterBypass())
+                {
+                    SetGroupExpanded(targetGroup, true);
+                    StyleFoldButton(targetGroup.FoldArrowElement, 36f);
+                    SyncCompactActionButton(targetGroup.ResetButtonElement);
+                    RefreshExpandAllButtonState();
+                }
+            });
+
+            GameObject? scrollTarget = targetGroup.HeaderRowObject;
+            if (!string.IsNullOrEmpty(hotkeyLabelHint))
+            {
+                var targetHk = targetGroup.Hotkeys.FirstOrDefault(h =>
+                    string.Equals(h.DisplayName, hotkeyLabelHint, StringComparison.OrdinalIgnoreCase));
+                if (targetHk?.RowObject != null)
+                {
+                    scrollTarget = targetHk.RowObject;
+                }
+            }
+
+            if (scrollTarget != null)
+            {
+                ScrollToTargetImmediate(scrollTarget);
+                _pendingScrollTarget = scrollTarget;
+                _pendingScrollMinFrame = Time.frameCount + 1;
+                _pendingScrollRemainingPasses = 2;
+            }
+            else
+            {
+                ResetScrollToTop();
+            }
+        }
+
+        private static void PerformFullRescanAndRefreshInPlace(bool forceInvalidateCache, string? targetModId, string? statusMessage)
+        {
+            CancelCapture();
+
+            var expandedModIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var pendingHotkeys = new Dictionary<string, (KeyCode key, KeyModifierMask mods)>(StringComparer.OrdinalIgnoreCase);
+            var pendingGenerals = new Dictionary<string, (bool? b, float? f, int? idx)>(StringComparer.OrdinalIgnoreCase);
+
+            var oldGroups = _modGroups;
+            foreach (var g in oldGroups)
+            {
+                if (IsCardCurrentlyExpanded(g))
+                {
+                    expandedModIds.Add(g.ModId);
+                }
+                foreach (var hk in g.Hotkeys)
+                {
+                    if (hk.HasPendingChange)
+                    {
+                        pendingHotkeys[hk.Id] = (hk.PendingKey, hk.PendingModifiers);
+                    }
+                }
+                foreach (var gen in g.GeneralSettings)
+                {
+                    if (gen.PendingBool.HasValue || gen.PendingFloat.HasValue || gen.PendingIndex.HasValue)
+                    {
+                        pendingGenerals[gen.Id] = (gen.PendingBool, gen.PendingFloat, gen.PendingIndex);
+                    }
+                }
+            }
+
+            if (forceInvalidateCache)
+            {
+                ModCatalogCache.Invalidate();
+            }
+
+            _modGroups = ModCatalogCache.GetOrScanGroups(out var scannedHotkeys, out _scanReport);
+            for (int i = 0; i < scannedHotkeys.Count; i++)
+            {
+                var hk = scannedHotkeys[i];
+                if (hk.ModId == "vanilla" && !string.IsNullOrEmpty(hk.RawOptionId) &&
+                    _vanillaHotkeyByRawId.TryGetValue(hk.RawOptionId, out var existingVanilla))
+                {
+                    existingVanilla.ConflictButtonElement = null;
+                    scannedHotkeys[i] = existingVanilla;
+                }
+            }
+            _allHotkeys = scannedHotkeys;
+
+            foreach (var g in _modGroups)
+            {
+                g.IsExpanded = expandedModIds.Contains(g.ModId);
+                foreach (var hk in g.Hotkeys)
+                {
+                    if (pendingHotkeys.TryGetValue(hk.Id, out var savedPending))
+                    {
+                        hk.PendingKey = savedPending.key;
+                        hk.PendingModifiers = savedPending.mods;
+                        hk.HasPendingChange = true;
+                    }
+                }
+                foreach (var gen in g.GeneralSettings)
+                {
+                    if (pendingGenerals.TryGetValue(gen.Id, out var savedGen))
+                    {
+                        gen.PendingBool = savedGen.b;
+                        gen.PendingFloat = savedGen.f;
+                        gen.PendingIndex = savedGen.idx;
+                    }
+                }
+            }
+
+            foreach (var oldG in oldGroups)
+            {
+                CardParts.Remove(oldG);
+            }
+
+            WithSuspendedRootLayout(() =>
+            {
+                if (_modCardsContainer != null && _currentWindow != null && CustomUIManager.Instance != null)
+                {
+                    var modRt = _modCardsContainer.GetComponent<RectTransform>();
+                    if (modRt != null)
+                    {
+                        CustomUIBuilder.ClearContainer(modRt);
+                        using (ComboKeyStore.EnterBypass())
+                        {
+                            var modBuilder = new CustomUIBuilder(CustomUIManager.Instance, _currentWindow, modRt);
+                            foreach (var group in _modGroups)
+                            {
+                                BuildModGroupCardShell(modBuilder, group);
+                            }
+                        }
+                        RestoreSavedExpandedModCards();
+                        foreach (var group in _modGroups)
+                        {
+                            StyleFoldButton(group.FoldArrowElement, 36f);
+                            if (group.IsExpanded)
+                            {
+                                SyncCompactActionButton(group.ResetButtonElement);
+                            }
+                        }
+                    }
+                }
+
+                if (!IsConflictViewActive && !IsDiagnosticViewActive)
+                {
+                    ApplySearchFilter();
+                }
+            });
+
+            _prebuildModIndex = 0;
+            _cachedSuspendableLayoutsDirty = true;
+
+            ComboKeyStore.RebuildRuntimeLookup(_allHotkeys);
+            RefreshConflicts();
+            RefreshExpandAllButtonState();
+
+            if (!string.IsNullOrEmpty(statusMessage))
+            {
+                _diagnosticStatusMessage = statusMessage;
+            }
+            else if (!string.IsNullOrEmpty(targetModId))
+            {
+                var found = _scanReport?.Mods.FirstOrDefault(m => string.Equals(m.ModId, targetModId, StringComparison.OrdinalIgnoreCase));
+                if (found == null)
+                {
+                    _diagnosticStatusMessage = $"已完成复查：当前已启用列表中未包含模组 {targetModId}";
+                }
+                else if (found.Status == ModDiagnosticStatus.UnmanagedCodeMod)
+                {
+                    _diagnosticStatusMessage = $"已复查 [{found.DisplayName}]：仍未检测到官方配置项（可能为自定义按键或私藏写法）";
+                }
+                else
+                {
+                    _diagnosticStatusMessage = $"已复查 [{found.DisplayName}]：检测到 按键:{found.ManagedHotkeyCount} / 常规:{found.ManagedGeneralCount} / 候选:{found.CandidateEntries.Count}";
+                }
+            }
+            else
+            {
+                var rpt = _scanReport;
+                _diagnosticStatusMessage = rpt != null
+                    ? $"已完成全量重扫：共 {rpt.EnabledModCount} 个模组，捕获 按键:{rpt.TotalHotkeysCount} / 常规:{rpt.TotalGeneralsCount}，待排查:{rpt.AttentionModCount}"
+                    : "已完成全量重扫";
+            }
+
+            UpdateDiagnosticToggleButtonAppearance();
+            _diagnosticViewDirty = true;
+            if (IsDiagnosticViewActive)
+            {
+                RebuildDiagnosticView();
             }
         }
 
@@ -2152,9 +2984,12 @@ namespace ProbablyUnifiedHotkeys
 
         private static void ToggleExpandAll()
         {
-            if (IsConflictViewActive)
+            if (IsConflictViewActive || IsDiagnosticViewActive)
             {
-                ToggleConflictMode();
+                IsConflictViewActive = false;
+                IsDiagnosticViewActive = false;
+                SyncViewContainersAndToggleButtons();
+                ApplySearchFilter();
             }
 
             _allExpanded = !_allExpanded;
@@ -2561,7 +3396,7 @@ namespace ProbablyUnifiedHotkeys
             }
             if (comp == null && btn.text != null)
             {
-                comp = btn.text.GetComponentInParent<ButtonTextColor>();
+                comp = btn.text.GetComponentInParent<ButtonTextColor>(true);
             }
 
             ButtonTextColorCache[cacheKey] = comp;
@@ -2938,6 +3773,7 @@ namespace ProbablyUnifiedHotkeys
 
             SyncCompactActionButton(_conflictToggleBtn);
             SyncCompactActionButton(_expandToggleBtn);
+            SyncCompactActionButton(_diagnosticToggleBtn);
 
             for (int i = 0; i < _vanillaCards.Count; i++)
             {
@@ -2954,6 +3790,7 @@ namespace ProbablyUnifiedHotkeys
             }
 
             UpdateConflictToggleButtonAppearance();
+            UpdateDiagnosticToggleButtonAppearance();
         }
 
         internal static void SyncCompactActionButton(CustomUIElement? btn)
@@ -3074,6 +3911,22 @@ namespace ProbablyUnifiedHotkeys
             return val.ToString("0.0");
         }
 
+        private static void NotifyGroupConfigsApplied(ModOptionGroup group)
+        {
+            if (group == null) return;
+            NotifyModConfigApplied(group.ModId);
+            if (group.ExtraNotifyModIds != null && group.ExtraNotifyModIds.Count > 0)
+            {
+                foreach (var extraId in group.ExtraNotifyModIds)
+                {
+                    if (!string.IsNullOrEmpty(extraId) && !string.Equals(extraId, group.ModId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        NotifyModConfigApplied(extraId);
+                    }
+                }
+            }
+        }
+
         private static void NotifyModConfigApplied(string modId)
         {
             try
@@ -3168,6 +4021,16 @@ namespace ProbablyUnifiedHotkeys
                 if (groupChanged)
                 {
                     touchedModIds.Add(group.ModId);
+                    if (group.ExtraNotifyModIds != null)
+                    {
+                        foreach (var extraId in group.ExtraNotifyModIds)
+                        {
+                            if (!string.IsNullOrEmpty(extraId))
+                            {
+                                touchedModIds.Add(extraId);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -3188,6 +4051,14 @@ namespace ProbablyUnifiedHotkeys
             if (IsConflictViewActive)
             {
                 RebuildConflictView();
+            }
+            if (touchedModIds.Count > 0 || comboChanged)
+            {
+                _diagnosticViewDirty = true;
+                if (IsDiagnosticViewActive)
+                {
+                    RebuildDiagnosticView();
+                }
             }
         }
     }

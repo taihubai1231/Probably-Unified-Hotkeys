@@ -112,6 +112,7 @@ namespace ProbablyUnifiedHotkeys
 
         public List<ModHotkeyEntry> Hotkeys { get; } = new List<ModHotkeyEntry>();
         public List<ModGeneralEntry> GeneralSettings { get; } = new List<ModGeneralEntry>();
+        public List<string> ExtraNotifyModIds { get; } = new List<string>();
 
         public Action? ResetToDefaultsAction { get; set; }
 
@@ -172,6 +173,13 @@ namespace ProbablyUnifiedHotkeys
         public KeyCode SnapshotKey { get; set; } = KeyCode.None;
         public KeyModifierMask SnapshotModifiers { get; set; } = KeyModifierMask.None;
         public bool HasExplicitDefault { get; set; } = false;
+        private bool _disableModifierCombos;
+        /// <summary>是否允许在按键前叠加 Ctrl/Shift/Alt 组合键前缀（部分无官方配置的独立模组仅支持单键/侧键；默认开启，兼容零初始化对象）。</summary>
+        public bool SupportsModifierCombos
+        {
+            get => !_disableModifierCombos;
+            set => _disableModifierCombos = !value;
+        }
 
         public Func<KeyCode>? GetKey { get; set; }
         public Action<KeyCode>? SetKey { get; set; }
@@ -193,6 +201,7 @@ namespace ProbablyUnifiedHotkeys
         {
             get
             {
+                if (!SupportsModifierCombos) return KeyModifierMask.None;
                 KeyCode key = EffectiveKey;
                 if (key == KeyCode.None) return KeyModifierMask.None;
                 KeyModifierMask mask = HasPendingChange
@@ -204,7 +213,7 @@ namespace ProbablyUnifiedHotkeys
         public KeyCombo EffectiveCombo => new KeyCombo(EffectiveModifiers, EffectiveKey);
 
         public KeyCode ResetTargetKey => HasExplicitDefault ? DefaultKey : SnapshotKey;
-        public KeyModifierMask ResetTargetModifiers => HasExplicitDefault ? DefaultModifiers : SnapshotModifiers;
+        public KeyModifierMask ResetTargetModifiers => SupportsModifierCombos ? (HasExplicitDefault ? DefaultModifiers : SnapshotModifiers) : KeyModifierMask.None;
     }
 
     /// <summary>
@@ -328,5 +337,76 @@ namespace ProbablyUnifiedHotkeys
         public KeyCombo Combo { get; set; }
         public KeyCode Key => Combo.Key;
         public List<ModHotkeyEntry> ConflictingEntries { get; } = new List<ModHotkeyEntry>();
+    }
+
+    public enum ModDiagnosticStatus
+    {
+        Managed = 0,
+        HasCandidates = 1,
+        UnmanagedCodeMod = 2,
+        AssetOnlyMod = 3
+    }
+
+    /// <summary>
+    /// 模组排查视图中发现的疑难 / 被跳过 / 用户强转的 ModConfig 候选条目
+    /// </summary>
+    public class DiagnosticCandidateEntry
+    {
+        public string CanonicalId { get; set; } = string.Empty; // "{configModId}.{entryKey}"
+        public string ConfigModId { get; set; } = string.Empty;
+        public string OwnerModId { get; set; } = string.Empty;
+        public string ModDisplayName { get; set; } = string.Empty;
+        public string EntryKey { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        public string Tooltip { get; set; } = string.Empty;
+        public string ValueTypeName { get; set; } = string.Empty;
+        public string CurrentValuePreview { get; set; } = string.Empty;
+        public string DefaultValuePreview { get; set; } = string.Empty;
+        public bool IsForcedHotkey { get; set; }
+        public bool IsCurrentlyHotkey { get; set; }
+        public bool IsCurrentlyGeneral { get; set; }
+        public bool WasDroppedFromMainUI { get; set; }
+        public bool CanPromoteToHotkey { get; set; }
+        public bool IsSuspiciousCandidate { get; set; }
+    }
+
+    /// <summary>
+    /// 单个已启用模组的扫描诊断快照
+    /// </summary>
+    public class ModDiagnosticItem
+    {
+        public string ModId { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string Author { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public ulong WorkshopId { get; set; }
+        public bool HasAssembly { get; set; }
+        public bool IsWildOrphanConfig { get; set; }
+        public ModDiagnosticStatus Status { get; set; }
+        public int ManagedHotkeyCount { get; set; }
+        public int ManagedGeneralCount { get; set; }
+        public List<string> MatchedConfigIds { get; } = new List<string>();
+        public bool UsedGameOptionRegistry { get; set; }
+        public bool UsedKnownAdapter { get; set; }
+        public List<DiagnosticCandidateEntry> CandidateEntries { get; } = new List<DiagnosticCandidateEntry>();
+    }
+
+    /// <summary>
+    /// 全量模组扫描与排查报告
+    /// </summary>
+    public class ModScanReport
+    {
+        public int EnabledModCount { get; set; }
+        public int ManagedModCount { get; set; }
+        public int AttentionModCount { get; set; }
+        public int HasCandidatesModCount { get; set; }
+        public int UnmanagedCodeModCount { get; set; }
+        public int AssetOnlyModCount { get; set; }
+        public int TotalHotkeysCount { get; set; }
+        public int TotalGeneralsCount { get; set; }
+        public int OrphanConfigCount { get; set; }
+        public List<ModDiagnosticItem> Mods { get; } = new List<ModDiagnosticItem>();
+        public List<DiagnosticCandidateEntry> AllCandidates { get; } = new List<DiagnosticCandidateEntry>();
     }
 }

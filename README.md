@@ -56,6 +56,12 @@
 - **秒级退出流程（「退出游戏」）**：主菜单退出、暂停菜单退出与窗口关闭前统一安全触发各模组 `OnDisable()` 以保存配置，随后清空已卸载模组持有的一次性 `HarmonyInstance` 引用以跳过 `ModLoader.OnApplicationQuit()` 在进程销毁前的 40+ 次同步 `UnpatchAll` 动态方法重编译；同时在游戏禁用遥测（`OVERWRITE_DISABLE_ANALYTICS == true`）时跳过暂停菜单 `QuitWithAnalytics()` 无意义的 1 秒固定空等，实现流畅秒退。
 - **全面委托化热点钩子 & `ModScanner` 全绿**：全代码库零 `FindObjectsOfType` / `GameObject.Find`，所有 `AccessTools.TypeByName` 与热点 `MethodInfo` 均在启动/epoch 初始化阶段一次性绑定为静态 `Delegate.CreateDelegate` 强类型委托，消除每帧与热路径反射查找；工坊程序集监听通过 `O(1)` 名称白名单过滤，严格遵守官方 `ModScanner` 静态扫描 **0 Findings / 0 Capabilities / 0 HardFlags / Refused: False**。
 
+### 9. 模组排查与疑难设置接管（v1.4.3 新增）
+- **官方渠道全量恢复**：在保持 `ModScanner` 0 警告前提下，深入官方 `ModConfig.configs` 注册字典与 `GameOptionRegistry` 条目回调归属，自动找回作者命名不规范（“野 `ModConfig.For(...)` ID”或错配 `source`）导致的漏检设定，并在应用/还原时联动通知全部关联配置 ID 生效。
+- **独立「模组排查」子视图**：点击顶部操作栏 **`模组排查`** 按钮即可按需排查所有已启用模组：
+  - 将模组分类为「有疑难/待确认项」「未检测到官方配置」「已正常纳管」「纯资源/无代码」，支持顶部搜索框实时按模组名、ID 或配置键名过滤，并提供 **`强制全部重扫`** 与单模组 **`复查此模组`** 原地无闪刷新（自动保留尚未应用的待定修改）；
+  - 针对通过 `ConfigEntry<string>`（非明确单键名）或未设范围的 `ConfigEntry<int>` 编写的非常规按键，支持在 **`查看原始项`** 中一键 **`设为按键绑定`** 强制纳管或 **`还原`**，强转及自动识别的 string/int 热键同样享有完整的 `Shift/Ctrl/Alt` 组合键、防误触拦截、`Mouse3~6` 侧键、`Esc` 清空与 **`前去改键`** 自动定位功能（配置持久化于 `probably_unified_hotkeys.forced_hotkeys.v1`）。
+
 ---
 
 ## 🧩 模组兼容与已知边界
@@ -77,6 +83,17 @@
 ---
 
 ## 📝 更新日志
+
+### v1.4.3
+1. **官方渠道深度防漏检（野 `ModConfig` / 错配 `source` 自动收编）**：
+   - 新增从官方 `ModConfig.configs` 全量字典反查逻辑：针对作者把 `ModConfig.For("...")` ID 写成非标准 `manifest.ID`（或大小写/前缀/后缀变体）的“野配置”，自动按前缀/名称安全映射归并至所属模组卡片（若无法唯一归属，仍保留独立卡片展示绝不丢失），并在保存与恢复默认时通过 `ExtraNotifyModIds` 一并通知对应配置 ID 生效。
+   - 强化 `GameOptionRegistry` 归属回收：当作者注册原版区或错误 `source` ID 的条目时，追溯其 `get/set` 回调程序集归属自动归还到对应模组卡片，消除模组选项遗漏。
+2. **新增交互式「模组排查与疑难设置接管」视图**：
+   - 在顶部操作栏第二行新增 **`模组排查`** / **`模组排查 (N)`** 按钮，点击后于当前滚动窗口内懒加载切换排查面板（支持顶部搜索框实时过滤、**`强制全部重扫`** 原地热更新且自动保留未保存修改、`[查看原始项]` 展开疑难候选条目、`[复查此模组]` 与 `[复制信息]`）。
+   - 针对AI/野生模组常见的非规范按键写法，开放 **`ConfigEntry<string>` / 无范围 `ConfigEntry<int>`** 一键 **`设为按键绑定`**（及 **`还原`**）人工纠偏入口，持久化于 `probably_unified_hotkeys.forced_hotkeys.v1`，强转后可直接点击 **`前去改键`** 自动跳转并展开对应卡片。
+3. **非规范按键扩展与运行时组合键拦截全通**：
+   - 扩展按键关键词库（新增 `TriggerBtn`、`FastMapping`、`HotKey`/`Shortcut`/`BindKey` 等精确词元），加入 `MaxKeyCount` / `KeyCount` / `KeySize` 等非键码整数保护过滤以防常规滑块被误抓为按键；同时自动纳管无歧义单键码字符串配置（如 `"F8"`、`"Mouse4"`）并保持普通文本词条原样。
+   - 为 `ConfigEntry<string>.Value` 与 `ConfigEntry<int>.Value` 读取路径补全 Harmony 后缀防误触门控，确保强转与自动识别的 string/int 热键同样支持 `Shift / Ctrl / Alt` 组合键与组合防误触隔离，且全程保持 `ModScanner` **0 警告**。
 
 ### v1.4.2
 1. **彻底修复四大核心按钮文字空白（`[!] 仅看冲突`、`全部展开`、`▶/▼` 折叠按钮、`恢复默认`）**：
