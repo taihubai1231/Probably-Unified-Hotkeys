@@ -97,7 +97,7 @@ namespace ProbablyUnifiedHotkeys
             if (!handledModIds.Contains("hollow.clientdemandhighlight")) TryAdaptClientDemandHighlight(groups, handledModIds);
             if (!handledModIds.Contains("Pen_mod_QoL_Tweaks")) TryAdaptPenQoL(groups, handledModIds);
             if (!handledModIds.Contains("smart_inventory_arrange")) TryAdaptSmartInventoryArrange(groups, handledModIds);
-            if (ModFeatureConfig.EnableTrainerAdapter && !handledModIds.Contains(TrainerModId)) TryAdaptProbablyStolenTrainer(groups, handledModIds);
+            if (!handledModIds.Contains(TrainerModId)) TryAdaptProbablyStolenTrainer(groups, handledModIds);
 
             // 若扫描自身触发了框架程序集延迟加载导致 epoch 推进，同步本轮各适配器缓存版本号，避免下次重复扫描
             int exitEpoch = _assemblyEpoch;

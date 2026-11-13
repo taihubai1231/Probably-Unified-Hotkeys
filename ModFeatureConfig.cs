@@ -18,14 +18,12 @@ namespace ProbablyUnifiedHotkeys
         public const string KeyFastQuit = "enable_fast_quit";
         public const string KeyPinyinSearch = "enable_pinyin_search";
         public const string KeyKeySuppression = "enable_key_suppression";
-        public const string KeyTrainerAdapter = "enable_trainer_adapter";
 
         private static ConfigEntry<bool>? _entryDllProbe;
         private static ConfigEntry<bool>? _entryPerformancePatches;
         private static ConfigEntry<bool>? _entryFastQuit;
         private static ConfigEntry<bool>? _entryPinyinSearch;
         private static ConfigEntry<bool>? _entryKeySuppression;
-        private static ConfigEntry<bool>? _entryTrainerAdapter;
 
         public static event Action? FeatureConfigChanged;
 
@@ -53,11 +51,6 @@ namespace ProbablyUnifiedHotkeys
         /// 5. 高级防误触隔离 (按住修饰键触发组合键时抑制裸键单按与长按动作)
         /// </summary>
         public static bool EnableKeySuppression => _entryKeySuppression?.Value ?? true;
-
-        /// <summary>
-        /// 6. 修改器热键桥接 (自动适配 probablystolen.trainer 修改器开关快捷键)
-        /// </summary>
-        public static bool EnableTrainerAdapter => _entryTrainerAdapter?.Value ?? true;
 
         public static void EnsureRegistered()
         {
@@ -121,17 +114,6 @@ namespace ProbablyUnifiedHotkeys
                     () => I18n.Get(
                         "触发组合键时精准抑制同主键的裸键单按与长按动作，防止改键后误触背景功能。",
                         "Suppresses naked single-key actions when modifier combos trigger to prevent accidental background triggers."),
-                    onChanged: OnFeatureChangedNotify
-                );
-
-                _entryTrainerAdapter = RegisterBoolEntry(
-                    config,
-                    KeyTrainerAdapter,
-                    defaultValue: true,
-                    () => I18n.Get("修改器热键桥接", "Trainer Mod Adapter"),
-                    () => I18n.Get(
-                        "自动适配 probablystolen.trainer 修改器开关热键，支持侧键与 Esc 清空。",
-                        "Bridges probablystolen.trainer hotkeys to support mouse side buttons and Esc clearing."),
                     onChanged: OnFeatureChangedNotify
                 );
             }
