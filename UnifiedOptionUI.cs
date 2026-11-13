@@ -2955,7 +2955,7 @@ namespace ProbablyUnifiedHotkeys
             builder.AddSpace(4f);
 
             // 第一行：左侧概况标题+指标标签 与 右侧操作按钮水平居中对齐，消除原先高低不一的粗糙感
-            builder.BeginRow(6f, TextAnchor.MiddleCenter);
+            builder.BeginRow(5f, TextAnchor.MiddleCenter);
             var stickyHeaderRowObj = builder.CurrentContainer.gameObject;
             var stickyHeaderHlg = stickyHeaderRowObj.GetComponent<HorizontalLayoutGroup>();
             if (stickyHeaderHlg != null)
@@ -2965,22 +2965,22 @@ namespace ProbablyUnifiedHotkeys
             }
             AddFixedHorizontalSpace(builder, 10f);
 
-            string titleText = I18n.Get("<b><size=17>模组排查概况</size></b>", "<b><size=17>Diagnostics Overview</size></b>");
+            string titleText = I18n.Get("<b><size=15>模组排查概况</size></b>", "<b><size=15>Diagnostics Overview</size></b>");
             string statsText = report.AttentionModCount > 0
                 ? I18n.Format(
-                    "  <color=#99a3b0>共 {0} 个模组</color>  <color=#ffd27d><b>· {1} 个待排查</b></color>",
-                    "  <color=#99a3b0>{0} mods</color>  <color=#ffd27d><b>· {1} need review</b></color>",
+                    "  <color=#99a3b0>共 {0} 模组</color>  <color=#ffd27d><b>· {1} 待排查</b></color>",
+                    "  <color=#99a3b0>{0} mods</color>  <color=#ffd27d><b>· {1} review</b></color>",
                     report.EnabledModCount, report.AttentionModCount)
                 : I18n.Format(
-                    "  <color=#99a3b0>共 {0} 个模组</color>  <color=#7fe0a0><b>· 全部已纳管</b></color>",
+                    "  <color=#99a3b0>共 {0} 模组</color>  <color=#7fe0a0><b>· 全部已纳管</b></color>",
                     "  <color=#99a3b0>{0} mods</color>  <color=#7fe0a0><b>· All managed</b></color>",
                     report.EnabledModCount);
 
             if (ModFeatureConfig.EnableDllProbe && report.ProbedHotkeysCount > 0)
             {
                 statsText += I18n.Format(
-                    "  <color=#d8b4fe><b>· {0} 个探测键</b></color>",
-                    "  <color=#d8b4fe><b>· {0} probed keys</b></color>",
+                    "  <color=#d8b4fe><b>· {0} 探测键</b></color>",
+                    "  <color=#d8b4fe><b>· {0} probed</b></color>",
                     report.ProbedHotkeysCount);
             }
 
@@ -2993,24 +2993,24 @@ namespace ProbablyUnifiedHotkeys
                 if (summaryEl.root != null)
                 {
                     var le = summaryEl.root.GetComponent<LayoutElement>() ?? summaryEl.root.AddComponent<LayoutElement>();
-                    le.minWidth = 430f;
-                    le.preferredWidth = 470f;
+                    le.minWidth = 240f;
+                    le.preferredWidth = -1f;
                     le.preferredHeight = 34f;
-                    le.flexibleWidth = 0f;
+                    le.flexibleWidth = 1f;
                     le.flexibleHeight = 0f;
                 }
                 if (summaryEl.text != null)
                 {
                     summaryEl.text.alignment = TextAlignmentOptions.MidlineLeft;
                     summaryEl.text.enableWordWrapping = false;
-                    summaryEl.text.overflowMode = TextOverflowModes.Overflow;
+                    summaryEl.text.overflowMode = TextOverflowModes.Ellipsis;
                 }
             }
 
-            builder.AddFlexibleSpace();
+            AddFixedHorizontalSpace(builder, 12f);
 
             builder.AddButton(I18n.Get("复制排查汇总", "Copy Summary"), CopyFullDiagnosticSummary, null);
-            StyleActionButton(builder.Last, 126f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
+            StyleActionButton(builder.Last, 112f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
             builder.AddButton(I18n.Get("强制全部重扫", "Rescan All"), () =>
@@ -3020,11 +3020,11 @@ namespace ProbablyUnifiedHotkeys
                     targetModId: null,
                     statusMessage: null);
             }, null);
-            StyleActionButton(builder.Last, 126f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
+            StyleActionButton(builder.Last, 112f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
             builder.AddButton(I18n.Get("返回设置", "Back"), ToggleDiagnosticMode, null);
-            StyleActionButton(builder.Last, 96f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.82f);
+            StyleActionButton(builder.Last, 84f, 34f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
             AddFixedHorizontalSpace(builder, 10f);
