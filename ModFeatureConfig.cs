@@ -19,7 +19,9 @@ namespace ProbablyUnifiedHotkeys
         public const string KeyPinyinSearch = "enable_pinyin_search";
         public const string KeyKeySuppression = "enable_key_suppression";
 
+#if !DISABLE_DLL_KEY_PROBE
         private static ConfigEntry<bool>? _entryDllProbe;
+#endif
         private static ConfigEntry<bool>? _entryPerformancePatches;
         private static ConfigEntry<bool>? _entryFastQuit;
         private static ConfigEntry<bool>? _entryPinyinSearch;
@@ -28,9 +30,13 @@ namespace ProbablyUnifiedHotkeys
         public static event Action? FeatureConfigChanged;
 
         /// <summary>
-        /// 1. 第三方模组只读热键静态探测 (涉及外部文件只读权限，默认暂时关闭)
+        /// 1. 第三方模组只读热键静态探测 (涉及外部文件只读权限，默认暂时关闭；无权限模式下恒为 false)
         /// </summary>
+#if !DISABLE_DLL_KEY_PROBE
         public static bool EnableDllProbe => _entryDllProbe?.Value ?? false;
+#else
+        public static bool EnableDllProbe => false;
+#endif
 
         /// <summary>
         /// 2. 界面流畅度深度优化补丁 (开窗离线预热、字号单次测量缓存、列表行对象池化复用与 ConflictScanner 双扫去重)
@@ -62,6 +68,7 @@ namespace ProbablyUnifiedHotkeys
                     return;
                 }
 
+#if !DISABLE_DLL_KEY_PROBE
                 _entryDllProbe = RegisterBoolEntry(
                     config,
                     KeyDllProbe,
@@ -72,6 +79,7 @@ namespace ProbablyUnifiedHotkeys
                         "Scans unmanaged code mod DLLs and local configs for hardcoded hotkeys via DseCecil. When disabled, stops file probing and hides all probe UI entirely."),
                     onChanged: OnDllProbeToggled
                 );
+#endif
 
                 _entryPerformancePatches = RegisterBoolEntry(
                     config,
@@ -157,11 +165,13 @@ namespace ProbablyUnifiedHotkeys
             return created;
         }
 
+#if !DISABLE_DLL_KEY_PROBE
         private static void OnDllProbeToggled(ConfigEntry<bool> entry)
         {
             ModCatalogCache.Invalidate();
             FeatureConfigChanged?.Invoke();
         }
+#endif
 
         private static void OnPerformancePatchesToggled(ConfigEntry<bool> entry)
         {

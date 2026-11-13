@@ -1,3 +1,4 @@
+#if !DISABLE_DLL_KEY_PROBE
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -921,3 +922,46 @@ namespace ProbablyUnifiedHotkeys
         }
     }
 }
+#else
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace ProbablyUnifiedHotkeys
+{
+    public sealed class ProbedKeyRecord
+    {
+        public string Id { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public KeyModifierMask Modifiers { get; set; } = KeyModifierMask.None;
+        public KeyCode Key { get; set; } = KeyCode.None;
+        public string SourceKindZh { get; set; } = string.Empty;
+        public string SourceKindEn { get; set; } = string.Empty;
+        public string SourceDetail { get; set; } = string.Empty;
+        public string? PlayerPrefsKey { get; set; }
+    }
+
+    public static class DllKeyProbe
+    {
+        public static void OnProbeConfigChanged(bool enabled) { }
+        public static void InvalidateAll() { }
+        public static void InvalidateMod(string? modId) { }
+        public static List<ProbedKeyRecord> ProbeMod(LoadedMod mod) => new List<ProbedKeyRecord>(0);
+        public static ModHotkeyEntry ToReadOnlyHotkeyEntry(LoadedMod mod, ProbedKeyRecord rec)
+        {
+            return new ModHotkeyEntry
+            {
+                Id = rec.Id,
+                ModId = mod?.Manifest?.ID ?? "unknown",
+                ModDisplayName = mod?.Manifest?.Name ?? "Unknown",
+                DisplayName = rec.DisplayName,
+                DefaultKey = rec.Key,
+                DefaultModifiers = rec.Modifiers,
+                SupportsModifierCombos = false,
+                GetKey = () => KeyCode.None,
+                SetKey = _ => { }
+            };
+        }
+    }
+}
+#endif

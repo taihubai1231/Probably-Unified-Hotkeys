@@ -1,6 +1,7 @@
 param(
     [string]$GameDir = $(if ($env:PROBABLY_STOLEN_DIR) { $env:PROBABLY_STOLEN_DIR } else { "E:\Program Files (x86)\steam\steamapps\common\Probably Stolen" }),
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$ZeroPermission
 )
 
 Set-StrictMode -Version Latest
@@ -18,9 +19,34 @@ $AllowedFiles = @(
     "README.md"
 ) | Sort-Object
 
-Write-Host "[1/4] Build main mod (Release)..."
+Write-Host "[1/4] Build main mod (Release) [ZeroPermission=$($ZeroPermission.IsPresent)]..."
+$targetDll = Join-Path $DeployDir "ProbablyUnifiedHotkeys.dll"
+$oldDll = Join-Path $GameDir "ProbablyUnifiedHotkeys.dll.old"
+
 if (-not $SkipBuild) {
-    & dotnet build $MainCsproj -c Release -p:GameDir="$GameDir"
+    # If the deployed DLL is currently locked by a running game process, rotate it to game root (outside Mods) so build can copy cleanly
+    if (Test-Path $targetDll) {
+        try {
+            $stream = [System.IO.File]::Open($targetDll, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            $stream.Dispose()
+        } catch {
+            Write-Host "Deployed DLL is locked by running game process; rotating to $oldDll..."
+            if (Test-Path $oldDll) { Remove-Item $oldDll -Force -ErrorAction SilentlyContinue }
+            Move-Item -LiteralPath $targetDll -Destination $oldDll -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($ZeroPermission) {
+        $zeroManifest = Join-Path $RepoRoot "tools\manifest.zero.xml"
+        Copy-Item $zeroManifest -Destination (Join-Path $RepoRoot "manifest.xml") -Force
+        & dotnet build $MainCsproj -c Release -p:GameDir="$GameDir" -p:DisableDllKeyProbe=true
+    } else {
+        $filesManifest = Join-Path $RepoRoot "tools\manifest.files.xml"
+        if (Test-Path $filesManifest) {
+            Copy-Item $filesManifest -Destination (Join-Path $RepoRoot "manifest.xml") -Force
+        }
+        & dotnet build $MainCsproj -c Release -p:GameDir="$GameDir" -p:DisableDllKeyProbe=false
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet build failed for ProbablyUnifiedHotkeys.csproj (exit $LASTEXITCODE)"
     }
@@ -31,6 +57,11 @@ if (-not $SkipBuild) {
 Write-Host "[2/4] Verify deploy directory cleanliness: $DeployDir"
 if (-not (Test-Path -LiteralPath $DeployDir)) {
     throw "Deploy directory does not exist: $DeployDir"
+}
+
+# Try cleanup of any stale .old files if game has closed
+if (Test-Path $oldDll) {
+    Remove-Item $oldDll -Force -ErrorAction SilentlyContinue
 }
 
 $entries = @(Get-ChildItem -LiteralPath $DeployDir -Force)

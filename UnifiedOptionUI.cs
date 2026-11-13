@@ -622,12 +622,21 @@ namespace ProbablyUnifiedHotkeys
             if (_scrollRect != null)
             {
                 _scrollRect.scrollSensitivity = 60f;
+                if (_scrollRect.content != null)
+                {
+                    var contentVlg = _scrollRect.content.GetComponent<VerticalLayoutGroup>();
+                    if (contentVlg != null) contentVlg.childForceExpandWidth = true;
+                }
             }
 
             // --- A. 常规完整设置视图容器 ---
             builder.BeginColumn(2f, TextAnchor.UpperLeft);
             _normalContentRoot = builder.CurrentContainer.gameObject;
             var normalColumnRt = builder.CurrentContainer;
+            var normalVlg = _normalContentRoot.GetComponent<VerticalLayoutGroup>();
+            if (normalVlg != null) normalVlg.childForceExpandWidth = true;
+            var normalLe = _normalContentRoot.GetComponent<LayoutElement>() ?? _normalContentRoot.AddComponent<LayoutElement>();
+            normalLe.flexibleWidth = 1f;
 
             // (1) 原版官方设置与快捷键（统一可折叠卡片 + 支持全范围搜索）
             builder.BeginRow(4f, TextAnchor.MiddleLeft);
@@ -666,6 +675,11 @@ namespace ProbablyUnifiedHotkeys
             {
                 builder.BeginColumn(2f, TextAnchor.UpperLeft);
                 _modCardsContainer = builder.CurrentContainer.gameObject;
+                var modCardsVlg = _modCardsContainer.GetComponent<VerticalLayoutGroup>();
+                if (modCardsVlg != null) modCardsVlg.childForceExpandWidth = true;
+                var modCardsLe = _modCardsContainer.GetComponent<LayoutElement>() ?? _modCardsContainer.AddComponent<LayoutElement>();
+                modCardsLe.flexibleWidth = 1f;
+
                 foreach (var group in _modGroups)
                 {
                     BuildModGroupCardShell(builder, group);
@@ -693,6 +707,10 @@ namespace ProbablyUnifiedHotkeys
                 // --- B. 冲突专属速览视图容器（初始为空并隐藏，点击“仅看冲突”时按需懒构建） ---
                 builder.BeginColumn(2f, TextAnchor.UpperLeft);
                 _conflictContentRoot = builder.CurrentContainer.gameObject;
+                var conflictVlg = _conflictContentRoot.GetComponent<VerticalLayoutGroup>();
+                if (conflictVlg != null) conflictVlg.childForceExpandWidth = true;
+                var conflictLe = _conflictContentRoot.GetComponent<LayoutElement>() ?? _conflictContentRoot.AddComponent<LayoutElement>();
+                conflictLe.flexibleWidth = 1f;
                 _conflictContentRoot.SetActive(false);
                 builder.End(); // 结束 _conflictContentRoot Column
 
@@ -704,9 +722,9 @@ namespace ProbablyUnifiedHotkeys
                 var diagContentLe = _diagnosticContentRoot.GetComponent<LayoutElement>() ?? _diagnosticContentRoot.AddComponent<LayoutElement>();
                 diagContentLe.flexibleWidth = 1f;
                 _diagnosticContentRoot.SetActive(false);
+                builder.End(); // 结束 _diagnosticContentRoot Column
             }
 
-            builder.End(); // 结束 _diagnosticContentRoot Column
             builder.End(); // 结束 BeginScrollFlexible
 
             // =================================================================
@@ -1320,10 +1338,7 @@ namespace ProbablyUnifiedHotkeys
                 hk.ConflictButtonElement = null;
             }
 
-            for (int i = rt.childCount - 1; i >= 0; i--)
-            {
-                UnityEngine.Object.Destroy(rt.GetChild(i).gameObject);
-            }
+            CustomUIBuilder.ClearContainer(rt);
 
             using (ComboKeyStore.EnterBypass())
             {
@@ -1332,6 +1347,10 @@ namespace ProbablyUnifiedHotkeys
             }
             _conflictViewDirty = false;
             LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
+            if (_scrollRect != null && _scrollRect.content != null)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_scrollRect.content);
+            }
         }
 
         private static void BuildConflictViewContent(CustomUIBuilder builder)
@@ -2834,9 +2853,8 @@ namespace ProbablyUnifiedHotkeys
             if (el.root != null)
             {
                 var le = el.root.GetComponent<LayoutElement>() ?? el.root.AddComponent<LayoutElement>();
-                // 置零 min/preferredWidth 并赋予 flexibleWidth=1，避免长文本在 HorizontalLayoutGroup 换行前挤压同行的左侧缩进 Spacer
                 le.minWidth = 0f;
-                le.preferredWidth = 0f;
+                le.minHeight = 22f;
                 le.flexibleWidth = 1f;
                 le.flexibleHeight = 0f;
             }
@@ -2852,6 +2870,11 @@ namespace ProbablyUnifiedHotkeys
         private static void AddWrappedDiagnosticLabel(CustomUIBuilder builder, float leftIndent, string text, string? id = null)
         {
             builder.BeginRow(4f, TextAnchor.MiddleLeft);
+            var rowObj = builder.CurrentContainer.gameObject;
+            var rowLe = rowObj.GetComponent<LayoutElement>() ?? rowObj.AddComponent<LayoutElement>();
+            rowLe.flexibleWidth = 1f;
+            rowLe.minHeight = 22f;
+
             if (leftIndent > 0f) AddFixedHorizontalSpace(builder, leftIndent);
             builder.AddLabel(text, id);
             ConfigureWrappedDiagnosticLabel(builder.Last, text);
@@ -2933,6 +2956,13 @@ namespace ProbablyUnifiedHotkeys
 
             // 第一行：左侧概况标题+指标标签 与 右侧操作按钮水平居中对齐，消除原先高低不一的粗糙感
             builder.BeginRow(6f, TextAnchor.MiddleCenter);
+            var stickyHeaderRowObj = builder.CurrentContainer.gameObject;
+            var stickyHeaderHlg = stickyHeaderRowObj.GetComponent<HorizontalLayoutGroup>();
+            if (stickyHeaderHlg != null)
+            {
+                stickyHeaderHlg.childForceExpandWidth = false;
+                stickyHeaderHlg.childControlWidth = true;
+            }
             AddFixedHorizontalSpace(builder, 10f);
 
             string titleText = I18n.Get("<b><size=17>模组排查概况</size></b>", "<b><size=17>Diagnostics Overview</size></b>");
@@ -2963,7 +2993,8 @@ namespace ProbablyUnifiedHotkeys
                 if (summaryEl.root != null)
                 {
                     var le = summaryEl.root.GetComponent<LayoutElement>() ?? summaryEl.root.AddComponent<LayoutElement>();
-                    le.minWidth = 0f;
+                    le.minWidth = 430f;
+                    le.preferredWidth = 470f;
                     le.preferredHeight = 34f;
                     le.flexibleWidth = 0f;
                     le.flexibleHeight = 0f;
@@ -3945,6 +3976,11 @@ namespace ProbablyUnifiedHotkeys
             }
 
             UpdateDiagnosticToggleButtonAppearance();
+            _conflictViewDirty = true;
+            if (IsConflictViewActive)
+            {
+                RebuildConflictView();
+            }
             _diagnosticViewDirty = true;
             if (IsDiagnosticViewActive)
             {
@@ -4069,6 +4105,7 @@ namespace ProbablyUnifiedHotkeys
             });
         }
 
+        private static int _suspendedLayoutDepth = 0;
         private static readonly List<Behaviour> SuspendedLayoutScratch = new List<Behaviour>(96);
 
         private static void EnsureCachedSuspendableLayouts()
@@ -4120,43 +4157,60 @@ namespace ProbablyUnifiedHotkeys
 
         private static void WithSuspendedRootLayout(Action action)
         {
-            EnsureCachedSuspendableLayouts();
-            SuspendedLayoutScratch.Clear();
-
-            var cached = _cachedSuspendableLayouts!;
-            for (int i = 0; i < cached.Count; i++)
+            if (_suspendedLayoutDepth > 0)
             {
-                var b = cached[i];
-                if (b != null && b.enabled)
-                {
-                    b.enabled = false;
-                    SuspendedLayoutScratch.Add(b);
-                }
+                action();
+                return;
             }
 
+            _suspendedLayoutDepth++;
             try
             {
+                EnsureCachedSuspendableLayouts();
+                SuspendedLayoutScratch.Clear();
+
+                var cached = _cachedSuspendableLayouts!;
+                for (int i = 0; i < cached.Count; i++)
+                {
+                    var b = cached[i];
+                    if (b != null && b.enabled)
+                    {
+                        b.enabled = false;
+                        SuspendedLayoutScratch.Add(b);
+                    }
+                }
+
                 action();
             }
             finally
             {
-                for (int i = SuspendedLayoutScratch.Count - 1; i >= 0; i--)
+                _suspendedLayoutDepth--;
+                if (_suspendedLayoutDepth == 0)
                 {
-                    if (SuspendedLayoutScratch[i] != null)
+                    for (int i = SuspendedLayoutScratch.Count - 1; i >= 0; i--)
                     {
-                        SuspendedLayoutScratch[i].enabled = true;
+                        var b = SuspendedLayoutScratch[i];
+                        if (b != null)
+                        {
+                            b.enabled = true;
+                        }
                     }
-                }
-                SuspendedLayoutScratch.Clear();
+                    SuspendedLayoutScratch.Clear();
 
-                if (_normalContentRoot != null)
-                {
-                    var normalRt = _normalContentRoot.GetComponent<RectTransform>();
-                    if (normalRt != null) LayoutRebuilder.MarkLayoutForRebuild(normalRt);
-                }
-                if (_scrollRect != null && _scrollRect.content != null)
-                {
-                    LayoutRebuilder.MarkLayoutForRebuild(_scrollRect.content);
+                    if (_normalContentRoot != null)
+                    {
+                        var normalRt = _normalContentRoot.GetComponent<RectTransform>();
+                        if (normalRt != null) LayoutRebuilder.ForceRebuildLayoutImmediate(normalRt);
+                    }
+                    if (_modCardsContainer != null)
+                    {
+                        var modRt = _modCardsContainer.GetComponent<RectTransform>();
+                        if (modRt != null) LayoutRebuilder.ForceRebuildLayoutImmediate(modRt);
+                    }
+                    if (_scrollRect != null && _scrollRect.content != null)
+                    {
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(_scrollRect.content);
+                    }
                 }
             }
         }

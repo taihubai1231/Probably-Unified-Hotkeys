@@ -12,6 +12,8 @@
     <GameDir Condition="'$(GameDir)' == ''">E:\Program Files (x86)\steam\steamapps\common\Probably Stolen</GameDir>
     <DeployToGame Condition="'$(DeployToGame)' == ''">true</DeployToGame>
     <DeployDir>$(GameDir)\Mods\probably_unified_hotkeys</DeployDir>
+    <DisableDllKeyProbe Condition="'$(DisableDllKeyProbe)' == ''">false</DisableDllKeyProbe>
+    <DefineConstants Condition="'$(DisableDllKeyProbe)' == 'true'">$(DefineConstants);DISABLE_DLL_KEY_PROBE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
