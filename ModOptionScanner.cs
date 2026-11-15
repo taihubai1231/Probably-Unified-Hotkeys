@@ -252,6 +252,8 @@ namespace ProbablyUnifiedHotkeys
             // 1. 优先扫描已加载模组的标准 ModConfig（含完整 BoxedDefault 默认值与取值范围）
             I18n.EnsureRegistered();
             ModFeatureConfig.EnsureRegistered();
+            ComboKeyStore.ClearInputKeyRemaps();
+            KnownModAdapters.EnsureLazyModConfigsInitialized();
             List<LoadedMod>? loadedMods = null;
             try
             {
@@ -361,7 +363,7 @@ namespace ProbablyUnifiedHotkeys
             var handledAdapterIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var g in groups)
             {
-                if (g.Hotkeys.Count > 0 || string.Equals(g.ModId, "smart_inventory_arrange", StringComparison.OrdinalIgnoreCase))
+                if (g.Hotkeys.Count > 0)
                 {
                     handledAdapterIds.Add(g.ModId);
                 }
@@ -396,6 +398,13 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
             }
+
+            // 3B. 对已走 ModConfig 但存在额外硬编码快捷键或运行时状态同步需求的模组执行补充适配
+            var enabledModIdSet = new HashSet<string>(enabledModById.Keys, StringComparer.OrdinalIgnoreCase);
+            KnownModAdapters.ApplySupplementalModAdaptations(groups, enabledModIdSet, adapterMatchedModIds);
+
+            // 3C. 自动探测（DseCecil 静态 IL + ModData / 模组文件配置）补充无官方接口模组热键并接入运行时改键接管
+            var probedByModId = ProbeReadOnlyHotkeysIntoGroups(enabledLoadedMods, groups);
 
             // 注册运行时需要拦截组合键防误触的 string / int ConfigEntry 标识
             ComboKeyStore.RegisterManagedConfigKeyIds(managedStringIds, managedIntIds);
@@ -516,9 +525,6 @@ namespace ProbablyUnifiedHotkeys
                 };
             }
 
-            // 5. 自动只读探测（DseCecil 静态 IL + ModData / 模组文件配置）补充无官方接口模组热键
-            var probedByModId = ProbeReadOnlyHotkeysIntoGroups(enabledLoadedMods, groups);
-
             // 6. 按拼音首字母排序
             groups.Sort((a, b) =>
             {
@@ -527,7 +533,7 @@ namespace ProbablyUnifiedHotkeys
                 return string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
             });
 
-            // 7. 汇总全量快捷键用于全局冲突检测与组合键运行时路由表（原版 + 所有可改模组 + 只读探测热键）
+            // 7. 汇总全量快捷键用于全局冲突检测与组合键运行时路由表（原版 + 所有可改模组 + 探测接管热键）
             allHotkeysForConflict = new List<ModHotkeyEntry>();
             allHotkeysForConflict.AddRange(GetVanillaKeybinds());
             foreach (var g in groups)
@@ -617,7 +623,15 @@ namespace ProbablyUnifiedHotkeys
                     existingGroup = GetOrCreateGroup(groups, modId, disp);
                     groupById[modId] = existingGroup;
                 }
-                existingGroup.ReadOnlyProbedHotkeys.AddRange(filteredEntries);
+
+                // 将探测到的按键直接并入主设置面板的可改键列表（通过底层 Input 拦截实时接管改键）
+                foreach (var probedHk in filteredEntries)
+                {
+                    if (!ContainsHotkey(existingGroup, probedHk.Id, probedHk.DisplayName))
+                    {
+                        existingGroup.Hotkeys.Add(probedHk);
+                    }
+                }
             }
 
             return result;
@@ -630,7 +644,8 @@ namespace ProbablyUnifiedHotkeys
                 var probedCombo = new KeyCombo(rec.Modifiers, rec.Key);
                 foreach (var hk in existingGroup.Hotkeys)
                 {
-                    if (hk.EffectiveCombo.Equals(probedCombo))
+                    if (hk.EffectiveCombo.Equals(probedCombo) ||
+                        (hk.DefaultKey == rec.Key && hk.DefaultModifiers == rec.Modifiers))
                     {
                         return true;
                     }
@@ -642,7 +657,7 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
-            // 已知已由专属适配器或官方渠道接管的私有宿主热键字段不再作为只读探测重复展示
+            // 已知已由专属适配器或官方渠道接管的私有宿主热键字段不再重复展示
             if (string.Equals(modId, "probablystolen.trainer", StringComparison.OrdinalIgnoreCase) &&
                 rec.SourceDetail.IndexOf("_toggleKey", StringComparison.OrdinalIgnoreCase) >= 0)
             {
@@ -655,6 +670,33 @@ namespace ProbablyUnifiedHotkeys
             }
             if (string.Equals(modId, "nicokobo.speed-up", StringComparison.OrdinalIgnoreCase) &&
                 rec.SourceDetail.IndexOf("KeyCombination.IsPressed", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+            if (string.Equals(modId, "user.realtimeclock", StringComparison.OrdinalIgnoreCase) &&
+                (rec.SourceDetail.IndexOf("alarm.txt", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 rec.SourceDetail.IndexOf("OpenKey", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                return true;
+            }
+            if (string.Equals(modId, "smart_inventory_arrange", StringComparison.OrdinalIgnoreCase) &&
+                (rec.SourceDetail.IndexOf("FixedPlacementDrop", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 rec.SourceDetail.IndexOf("UnifiedSettingsGui", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                return true;
+            }
+            if (string.Equals(modId, "chiqingsan.BetterPerformance", StringComparison.OrdinalIgnoreCase) &&
+                rec.SourceDetail.IndexOf("HoverPeek", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+            if (string.Equals(modId, "precise_group_drag", StringComparison.OrdinalIgnoreCase) &&
+                rec.SourceDetail.IndexOf("PreciseGroupDragGate", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+            if (string.Equals(modId, "item_details", StringComparison.OrdinalIgnoreCase) &&
+                rec.SourceDetail.IndexOf("WaterColumns", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return true;
             }
@@ -900,6 +942,23 @@ namespace ProbablyUnifiedHotkeys
             return s.Length > 28 ? s.Substring(0, 28) + "..." : s;
         }
 
+        private static readonly HashSet<string> KnownPassiveNoConfigModIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "lanbaihui_background_mute",
+            "MentorNoteAutoFile",
+            "reputation_pop",
+            "hydro.overflow",
+            "bottle.yeast.stay",
+            "huxiaohei_perk_slots_99",
+            "early_mortgage_payoff",
+            "stash_matching_tab",
+            "hxl.merchant.stockpager",
+            "dream_dust_automation",
+            "lemocuber_probablymultiplayer",
+            "yu_module_sort",
+            "modding-knowledge-base"
+        };
+
         private static ModScanReport BuildModScanReport(
             List<ModOptionGroup> groups,
             List<LoadedMod> enabledLoadedMods,
@@ -984,7 +1043,11 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
 
-                if (!hasAsm && managedTotal == 0 && item.CandidateEntries.Count == 0 && item.ProbedHotkeys.Count == 0)
+                bool isConfirmedNoConfigMod = !hasAsm ||
+                                              KnownPassiveNoConfigModIds.Contains(modId) ||
+                                              ModFeatureConfig.EnableDllProbe;
+
+                if (isConfirmedNoConfigMod && managedTotal == 0 && item.CandidateEntries.Count == 0 && item.ProbedHotkeys.Count == 0)
                 {
                     item.Status = ModDiagnosticStatus.AssetOnlyMod;
                     report.AssetOnlyModCount++;

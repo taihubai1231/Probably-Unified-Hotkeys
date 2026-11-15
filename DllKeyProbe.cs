@@ -29,7 +29,8 @@ namespace ProbablyUnifiedHotkeys
     /// </summary>
     public static class DllKeyProbe
     {
-        private const string CacheModDataFile = "dll_probe_cache_v1.txt";
+        private const string LegacyCacheModDataFile = "dll_probe_cache_v1.txt";
+        private const string CacheModDataFile = "dll_probe_cache_v2.txt";
         private const int MaxConfigFileBytes = 262144;
 
         private static readonly object CacheLock = new object();
@@ -55,6 +56,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 MemoryCache.Clear();
                 _diskCacheLoaded = true;
+                try { ModHelper.DeleteModDataFile(I18n.ModId, LegacyCacheModDataFile); } catch { }
                 try { ModHelper.DeleteModDataFile(I18n.ModId, CacheModDataFile); } catch { }
             }
         }
@@ -111,25 +113,70 @@ namespace ProbablyUnifiedHotkeys
             string modName = string.IsNullOrEmpty(mod.Manifest?.Name) ? modId : mod.Manifest!.Name;
             string kindLabel = I18n.Get(rec.SourceKindZh, rec.SourceKindEn);
             string detail = $"{kindLabel}: {rec.SourceDetail}";
+            string entryId = $"probed:{modId}:{rec.Id}";
+
+            KeyCode initialOrigKey = ResolveLiveKey(rec);
+            KeyModifierMask origMods = rec.Modifiers;
+            var effectiveInit = ComboKeyStore.GetEffectiveCustomHotkey(entryId, origMods, initialOrigKey);
+            ComboKeyStore.RegisterInputKeyRemap(entryId, origMods, initialOrigKey, effectiveInit.Modifiers, effectiveInit.Key);
 
             return new ModHotkeyEntry
             {
-                Id = $"probed:{modId}:{rec.Id}",
+                Id = entryId,
                 RawOptionId = rec.Id,
                 ModId = modId,
                 ModDisplayName = modName,
                 DisplayName = rec.DisplayName,
                 Tooltip = I18n.Format(
-                    "<color=#99a3b0>[只读自动探测 · 无法由本模组修改]\n来源：{0}\n说明：该热键来自代码硬编码或独立配置文件，用于提前提示撞键冲突。</color>",
-                    "<color=#99a3b0>[Read-Only Auto-Probed]\nSource: {0}\nDetected from code or standalone config for conflict warning.</color>",
+                    "<color=#99d8d0>[自动探测 · 支持运行时接管改键]\n来源：{0}\n说明：该热键由静态探测发现，修改后将通过底层 Input 重定向实时接管（支持单键、组合键、鼠标侧键与 Esc 清空）。</color>",
+                    "<color=#99d8d0>[Auto-Probed · Runtime Rebindable]\nSource: {0}\nRebinding redirects runtime Input checks (supports single keys, combos, mouse side buttons & Esc).</color>",
                     detail),
-                IsReadOnlyProbed = true,
-                SupportsModifierCombos = rec.Modifiers != KeyModifierMask.None,
+                IsReadOnlyProbed = false,
+                HasExplicitDefault = true,
+                SupportsModifierCombos = true,
                 DefaultKey = rec.Key,
-                DefaultModifiers = rec.Modifiers,
+                DefaultModifiers = origMods,
                 ProbedSourceDetail = detail,
-                GetKey = () => ResolveLiveKey(rec),
-                GetExternalModifiers = () => rec.Modifiers
+                GetKey = () =>
+                {
+                    KeyCode origKey = ResolveLiveKey(rec);
+                    return ComboKeyStore.GetEffectiveCustomHotkey(entryId, origMods, origKey).Key;
+                },
+                GetExternalModifiers = () =>
+                {
+                    KeyCode origKey = ResolveLiveKey(rec);
+                    return ComboKeyStore.GetEffectiveCustomHotkey(entryId, origMods, origKey).Modifiers;
+                },
+                SetKey = (newKey) =>
+                {
+                    KeyCode origKey = ResolveLiveKey(rec);
+                    ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, newKey, origMods, rec.Key);
+                    ComboKeyStore.RegisterInputKeyRemap(entryId, origMods, origKey, KeyModifierMask.None, newKey);
+                    if (!string.IsNullOrEmpty(rec.PlayerPrefsKey) && newKey != KeyCode.None)
+                    {
+                        try
+                        {
+                            PlayerPrefs.SetInt(rec.PlayerPrefsKey, (int)newKey);
+                            PlayerPrefs.Save();
+                        }
+                        catch { }
+                    }
+                },
+                SetCombo = (newMods, newKey) =>
+                {
+                    KeyCode origKey = ResolveLiveKey(rec);
+                    ComboKeyStore.SetSavedCustomHotkey(entryId, newMods, newKey, origMods, rec.Key);
+                    ComboKeyStore.RegisterInputKeyRemap(entryId, origMods, origKey, newMods, newKey);
+                    if (!string.IsNullOrEmpty(rec.PlayerPrefsKey) && newKey != KeyCode.None && newMods == KeyModifierMask.None)
+                    {
+                        try
+                        {
+                            PlayerPrefs.SetInt(rec.PlayerPrefsKey, (int)newKey);
+                            PlayerPrefs.Save();
+                        }
+                        catch { }
+                    }
+                }
             };
         }
 
@@ -522,7 +569,26 @@ namespace ProbablyUnifiedHotkeys
                 foreach (var m in t.Methods)
                 {
                     if (!m.HasBody) continue;
+
+                    // 排除以 KeyCode 为参数的通用辅助函数（如 QoLKeyBindings.IsDown(KeyCode) 中对 Mouse2~6 的 switch 分支）
+                    if (m.HasParameters)
+                    {
+                        bool hasKeyCodeParam = false;
+                        for (int pi = 0; pi < m.Parameters.Count; pi++)
+                        {
+                            string pType = m.Parameters[pi].ParameterType?.FullName ?? string.Empty;
+                            if (pType == "UnityEngine.KeyCode" || pType == "UnityEngine.KeyCode&")
+                            {
+                                hasKeyCodeParam = true;
+                                break;
+                            }
+                        }
+                        if (hasKeyCodeParam) continue;
+                    }
+
                     var insns = m.Body.Instructions;
+                    bool methodHasNonModifierKeyCheck = MethodHasNonModifierKeyCheck(insns, fieldDefaults, getterFieldMap);
+                    KeyModifierMask methodModifierFamilies = CollectMethodModifierFamilies(insns);
 
                     for (int i = 0; i < insns.Count; i++)
                     {
@@ -541,7 +607,17 @@ namespace ProbablyUnifiedHotkeys
                             mr.Parameters.Count == 1 &&
                             mr.Parameters[0].ParameterType.FullName == "UnityEngine.KeyCode")
                         {
-                            HandleInputGetKeyCall(t, m, insns, i, fieldDefaults, getterFieldMap, records, dedup);
+                            HandleInputGetKeyCall(
+                                t,
+                                m,
+                                insns,
+                                i,
+                                fieldDefaults,
+                                getterFieldMap,
+                                methodHasNonModifierKeyCheck,
+                                methodModifierFamilies,
+                                records,
+                                dedup);
                         }
                         else if (declName == "UnityEngine.Input" &&
                                  (mName == "GetMouseButtonDown" || mName == "GetMouseButton" || mName == "GetMouseButtonUp") &&
@@ -585,6 +661,96 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        private static bool MethodHasNonModifierKeyCheck(
+            Mono.Collections.Generic.Collection<Instruction> insns,
+            Dictionary<string, KeyCode> fieldDefaults,
+            Dictionary<string, string> getterFieldMap)
+        {
+            for (int i = 1; i < insns.Count; i++)
+            {
+                var ins = insns[i];
+                if ((ins.OpCode.Code != Code.Call && ins.OpCode.Code != Code.Callvirt) ||
+                    ins.Operand is not MethodReference mr)
+                {
+                    continue;
+                }
+
+                string declName = mr.DeclaringType?.FullName ?? string.Empty;
+                string mName = mr.Name ?? string.Empty;
+                if (declName != "UnityEngine.Input") continue;
+
+                if ((mName == "GetMouseButtonDown" || mName == "GetMouseButton" || mName == "GetMouseButtonUp") &&
+                    mr.Parameters.Count == 1 &&
+                    TryFindPrecedingIntConstant(insns, i - 1, out int btnIdx) &&
+                    btnIdx >= 2 && btnIdx <= 6)
+                {
+                    return true;
+                }
+
+                if ((mName == "GetKeyDown" || mName == "GetKey" || mName == "GetKeyUp") &&
+                    mr.Parameters.Count == 1 &&
+                    mr.Parameters[0].ParameterType.FullName == "UnityEngine.KeyCode")
+                {
+                    if (TryGetIntConstant(insns[i - 1], out int rawKey) && Enum.IsDefined(typeof(KeyCode), rawKey))
+                    {
+                        KeyCode kc = (KeyCode)rawKey;
+                        if (!IsModifierOnlyKeyCode(kc)) return true;
+                    }
+                    else
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static KeyModifierMask CollectMethodModifierFamilies(Mono.Collections.Generic.Collection<Instruction> insns)
+        {
+            KeyModifierMask mask = KeyModifierMask.None;
+            for (int i = 1; i < insns.Count; i++)
+            {
+                var ins = insns[i];
+                if ((ins.OpCode.Code != Code.Call && ins.OpCode.Code != Code.Callvirt) ||
+                    ins.Operand is not MethodReference mr ||
+                    mr.DeclaringType?.FullName != "UnityEngine.Input" ||
+                    (mr.Name != "GetKey" && mr.Name != "GetKeyDown" && mr.Name != "GetKeyUp"))
+                {
+                    continue;
+                }
+
+                if (TryGetIntConstant(insns[i - 1], out int modKey))
+                {
+                    if (modKey == (int)KeyCode.LeftControl || modKey == (int)KeyCode.RightControl) mask |= KeyModifierMask.Ctrl;
+                    else if (modKey == (int)KeyCode.LeftShift || modKey == (int)KeyCode.RightShift) mask |= KeyModifierMask.Shift;
+                    else if (modKey == (int)KeyCode.LeftAlt || modKey == (int)KeyCode.RightAlt) mask |= KeyModifierMask.Alt;
+                }
+            }
+            return mask;
+        }
+
+        private static KeyCode NormalizeStandaloneModifierKey(KeyCode kc)
+        {
+            if (kc == KeyCode.RightShift) return KeyCode.LeftShift;
+            if (kc == KeyCode.RightControl) return KeyCode.LeftControl;
+            if (kc == KeyCode.RightAlt) return KeyCode.LeftAlt;
+            return kc;
+        }
+
+        private static bool IsGenericModifierHelperMethod(string typeName, string methodName)
+        {
+            if (string.Equals(methodName, "get_Ctrl", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(methodName, "get_Shift", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(methodName, "get_Alt", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(methodName, "CaptureKey", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(methodName, "PollCapture", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(methodName, "TickCapture", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return false;
+        }
+
         private static void HandleInputGetKeyCall(
             TypeDefinition t,
             MethodDefinition m,
@@ -592,6 +758,8 @@ namespace ProbablyUnifiedHotkeys
             int callIndex,
             Dictionary<string, KeyCode> fieldDefaults,
             Dictionary<string, string> getterFieldMap,
+            bool methodHasNonModifierKeyCheck,
+            KeyModifierMask methodModifierFamilies,
             List<ProbedKeyRecord> records,
             HashSet<string> dedup)
         {
@@ -600,12 +768,33 @@ namespace ProbablyUnifiedHotkeys
             Instruction argIns = insns[callIndex - 1];
             KeyModifierMask mods = DetectNearbyModifiers(insns, callIndex);
 
-            // 1. 直接写死的整型 KeyCode 常量（例如 ldc.i4 269）
+            // 1. 直接写死的整型 KeyCode 常量（例如 ldc.i4 269 或独立修饰键热键 LeftShift/LeftAlt）
             if (TryGetIntConstant(argIns, out int rawKey))
             {
                 if (!Enum.IsDefined(typeof(KeyCode), rawKey)) return;
                 KeyCode kc = (KeyCode)rawKey;
-                if (IsModifierOnlyKeyCode(kc)) return;
+                if (IsModifierOnlyKeyCode(kc))
+                {
+                    // 若该方法仅检测单一修饰键对（如 ShiftHeld / FixedPlacementDrop.Prefix）且非通用修饰键读取器，将其识别为独立修饰热键
+                    bool singleFamily = methodModifierFamilies == KeyModifierMask.Shift ||
+                                        methodModifierFamilies == KeyModifierMask.Ctrl ||
+                                        methodModifierFamilies == KeyModifierMask.Alt;
+                    if (methodHasNonModifierKeyCheck || !singleFamily || IsGenericModifierHelperMethod(t.Name, m.Name))
+                    {
+                        return;
+                    }
+
+                    KeyCode normModKey = NormalizeStandaloneModifierKey(kc);
+                    if (normModKey != KeyCode.LeftShift && normModKey != KeyCode.LeftControl && normModKey != KeyCode.LeftAlt)
+                    {
+                        return;
+                    }
+
+                    string modDetail = $"{FormatTypeMethod(t, m)} -> {normModKey}";
+                    string modLabel = BuildReadableLabel(t.Name, m.Name, normModKey.ToString());
+                    AddIlRecord(modLabel, KeyModifierMask.None, normModKey, null, "IL 修饰键热键", "IL Modifier Hotkey", modDetail, records, dedup);
+                    return;
+                }
                 if (IsBoilerplateOrNoiseKey(mods, kc)) return;
 
                 string detail = $"{FormatTypeMethod(t, m)} -> {kc}";
@@ -637,7 +826,6 @@ namespace ProbablyUnifiedHotkeys
 
             if (fieldKey != null &&
                 fieldDefaults.TryGetValue(fieldKey, out KeyCode resolved) &&
-                !IsModifierOnlyKeyCode(resolved) &&
                 !IsBoilerplateOrNoiseKey(mods, resolved))
             {
                 string detail = $"{FormatTypeMethod(t, m)} ({shortFieldName})";

@@ -484,6 +484,9 @@ namespace ProbablyUnifiedHotkeys
             // 对官方泛型 ModConfig 热键（KeyCode / string / int）挂接运行时组合键过滤
             PatchConfigEntryHotkeys(harmony, log);
 
+            // 挂接 UnityEngine.Input 底层按键重定向与作用域接管补丁
+            PatchUnityInputRedirection(harmony, log);
+
             // 扫描当前已加载的程序集
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -495,6 +498,129 @@ namespace ProbablyUnifiedHotkeys
             {
                 TryPatch(args.LoadedAssembly, harmony, log);
             };
+        }
+
+        private static void PatchUnityInputRedirection(Harmony harmony, ModLog? log)
+        {
+            try
+            {
+                MethodInfo? getKey = AccessTools.Method(typeof(Input), "GetKey", new Type[] { typeof(KeyCode) });
+                if (getKey != null)
+                {
+                    harmony.Patch(getKey, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetKey_Prefix))));
+                }
+
+                MethodInfo? getKeyDown = AccessTools.Method(typeof(Input), "GetKeyDown", new Type[] { typeof(KeyCode) });
+                if (getKeyDown != null)
+                {
+                    harmony.Patch(getKeyDown, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetKeyDown_Prefix))));
+                }
+
+                MethodInfo? getKeyUp = AccessTools.Method(typeof(Input), "GetKeyUp", new Type[] { typeof(KeyCode) });
+                if (getKeyUp != null)
+                {
+                    harmony.Patch(getKeyUp, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetKeyUp_Prefix))));
+                }
+
+                MethodInfo? getMouse = AccessTools.Method(typeof(Input), "GetMouseButton", new Type[] { typeof(int) });
+                if (getMouse != null)
+                {
+                    harmony.Patch(getMouse, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetMouseButton_Prefix))));
+                }
+
+                MethodInfo? getMouseDown = AccessTools.Method(typeof(Input), "GetMouseButtonDown", new Type[] { typeof(int) });
+                if (getMouseDown != null)
+                {
+                    harmony.Patch(getMouseDown, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetMouseButtonDown_Prefix))));
+                }
+
+                MethodInfo? getMouseUp = AccessTools.Method(typeof(Input), "GetMouseButtonUp", new Type[] { typeof(int) });
+                if (getMouseUp != null)
+                {
+                    harmony.Patch(getMouseUp, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetMouseButtonUp_Prefix))));
+                }
+
+                log?.Log("Patched UnityEngine.Input key & mouse redirection hooks");
+            }
+            catch (Exception ex)
+            {
+                log?.Warning($"[WorkshopModPatcher] Failed to patch UnityEngine.Input: {ex.Message}");
+            }
+        }
+
+        public static bool Input_GetKey_Prefix(KeyCode key, ref bool __result)
+        {
+            if (ComboKeyStore.HasAnyActiveInputRemapOrScope &&
+                ComboKeyStore.TryEvaluateInputRemap(key, ComboKeyStore.InputQueryKind.Held, out bool remapped))
+            {
+                __result = remapped;
+                return false;
+            }
+            return true;
+        }
+
+        public static bool Input_GetKeyDown_Prefix(KeyCode key, ref bool __result)
+        {
+            if (ComboKeyStore.HasAnyActiveInputRemapOrScope &&
+                ComboKeyStore.TryEvaluateInputRemap(key, ComboKeyStore.InputQueryKind.Down, out bool remapped))
+            {
+                __result = remapped;
+                return false;
+            }
+            return true;
+        }
+
+        public static bool Input_GetKeyUp_Prefix(KeyCode key, ref bool __result)
+        {
+            if (ComboKeyStore.HasAnyActiveInputRemapOrScope &&
+                ComboKeyStore.TryEvaluateInputRemap(key, ComboKeyStore.InputQueryKind.Up, out bool remapped))
+            {
+                __result = remapped;
+                return false;
+            }
+            return true;
+        }
+
+        public static bool Input_GetMouseButton_Prefix(int button, ref bool __result)
+        {
+            if (button >= 0 && button <= 6 && ComboKeyStore.HasAnyActiveInputRemapOrScope)
+            {
+                KeyCode key = (KeyCode)((int)KeyCode.Mouse0 + button);
+                if (ComboKeyStore.TryEvaluateInputRemap(key, ComboKeyStore.InputQueryKind.Held, out bool remapped))
+                {
+                    __result = remapped;
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        public static bool Input_GetMouseButtonDown_Prefix(int button, ref bool __result)
+        {
+            if (button >= 0 && button <= 6 && ComboKeyStore.HasAnyActiveInputRemapOrScope)
+            {
+                KeyCode key = (KeyCode)((int)KeyCode.Mouse0 + button);
+                if (ComboKeyStore.TryEvaluateInputRemap(key, ComboKeyStore.InputQueryKind.Down, out bool remapped))
+                {
+                    __result = remapped;
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        public static bool Input_GetMouseButtonUp_Prefix(int button, ref bool __result)
+        {
+            if (button >= 0 && button <= 6 && ComboKeyStore.HasAnyActiveInputRemapOrScope)
+            {
+                KeyCode key = (KeyCode)((int)KeyCode.Mouse0 + button);
+                if (ComboKeyStore.TryEvaluateInputRemap(key, ComboKeyStore.InputQueryKind.Up, out bool remapped))
+                {
+                    __result = remapped;
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static void PatchConfigEntryHotkeys(Harmony harmony, ModLog? log)
@@ -611,7 +737,10 @@ namespace ProbablyUnifiedHotkeys
             "FactionReputationExpansion",
             "Pen_mod_QoL_Tweaks",
             "ClientDemandHighlight",
-            "PreciseGroupDrag"
+            "PreciseGroupDrag",
+            "BetterPerformance",
+            "ItemDetails",
+            "RealTimeClock"
         };
 
         private static void TryPatch(Assembly assembly, Harmony harmony, ModLog? log)
@@ -659,6 +788,14 @@ namespace ProbablyUnifiedHotkeys
                 else if (name == "PreciseGroupDrag")
                 {
                     PatchPreciseGroupDrag(harmony, log);
+                }
+                else if (name == "BetterPerformance")
+                {
+                    PatchBetterPerformance(harmony, log);
+                }
+                else if (name == "ItemDetails")
+                {
+                    PatchItemDetails(harmony, log);
                 }
             }
             catch (Exception ex)
@@ -1035,6 +1172,11 @@ namespace ProbablyUnifiedHotkeys
         private static PropertyInfo? _siaCaptureProp;
         private static object? _siaNoneKeyValue;
         private static MethodInfo? _siaBindMethod;
+        private static PropertyInfo? _siaHkKeyProp;
+        private static PropertyInfo? _siaHkCtrlProp;
+        private static PropertyInfo? _siaHkAltProp;
+        private static PropertyInfo? _siaHkShiftProp;
+        private static bool _siaBootSynced = false;
 
         private static void PatchSmartInventoryArrange(Harmony harmony, ModLog? log)
         {
@@ -1042,6 +1184,14 @@ namespace ProbablyUnifiedHotkeys
             Type? modelType = AccessTools.TypeByName("SmartInventoryArrange.SettingsHotkeys");
             Type? settingsBindingType = AccessTools.TypeByName("SmartInventoryArrange.SettingsBinding");
             Type? settingsHotkeyType = AccessTools.TypeByName("SmartInventoryArrange.SettingsHotkey");
+
+            if (settingsHotkeyType != null)
+            {
+                _siaHkKeyProp = AccessTools.Property(settingsHotkeyType, "Key");
+                _siaHkCtrlProp = AccessTools.Property(settingsHotkeyType, "Ctrl");
+                _siaHkAltProp = AccessTools.Property(settingsHotkeyType, "Alt");
+                _siaHkShiftProp = AccessTools.Property(settingsHotkeyType, "Shift");
+            }
 
             if (guiType != null)
             {
@@ -1066,7 +1216,75 @@ namespace ProbablyUnifiedHotkeys
                     harmony.Patch(captureKey, prefix: new HarmonyMethod(prefix));
                     log?.Log("Patched SmartInventoryArrange.UnifiedSettingsGui.CaptureKey");
                 }
+
+                MethodInfo? downHelper = AccessTools.Method(guiType, "<Update>g__Down|167_0");
+                if (downHelper != null && _siaHkKeyProp != null)
+                {
+                    MethodInfo downPrefix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(SmartInventoryArrange_Down_Prefix));
+                    harmony.Patch(downHelper, prefix: new HarmonyMethod(downPrefix));
+                    log?.Log("Patched SmartInventoryArrange.UnifiedSettingsGui.<Update>g__Down|167_0 (combo & mouse side button support)");
+                }
             }
+
+            Type? fixedDropType = AccessTools.TypeByName("SmartInventoryArrange.FixedPlacementDrop");
+            if (fixedDropType != null)
+            {
+                MethodInfo? fixedPrefix = AccessTools.Method(fixedDropType, "Prefix");
+                if (fixedPrefix != null)
+                {
+                    harmony.Patch(
+                        fixedPrefix,
+                        prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(SmartInventoryArrange_FixedDrop_Prefix))),
+                        finalizer: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(SmartInventoryArrange_FixedDrop_Finalizer)))
+                    );
+                    log?.Log("Patched SmartInventoryArrange.FixedPlacementDrop.Prefix (alt placement key redirection)");
+                }
+            }
+        }
+
+        public static bool SmartInventoryArrange_Down_Prefix(object hk, ref bool __result)
+        {
+            if (!_siaBootSynced)
+            {
+                _siaBootSynced = true;
+                KnownModAdapters.SyncSmartArrangeRuntimeHotkeysFromStore();
+            }
+
+            if (hk == null || _siaHkKeyProp == null) return true;
+
+            KeyCode key = (KeyCode)(_siaHkKeyProp.GetValue(hk) ?? KeyCode.None);
+            if (key == KeyCode.None)
+            {
+                __result = false;
+                return false;
+            }
+
+            bool ctrl = (bool)(_siaHkCtrlProp?.GetValue(hk) ?? false);
+            bool alt = (bool)(_siaHkAltProp?.GetValue(hk) ?? false);
+            bool shift = (bool)(_siaHkShiftProp?.GetValue(hk) ?? false);
+
+            KeyModifierMask mods = KeyModifierMask.None;
+            if (ctrl) mods |= KeyModifierMask.Ctrl;
+            if (alt) mods |= KeyModifierMask.Alt;
+            if (shift) mods |= KeyModifierMask.Shift;
+
+            __result = ComboKeyStore.EvaluateTargetComboByKind(mods, key, ComboKeyStore.InputQueryKind.Down);
+            return false;
+        }
+
+        public static void SmartInventoryArrange_FixedDrop_Prefix()
+        {
+            ComboKeyStore.EnterMethodInputRemapScope(
+                "smart_inventory_arrange.alt_placement_key",
+                KeyCode.LeftAlt,
+                KeyCode.RightAlt,
+                KeyModifierMask.None,
+                KeyCode.LeftAlt);
+        }
+
+        public static void SmartInventoryArrange_FixedDrop_Finalizer()
+        {
+            ComboKeyStore.ExitMethodInputRemapScope();
         }
 
         public static bool SmartInventoryArrange_CaptureKey_Prefix(object __instance)
@@ -1229,7 +1447,34 @@ namespace ProbablyUnifiedHotkeys
                 harmony.Patch(isDown, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(PenQoL_IsDown_Prefix))));
             }
 
+            _penBoxSelectGetterFn = CreateDelegateSafe<Func<KeyCode>>(AccessTools.PropertyGetter(qolType, "BoxSelectModifier"));
+            MethodInfo? isBoxDown = AccessTools.Method(qolType, "IsBoxSelectModifierDown");
+            if (isBoxDown != null && _penBoxSelectGetterFn != null)
+            {
+                harmony.Patch(isBoxDown, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(PenQoL_IsBoxSelectModifierDown_Prefix))));
+            }
+
             log?.Log($"Patched PenLabelerAssist.QoLKeyBindings ({patchedGetters} properties + input helpers)");
+        }
+
+        private static Func<KeyCode>? _penBoxSelectGetterFn;
+
+        public static bool PenQoL_IsBoxSelectModifierDown_Prefix(ref bool __result)
+        {
+            if (_penBoxSelectGetterFn == null) return true;
+            KeyCode key = _penBoxSelectGetterFn();
+            if (key == KeyCode.None)
+            {
+                __result = false;
+                return false;
+            }
+            if (key == KeyCode.Mouse0 && ComboKeyStore.GetHeldModifiersMask() == KeyModifierMask.None)
+            {
+                __result = false;
+                return false;
+            }
+            __result = ComboKeyStore.IsKeyHeldOrModifierPairRaw(key);
+            return false;
         }
 
         public static void PenQoL_GetKey_Postfix(MethodBase __originalMethod, ref KeyCode __result)
@@ -1248,7 +1493,7 @@ namespace ProbablyUnifiedHotkeys
                 __result = false;
                 return false;
             }
-            __result = ComboKeyStore.IsKeyDownRaw(key);
+            __result = ComboKeyStore.IsKeyDownOrModifierPairRaw(key);
             return false;
         }
 
@@ -1264,7 +1509,7 @@ namespace ProbablyUnifiedHotkeys
                 __result = false;
                 return false;
             }
-            __result = ComboKeyStore.IsKeyHeldRaw(key);
+            __result = ComboKeyStore.IsKeyHeldOrModifierPairRaw(key);
             return false;
         }
 
@@ -1301,13 +1546,25 @@ namespace ProbablyUnifiedHotkeys
         private static void PatchPreciseGroupDrag(Harmony harmony, ModLog? log)
         {
             Type? quickMoveType = AccessTools.TypeByName("PreciseGroupDragMod.GroupQuickMove");
-            if (quickMoveType == null) return;
-
-            MethodInfo? anyHeld = AccessTools.Method(quickMoveType, "AnyQuickKeyHeld");
-            if (anyHeld != null)
+            if (quickMoveType != null)
             {
-                harmony.Patch(anyHeld, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(PreciseGroupDrag_AnyQuickKeyHeld_Prefix))));
-                log?.Log("Patched PreciseGroupDragMod.GroupQuickMove.AnyQuickKeyHeld (held combo & mouse side button support)");
+                MethodInfo? anyHeld = AccessTools.Method(quickMoveType, "AnyQuickKeyHeld");
+                if (anyHeld != null)
+                {
+                    harmony.Patch(anyHeld, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(PreciseGroupDrag_AnyQuickKeyHeld_Prefix))));
+                    log?.Log("Patched PreciseGroupDragMod.GroupQuickMove.AnyQuickKeyHeld (held combo & mouse side button support)");
+                }
+            }
+
+            Type? gateType = AccessTools.TypeByName("PreciseGroupDragMod.PreciseGroupDragGate");
+            if (gateType != null)
+            {
+                MethodInfo? shiftHeld = AccessTools.Method(gateType, "ShiftHeld");
+                if (shiftHeld != null)
+                {
+                    harmony.Patch(shiftHeld, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(PreciseGroupDrag_ShiftHeld_Prefix))));
+                    log?.Log("Patched PreciseGroupDragMod.PreciseGroupDragGate.ShiftHeld (custom modifier redirection)");
+                }
             }
         }
 
@@ -1316,6 +1573,98 @@ namespace ProbablyUnifiedHotkeys
             __result = KeyBindHelper.GetKey("quick_move_inventory") ||
                        KeyBindHelper.GetKey("quick_move_showcase") ||
                        KeyBindHelper.GetKey("quick_move_storage");
+            return false;
+        }
+
+        public static bool PreciseGroupDrag_ShiftHeld_Prefix(ref bool __result)
+        {
+            __result = ComboKeyStore.IsCustomHotkeyHeld("precise_group_drag.shift_held_key", KeyModifierMask.None, KeyCode.LeftShift);
+            return false;
+        }
+
+        // --- 更好的性能优化 (BetterPerformance) ---
+        private static void PatchBetterPerformance(Harmony harmony, ModLog? log)
+        {
+            Type? hoverPeekType = AccessTools.TypeByName("BetterPerformance.HoverPeek");
+            if (hoverPeekType == null) return;
+
+            var prefix = new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(BetterPerformance_HoverPeek_Prefix)));
+            var finalizer = new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(BetterPerformance_HoverPeek_Finalizer)));
+
+            MethodInfo? tick = AccessTools.Method(hoverPeekType, "Tick");
+            if (tick != null)
+            {
+                harmony.Patch(tick, prefix: prefix, finalizer: finalizer);
+            }
+
+            MethodInfo? blockTooltip = AccessTools.Method(hoverPeekType, "BlockTooltipPrefix");
+            if (blockTooltip != null)
+            {
+                harmony.Patch(blockTooltip, prefix: prefix, finalizer: finalizer);
+            }
+
+            log?.Log("Patched BetterPerformance.HoverPeek (hover peek key redirection)");
+        }
+
+        public static void BetterPerformance_HoverPeek_Prefix()
+        {
+            ComboKeyStore.EnterMethodInputRemapScope(
+                "chiqingsan.BetterPerformance.hover_peek_key",
+                KeyCode.Mouse2,
+                KeyCode.None,
+                KeyModifierMask.None,
+                KeyCode.Mouse2);
+        }
+
+        public static void BetterPerformance_HoverPeek_Finalizer()
+        {
+            ComboKeyStore.ExitMethodInputRemapScope();
+        }
+
+        // --- 物品详情 (ItemDetails) ---
+        private static MethodInfo? _itemDetailsExpandKeyGetter;
+
+        private static void PatchItemDetails(Harmony harmony, ModLog? log)
+        {
+            Type? modSettingsType = AccessTools.TypeByName("ItemDetails.ModSettings");
+            if (modSettingsType != null)
+            {
+                _itemDetailsExpandKeyGetter = AccessTools.PropertyGetter(modSettingsType, "ExpandKey");
+            }
+
+            Type? waterColsType = AccessTools.TypeByName("ItemDetails.WaterColumns");
+            if (waterColsType != null)
+            {
+                MethodInfo? expanded = AccessTools.Method(waterColsType, "Expanded");
+                if (expanded != null)
+                {
+                    harmony.Patch(expanded, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(ItemDetails_WaterColumnsExpanded_Prefix))));
+                    log?.Log("Patched ItemDetails.WaterColumns.Expanded (expand key redirection)");
+                }
+            }
+        }
+
+        public static bool ItemDetails_WaterColumnsExpanded_Prefix(ref bool __result)
+        {
+            KeyCode defaultKey = KeyCode.LeftControl;
+            try
+            {
+                if (_itemDetailsExpandKeyGetter != null)
+                {
+                    object? rawEnum = _itemDetailsExpandKeyGetter.Invoke(null, null);
+                    if (rawEnum != null)
+                    {
+                        int code = Convert.ToInt32(rawEnum);
+                        if (code == 0) defaultKey = KeyCode.LeftShift;
+                        else if (code == 2) defaultKey = KeyCode.LeftAlt;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            __result = ComboKeyStore.IsCustomHotkeyHeld("item_details.expand_key", KeyModifierMask.None, defaultKey);
             return false;
         }
     }

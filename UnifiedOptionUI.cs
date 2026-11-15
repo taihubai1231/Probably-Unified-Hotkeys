@@ -2912,7 +2912,7 @@ namespace ProbablyUnifiedHotkeys
             list.Add(I18n.Format("正常纳管 ({0})", "Managed ({0})", managedOnlyCount));
 
             _activeDiagnosticFilterModes.Add(DiagnosticFilterMode.AssetOnly);
-            list.Add(I18n.Format("纯资源 ({0})", "Asset Only ({0})", report.AssetOnlyModCount));
+            list.Add(I18n.Format("免配置 ({0})", "No-Config ({0})", report.AssetOnlyModCount));
 
             return list;
         }
@@ -3033,11 +3033,11 @@ namespace ProbablyUnifiedHotkeys
             // 第二行：精简辅助说明（分类筛选已收束至最上方置顶栏的下拉选项中）
             string helpDesc = ModFeatureConfig.EnableDllProbe
                 ? I18n.Get(
-                    "<color=#8c96a3><size=13>扫描官方 ModConfig / 注册表并执行静态只读探测。疑难项可设为按键绑定或忽略；上方下拉框可快速按分类筛选。</size></color>",
-                    "<color=#8c96a3><size=13>Scans official ModConfig/Registry and read-only static probe. Promote or ignore candidates; use top dropdown to filter by category.</size></color>")
+                    "<color=#8c96a3><size=13>扫描官方 ModConfig / 注册表并执行静态热键探测与运行时改键接管。疑难项可设为按键绑定或忽略；上方下拉框可按分类筛选。</size></color>",
+                    "<color=#8c96a3><size=13>Scans official ModConfig/Registry and static probe with runtime rebind takeover. Promote or ignore candidates; use top dropdown to filter.</size></color>")
                 : I18n.Get(
-                    "<color=#8c96a3><size=13>扫描官方 ModConfig 与注册表设置项。疑难项可设为按键绑定或忽略；上方下拉框可快速按分类筛选。</size></color>",
-                    "<color=#8c96a3><size=13>Scans official ModConfig and Registry settings. Promote or ignore candidates; use top dropdown to filter by category.</size></color>");
+                    "<color=#8c96a3><size=13>扫描官方 ModConfig、注册表及内置知名模组适配。疑难项可设为按键绑定或忽略；上方下拉框可快速按分类筛选。</size></color>",
+                    "<color=#8c96a3><size=13>Scans official ModConfig, Registry, and built-in mod adapters. Promote or ignore candidates; use top dropdown to filter by category.</size></color>");
 
             AddWrappedDiagnosticLabel(builder, 10f, helpDesc);
 
@@ -3072,8 +3072,8 @@ namespace ProbablyUnifiedHotkeys
                         count);
                 default:
                     return I18n.Format(
-                        "<color=#99a3b0>[纯资源/无代码]</color> <b>纯资源 / 无代码模组</b> <color=#99a3b0>({0} 个，无需排查设置)</color>",
-                        "<color=#99a3b0>[Asset Only]</color> <b>Asset / Data-Only Mods</b> <color=#99a3b0>({0}, no settings required)</color>",
+                        "<color=#99a3b0>[免配置/纯机制]</color> <b>免配置 / 自动生效 / 纯资源模组</b> <color=#99a3b0>({0} 个，无全局热键或设置)</color>",
+                        "<color=#99a3b0>[No-Config / Passive]</color> <b>Passive / Auto-Active / Asset Mods</b> <color=#99a3b0>({0}, no global settings required)</color>",
                         count);
             }
         }
@@ -3192,15 +3192,15 @@ namespace ProbablyUnifiedHotkeys
                         builder,
                         10f,
                         I18n.Get(
-                            "<color=#99a3b0>未找到包含只读探测热键的模组（或不符合当前搜索词）</color>",
-                            "<color=#99a3b0>No mods with read-only probed hotkeys found matching the filter.</color>"
+                            "<color=#99a3b0>未找到包含静态探测热键的模组（或不符合当前搜索词）</color>",
+                            "<color=#99a3b0>No mods with probed hotkeys found matching the filter.</color>"
                         ));
                     return;
                 }
 
                 string probedTitle = I18n.Format(
-                    "<color=#d8b4fe>[只读探测热键]</color> <b>含自动探测热键模组</b> <color=#99a3b0>({0} 个模组 | 共 {1} 项探测热键)</color>",
-                    "<color=#d8b4fe>[Probed Hotkeys]</color> <b>Mods With Probed Hotkeys</b> <color=#99a3b0>({0} mods | {1} probed keys)</color>",
+                    "<color=#d8b4fe>[静态探测热键]</color> <b>含自动探测并接管改键模组</b> <color=#99a3b0>({0} 个模组 | 共 {1} 项探测热键)</color>",
+                    "<color=#d8b4fe>[Probed Hotkeys]</color> <b>Mods With Probed & Rebindable Hotkeys</b> <color=#99a3b0>({0} mods | {1} probed keys)</color>",
                     probedItems.Count,
                     probedItems.Sum(x => x.ProbedHotkeys.Count));
                 BuildDiagnosticCategorySection(builder, ModDiagnosticStatus.UnmanagedCodeMod, probedItems, query, hasQuery, forceExpandSection: true, overrideTitle: probedTitle);
@@ -3320,7 +3320,7 @@ namespace ProbablyUnifiedHotkeys
                 case ModDiagnosticStatus.Managed:
                     return I18n.Get("<color=#7fe0a0>[已正常纳管]</color>", "<color=#7fe0a0>[Managed]</color>");
                 default:
-                    return I18n.Get("<color=#99a3b0>[纯资源/无代码]</color>", "<color=#99a3b0>[Asset Only]</color>");
+                    return I18n.Get("<color=#99a3b0>[免配置/纯机制]</color>", "<color=#99a3b0>[No-Config / Passive]</color>");
             }
         }
 
@@ -3458,23 +3458,25 @@ namespace ProbablyUnifiedHotkeys
                 string meta = string.IsNullOrEmpty(authorVer) ? string.Empty : $"({authorVer}) ";
                 string subDesc = (ModFeatureConfig.EnableDllProbe && item.ProbedHotkeys.Count > 0)
                     ? I18n.Format(
-                        "<color=#b0b9c4>{0}未检测到官方 ModConfig/注册表配置，但已通过静态只读探测识别 {1} 个疑似按键绑定（仅供只读冲突排查，无法直接代改原模组逻辑；可点「复制信息」反馈作者）。</color>",
-                        "<color=#b0b9c4>{0}No official ModConfig/Registry found, but {1} read-only keybind(s) were probed for conflict checking (cannot overwrite hardcoded bindings; click \"Copy Info\" to share).</color>",
+                        "<color=#b0b9c4>{0}未检测到官方 ModConfig/注册表配置，但已通过静态探测识别并接管 {1} 个热键（可点击「前去改键」直接修改）。</color>",
+                        "<color=#b0b9c4>{0}No official ModConfig/Registry found, but {1} hotkey(s) were probed and integrated for runtime rebinding.</color>",
                         meta, item.ProbedHotkeys.Count)
                     : I18n.Format(
-                        "<color=#b0b9c4>{0}未检测到官方配置（可能为鼠标右键/HUD点击/自定义按键），可点「复制信息」反馈作者补充官方配置。</color>",
-                        "<color=#b0b9c4>{0}No official config found (may use HUD clicks or custom input). Click \"Copy Info\" to share details.</color>",
+                        "<color=#b0b9c4>{0}未检测到官方配置（可在模组设置中开启静态热键探测，或点「复制信息」反馈作者）。</color>",
+                        "<color=#b0b9c4>{0}No official config found (enable Static Hotkey Probe or click \"Copy Info\" to share).</color>",
                         meta);
                 AddWrappedDiagnosticLabel(builder, 30f, subDesc);
             }
             else if (item.Status == ModDiagnosticStatus.AssetOnlyMod)
             {
-                AddWrappedDiagnosticLabel(
-                    builder,
-                    30f,
-                    I18n.Get(
+                string assetDesc = item.HasAssembly
+                    ? I18n.Get(
+                        "<color=#99a3b0>该模组属于免配置自动生效或局内交互机制模组，无需全局快捷键或设置项。</color>",
+                        "<color=#99a3b0>Confirmed passive / auto-active or in-game UI mod; no global hotkeys or settings required.</color>")
+                    : I18n.Get(
                         "<color=#99a3b0>该模组不包含代码程序集，属于纯资源/数据模组，无需快捷键或设置。</color>",
-                        "<color=#99a3b0>Contains no assembly code (asset / data-only mod); no settings or hotkeys required.</color>"));
+                        "<color=#99a3b0>Contains no assembly code (asset / data-only mod); no settings or hotkeys required.</color>");
+                AddWrappedDiagnosticLabel(builder, 30f, assetDesc);
             }
             else if (item.MatchedConfigIds.Count > 0 &&
                      (item.MatchedConfigIds.Count > 1 ||
@@ -3636,8 +3638,8 @@ namespace ProbablyUnifiedHotkeys
         {
             string sourceInfo = string.IsNullOrEmpty(probed.ProbedSourceDetail) ? probed.Tooltip : probed.ProbedSourceDetail;
             string detailText = I18n.Format(
-                "<color=#d8b4fe>[只读探测]</color> <b>{0}</b>  <color=#9ec4ff>[{1}]</color>  <color=#99a3b0>{2}</color>",
-                "<color=#d8b4fe>[Probed]</color> <b>{0}</b>  <color=#9ec4ff>[{1}]</color>  <color=#99a3b0>{2}</color>",
+                "<color=#d8b4fe>[探测·可改键]</color> <b>{0}</b>  <color=#9ec4ff>[{1}]</color>  <color=#99a3b0>{2}</color>",
+                "<color=#d8b4fe>[Probed·Rebindable]</color> <b>{0}</b>  <color=#9ec4ff>[{1}]</color>  <color=#99a3b0>{2}</color>",
                 probed.DisplayName,
                 FormatHotkeyComboText(probed),
                 sourceInfo);
@@ -3648,11 +3650,11 @@ namespace ProbablyUnifiedHotkeys
             builder.AddLabel(detailText, null);
             ConfigureWrappedDiagnosticLabel(builder.Last, detailText);
 
-            builder.AddButton(I18n.Get("定位", "Locate"), () =>
+            builder.AddButton(I18n.Get("前去改键", "Rebind"), () =>
             {
                 JumpToModInNormalView(probed.ModId, probed.DisplayName);
             }, null);
-            StyleActionButton(builder.Last, 82f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
+            StyleActionButton(builder.Last, 98f, 32f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.80f);
             ApplyButtonTextTheme(builder.Last, Color.white, useDefaultTheme: true);
 
             AddFixedHorizontalSpace(builder, 8f);
@@ -3943,11 +3945,18 @@ namespace ProbablyUnifiedHotkeys
                         "Recheck complete: {0} is not in the enabled mods list.",
                         targetModId);
                 }
+                else if (found.Status == ModDiagnosticStatus.AssetOnlyMod)
+                {
+                    _diagnosticStatusMessage = I18n.Format(
+                        "已复查 [{0}]：已确认为免配置自动生效模组（无全局热键或设置项）",
+                        "Rechecked [{0}]: Confirmed as passive / no-config mod (no global hotkeys or settings).",
+                        found.DisplayName);
+                }
                 else if (found.Status == ModDiagnosticStatus.UnmanagedCodeMod)
                 {
                     _diagnosticStatusMessage = I18n.Format(
-                        "已复查 [{0}]：仍未检测到官方配置项（可能为自定义按键或私藏写法）",
-                        "Rechecked [{0}]: Still no official config entries found (likely custom input/UI).",
+                        "已复查 [{0}]：未检测到官方配置项（可在设置中开启「静态热键探测与改键」自动探查并接管硬编码热键）",
+                        "Rechecked [{0}]: No official config found (enable \"Static Hotkey Probe & Rebind\" to detect and rebind hardcoded keys).",
                         found.DisplayName);
                 }
                 else

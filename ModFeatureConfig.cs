@@ -73,10 +73,10 @@ namespace ProbablyUnifiedHotkeys
                     config,
                     KeyDllProbe,
                     defaultValue: false,
-                    () => I18n.Get("只读热键静态探测", "Read-Only Hotkey Probing"),
+                    () => I18n.Get("静态热键探测与改键接管", "Static Hotkey Probe & Rebind"),
                     () => I18n.Get(
-                        "基于 DseCecil 与本地配置扫描未公开官方配置的代码模组按键，并入冲突排查与展示。关闭后完全不执行外部 DLL 读盘探测，界面不显示任何探测项。",
-                        "Scans unmanaged code mod DLLs and local configs for hardcoded hotkeys via DseCecil. When disabled, stops file probing and hides all probe UI entirely."),
+                        "基于 DseCecil 静态扫描未公开官方配置的代码模组硬编码按键，直接并入主设置面板并通过底层 Input 拦截实时接管改键。关闭后不执行外部 DLL 探测。",
+                        "Scans unmanaged code mod DLLs for hardcoded hotkeys via DseCecil and integrates them into the main settings panel with live Input rebind takeover."),
                     onChanged: OnDllProbeToggled
                 );
 #endif

@@ -48,11 +48,45 @@ namespace ProbablyUnifiedHotkeys
     public static class ComboKeyStore
     {
         private const string PrefsKey = "probably_unified_hotkeys.combos.v1";
+        private const string CustomHotkeysPrefsKey = "probably_unified_hotkeys.custom_hotkeys.v1";
         private const string ForcedHotkeysPrefsKey = "probably_unified_hotkeys.forced_hotkeys.v1";
         private const string IgnoredCandidatesPrefsKey = "probably_unified_hotkeys.ignored_candidates.v1";
 
         private static readonly Dictionary<string, (KeyModifierMask Modifiers, KeyCode Key)> SavedCombos
             = new Dictionary<string, (KeyModifierMask, KeyCode)>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Dictionary<string, (KeyModifierMask Modifiers, KeyCode Key)> SavedCustomHotkeys
+            = new Dictionary<string, (KeyModifierMask, KeyCode)>(StringComparer.OrdinalIgnoreCase);
+
+        public struct InputRemapRule
+        {
+            public string EntryId;
+            public KeyModifierMask OriginalModifiers;
+            public KeyCode OriginalKey;
+            public KeyModifierMask TargetModifiers;
+            public KeyCode TargetKey;
+        }
+
+        private static readonly Dictionary<KeyCode, List<InputRemapRule>> ActiveInputRemapsByOrigKey
+            = new Dictionary<KeyCode, List<InputRemapRule>>();
+
+        private static bool _hasAnyActiveInputRemap = false;
+        private static int _rawInputCheckDepth = 0;
+
+        private struct MethodInputRemapScopeFrame
+        {
+            public string EntryId;
+            public KeyCode OrigKeyPrimary;
+            public KeyCode OrigKeySecondary;
+            public KeyModifierMask DefaultModifiers;
+            public KeyCode DefaultKey;
+        }
+
+        private static readonly List<MethodInputRemapScopeFrame> MethodRemapScopeStack
+            = new List<MethodInputRemapScopeFrame>(4);
+
+        public static bool HasAnyActiveInputRemapOrScope =>
+            _rawInputCheckDepth == 0 && (_hasAnyActiveInputRemap || MethodRemapScopeStack.Count > 0);
 
         private static readonly HashSet<string> ForcedHotkeyIds
             = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -158,6 +192,7 @@ namespace ProbablyUnifiedHotkeys
         public static void Load()
         {
             SavedCombos.Clear();
+            SavedCustomHotkeys.Clear();
             ForcedHotkeyIds.Clear();
             IgnoredCandidateIds.Clear();
             try
@@ -184,6 +219,38 @@ namespace ProbablyUnifiedHotkeys
                                 if (mask != KeyModifierMask.None && kc != KeyCode.None)
                                 {
                                     SavedCombos[id] = (mask, kc);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                string rawCustom = ReadPrefString(CustomHotkeysPrefsKey);
+                if (!string.IsNullOrEmpty(rawCustom))
+                {
+                    string[] parts = rawCustom.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (string part in parts)
+                    {
+                        int eq = part.IndexOf('=');
+                        if (eq <= 0) continue;
+
+                        string id = Uri.UnescapeDataString(part.Substring(0, eq));
+                        string val = part.Substring(eq + 1);
+                        int colon = val.IndexOf(':');
+                        if (colon > 0)
+                        {
+                            if (int.TryParse(val.Substring(0, colon), out int maskInt) &&
+                                int.TryParse(val.Substring(colon + 1), out int keyInt))
+                            {
+                                var mask = (KeyModifierMask)(maskInt & 7);
+                                var kc = (KeyCode)keyInt;
+                                if (kc == KeyCode.None)
+                                {
+                                    SavedCustomHotkeys[id] = (KeyModifierMask.None, KeyCode.None);
+                                }
+                                else
+                                {
+                                    SavedCustomHotkeys[id] = (mask & ~GetModifierBit(kc), kc);
                                 }
                             }
                         }
@@ -413,6 +480,8 @@ namespace ProbablyUnifiedHotkeys
                     if (string.IsNullOrEmpty(encoded)) DeletePrefKey(PrefsKey);
                     else WritePrefString(PrefsKey, encoded);
                 }
+
+                SaveCustomHotkeysCore();
                 SavePrefsStorage();
             }
             catch (Exception ex)
@@ -421,10 +490,92 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        private static void SaveCustomHotkeysCore()
+        {
+            if (SavedCustomHotkeys.Count == 0)
+            {
+                DeletePrefKey(CustomHotkeysPrefsKey);
+                return;
+            }
+
+            var sb = new StringBuilder(256);
+            foreach (var kvp in SavedCustomHotkeys)
+            {
+                sb.Append(Uri.EscapeDataString(kvp.Key))
+                  .Append('=')
+                  .Append((int)kvp.Value.Modifiers)
+                  .Append(':')
+                  .Append((int)kvp.Value.Key)
+                  .Append(';');
+            }
+            string encoded = sb.ToString();
+            if (string.IsNullOrEmpty(encoded)) DeletePrefKey(CustomHotkeysPrefsKey);
+            else WritePrefString(CustomHotkeysPrefsKey, encoded);
+        }
+
+        public static bool HasSavedCustomHotkey(string? entryId)
+        {
+            EnsureLoaded();
+            return !string.IsNullOrEmpty(entryId) && SavedCustomHotkeys.ContainsKey(entryId);
+        }
+
+        public static KeyCombo GetEffectiveCustomHotkey(string? entryId, KeyModifierMask defaultMods, KeyCode defaultKey)
+        {
+            EnsureLoaded();
+            if (!string.IsNullOrEmpty(entryId) && SavedCustomHotkeys.TryGetValue(entryId, out var custom))
+            {
+                return new KeyCombo(custom.Modifiers, custom.Key);
+            }
+            if (!string.IsNullOrEmpty(entryId) && SavedCombos.TryGetValue(entryId, out var combo))
+            {
+                return new KeyCombo(combo.Modifiers, combo.Key);
+            }
+            return new KeyCombo(defaultMods, defaultKey);
+        }
+
+        public static void SetSavedCustomHotkey(
+            string? entryId,
+            KeyModifierMask modifiers,
+            KeyCode primaryKey,
+            KeyModifierMask defaultMods = KeyModifierMask.None,
+            KeyCode defaultKey = KeyCode.None)
+        {
+            EnsureLoaded();
+            if (string.IsNullOrEmpty(entryId)) return;
+
+            var normalized = primaryKey == KeyCode.None
+                ? KeyModifierMask.None
+                : (modifiers & ~GetModifierBit(primaryKey));
+
+            var normDefault = defaultKey == KeyCode.None
+                ? KeyModifierMask.None
+                : (defaultMods & ~GetModifierBit(defaultKey));
+
+            if (primaryKey == defaultKey && normalized == normDefault)
+            {
+                SavedCustomHotkeys.Remove(entryId);
+            }
+            else
+            {
+                SavedCustomHotkeys[entryId] = (normalized, primaryKey);
+            }
+
+            SetSavedCombo(entryId, normalized, primaryKey);
+            Save();
+            RebuildRuntimeFromSaved();
+        }
+
         public static KeyModifierMask GetSavedModifiers(string entryId, KeyCode expectedPrimaryKey = KeyCode.None)
         {
             EnsureLoaded();
             if (string.IsNullOrEmpty(entryId)) return KeyModifierMask.None;
+            if (SavedCustomHotkeys.TryGetValue(entryId, out var customPair))
+            {
+                if (expectedPrimaryKey == KeyCode.None || customPair.Key == expectedPrimaryKey)
+                {
+                    return customPair.Modifiers;
+                }
+            }
             if (!SavedCombos.TryGetValue(entryId, out var pair)) return KeyModifierMask.None;
             if (expectedPrimaryKey != KeyCode.None && pair.Key != expectedPrimaryKey)
             {
@@ -482,6 +633,13 @@ namespace ProbablyUnifiedHotkeys
                     RegisterActiveCombo(kvp.Value.Modifiers, kvp.Value.Key);
                 }
             }
+            foreach (var kvp in SavedCustomHotkeys)
+            {
+                if (kvp.Value.Modifiers != KeyModifierMask.None && kvp.Value.Key != KeyCode.None)
+                {
+                    RegisterActiveCombo(kvp.Value.Modifiers, kvp.Value.Key);
+                }
+            }
         }
 
         private static void RegisterActiveCombo(KeyModifierMask mods, KeyCode key)
@@ -497,6 +655,249 @@ namespace ProbablyUnifiedHotkeys
             if (!list.Contains(normalized))
             {
                 list.Add(normalized);
+            }
+        }
+
+        public static void ClearInputKeyRemaps()
+        {
+            ActiveInputRemapsByOrigKey.Clear();
+            _hasAnyActiveInputRemap = false;
+        }
+
+        public static void RegisterInputKeyRemap(
+            string entryId,
+            KeyModifierMask origMods,
+            KeyCode origKey,
+            KeyModifierMask targetMods,
+            KeyCode targetKey)
+        {
+            if (string.IsNullOrEmpty(entryId) || origKey == KeyCode.None) return;
+
+            var normOrig = origMods & ~GetModifierBit(origKey);
+            var normTarget = targetKey == KeyCode.None
+                ? KeyModifierMask.None
+                : (targetMods & ~GetModifierBit(targetKey));
+
+            // Remove any existing rule for the same entryId first
+            if (ActiveInputRemapsByOrigKey.TryGetValue(origKey, out var existingList))
+            {
+                for (int i = existingList.Count - 1; i >= 0; i--)
+                {
+                    if (string.Equals(existingList[i].EntryId, entryId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        existingList.RemoveAt(i);
+                    }
+                }
+                if (existingList.Count == 0)
+                {
+                    ActiveInputRemapsByOrigKey.Remove(origKey);
+                }
+            }
+
+            KeyCode altOrigKey = GetPairedModifierKey(origKey);
+            if (altOrigKey != KeyCode.None && ActiveInputRemapsByOrigKey.TryGetValue(altOrigKey, out var altList))
+            {
+                for (int i = altList.Count - 1; i >= 0; i--)
+                {
+                    if (string.Equals(altList[i].EntryId, entryId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        altList.RemoveAt(i);
+                    }
+                }
+                if (altList.Count == 0)
+                {
+                    ActiveInputRemapsByOrigKey.Remove(altOrigKey);
+                }
+            }
+
+            if (origKey == targetKey && normOrig == normTarget)
+            {
+                _hasAnyActiveInputRemap = ActiveInputRemapsByOrigKey.Count > 0;
+                return;
+            }
+
+            var rule = new InputRemapRule
+            {
+                EntryId = entryId,
+                OriginalModifiers = normOrig,
+                OriginalKey = origKey,
+                TargetModifiers = normTarget,
+                TargetKey = targetKey
+            };
+
+            AddInputRemapRuleForKey(origKey, rule);
+            if (altOrigKey != KeyCode.None)
+            {
+                AddInputRemapRuleForKey(altOrigKey, rule);
+            }
+            _hasAnyActiveInputRemap = ActiveInputRemapsByOrigKey.Count > 0;
+        }
+
+        private static void AddInputRemapRuleForKey(KeyCode key, InputRemapRule rule)
+        {
+            if (!ActiveInputRemapsByOrigKey.TryGetValue(key, out var list))
+            {
+                list = new List<InputRemapRule>(2);
+                ActiveInputRemapsByOrigKey[key] = list;
+            }
+            list.Add(rule);
+        }
+
+        public static KeyCode GetPairedModifierKey(KeyCode k)
+        {
+            switch (k)
+            {
+                case KeyCode.LeftShift: return KeyCode.RightShift;
+                case KeyCode.RightShift: return KeyCode.LeftShift;
+                case KeyCode.LeftControl: return KeyCode.RightControl;
+                case KeyCode.RightControl: return KeyCode.LeftControl;
+                case KeyCode.LeftAlt: return KeyCode.RightAlt;
+                case KeyCode.RightAlt: return KeyCode.LeftAlt;
+                default: return KeyCode.None;
+            }
+        }
+
+        public static void EnterMethodInputRemapScope(
+            string entryId,
+            KeyCode origKeyPrimary,
+            KeyCode origKeySecondary = KeyCode.None,
+            KeyModifierMask defaultModifiers = KeyModifierMask.None,
+            KeyCode defaultKey = KeyCode.None)
+        {
+            MethodRemapScopeStack.Add(new MethodInputRemapScopeFrame
+            {
+                EntryId = entryId,
+                OrigKeyPrimary = origKeyPrimary,
+                OrigKeySecondary = origKeySecondary,
+                DefaultModifiers = defaultModifiers,
+                DefaultKey = defaultKey == KeyCode.None ? origKeyPrimary : defaultKey
+            });
+        }
+
+        public static void ExitMethodInputRemapScope()
+        {
+            int count = MethodRemapScopeStack.Count;
+            if (count > 0)
+            {
+                MethodRemapScopeStack.RemoveAt(count - 1);
+            }
+        }
+
+        public enum InputQueryKind
+        {
+            Held = 0,
+            Down = 1,
+            Up = 2
+        }
+
+        public static bool TryEvaluateInputRemap(KeyCode queriedKey, InputQueryKind kind, out bool result)
+        {
+            result = false;
+            if (_rawInputCheckDepth > 0 || queriedKey == KeyCode.None || IsBypassed)
+            {
+                return false;
+            }
+
+            // 1. Scoped method interception (highest precision)
+            int scopeCount = MethodRemapScopeStack.Count;
+            if (scopeCount > 0)
+            {
+                var top = MethodRemapScopeStack[scopeCount - 1];
+                if (queriedKey == top.OrigKeyPrimary)
+                {
+                    result = EvaluateCustomHotkeyByKind(top.EntryId, top.DefaultModifiers, top.DefaultKey, kind);
+                    return true;
+                }
+                if (top.OrigKeySecondary != KeyCode.None && queriedKey == top.OrigKeySecondary)
+                {
+                    // Secondary paired modifier key (e.g. RightAlt when Primary is LeftAlt) returns false because Primary already evaluated both
+                    result = false;
+                    return true;
+                }
+            }
+
+            // 2. Global probed/custom key remap table
+            if (!_hasAnyActiveInputRemap) return false;
+            if (!ActiveInputRemapsByOrigKey.TryGetValue(queriedKey, out var rules) || rules.Count == 0)
+            {
+                return false;
+            }
+
+            bool anyRuleEvaluated = false;
+            for (int i = 0; i < rules.Count; i++)
+            {
+                var rule = rules[i];
+                // If original key was a paired modifier secondary (e.g. RightAlt when rule.OriginalKey is LeftAlt), suppress secondary
+                if (queriedKey != rule.OriginalKey && queriedKey == GetPairedModifierKey(rule.OriginalKey))
+                {
+                    anyRuleEvaluated = true;
+                    continue;
+                }
+
+                anyRuleEvaluated = true;
+                if (EvaluateTargetComboByKind(rule.TargetModifiers, rule.TargetKey, kind))
+                {
+                    result = true;
+                    return true;
+                }
+            }
+
+            if (anyRuleEvaluated)
+            {
+                result = false;
+                return true;
+            }
+            return false;
+        }
+
+        public static bool IsCustomHotkeyDown(string entryId, KeyModifierMask defaultMods, KeyCode defaultKey)
+            => EvaluateCustomHotkeyByKind(entryId, defaultMods, defaultKey, InputQueryKind.Down);
+
+        public static bool IsCustomHotkeyHeld(string entryId, KeyModifierMask defaultMods, KeyCode defaultKey)
+            => EvaluateCustomHotkeyByKind(entryId, defaultMods, defaultKey, InputQueryKind.Held);
+
+        public static bool IsCustomHotkeyUp(string entryId, KeyModifierMask defaultMods, KeyCode defaultKey)
+            => EvaluateCustomHotkeyByKind(entryId, defaultMods, defaultKey, InputQueryKind.Up);
+
+        private static bool EvaluateCustomHotkeyByKind(
+            string entryId,
+            KeyModifierMask defaultMods,
+            KeyCode defaultKey,
+            InputQueryKind kind)
+        {
+            if (IsBypassed) return false;
+            var effective = GetEffectiveCustomHotkey(entryId, defaultMods, defaultKey);
+            return EvaluateTargetComboByKind(effective.Modifiers, effective.Key, kind);
+        }
+
+        public static bool EvaluateTargetComboByKind(
+            KeyModifierMask modifiers,
+            KeyCode key,
+            InputQueryKind kind)
+        {
+            if (key == KeyCode.None || IsBypassed) return false;
+
+            var normMods = modifiers & ~GetModifierBit(key);
+            if (normMods != KeyModifierMask.None)
+            {
+                if (!AreModifiersExactMatch(normMods, key))
+                {
+                    return false;
+                }
+            }
+            else if (ShouldSuppressPlainKey(key))
+            {
+                return false;
+            }
+
+            switch (kind)
+            {
+                case InputQueryKind.Down:
+                    return IsKeyDownOrModifierPairRaw(key);
+                case InputQueryKind.Up:
+                    return IsKeyUpOrModifierPairRaw(key);
+                default:
+                    return IsKeyHeldOrModifierPairRaw(key);
             }
         }
 
@@ -528,17 +929,26 @@ namespace ProbablyUnifiedHotkeys
             }
 
             KeyModifierMask mask = KeyModifierMask.None;
+            KeyCode pairedExclude = GetPairedModifierKey(excludeModifierKey);
 
-            bool shift = (excludeModifierKey != KeyCode.LeftShift && Input.GetKey(KeyCode.LeftShift)) ||
-                         (excludeModifierKey != KeyCode.RightShift && Input.GetKey(KeyCode.RightShift));
-            bool ctrl = (excludeModifierKey != KeyCode.LeftControl && Input.GetKey(KeyCode.LeftControl)) ||
-                        (excludeModifierKey != KeyCode.RightControl && Input.GetKey(KeyCode.RightControl));
-            bool alt = (excludeModifierKey != KeyCode.LeftAlt && Input.GetKey(KeyCode.LeftAlt)) ||
-                       (excludeModifierKey != KeyCode.RightAlt && Input.GetKey(KeyCode.RightAlt));
+            _rawInputCheckDepth++;
+            try
+            {
+                bool shift = (excludeModifierKey != KeyCode.LeftShift && pairedExclude != KeyCode.LeftShift && Input.GetKey(KeyCode.LeftShift)) ||
+                             (excludeModifierKey != KeyCode.RightShift && pairedExclude != KeyCode.RightShift && Input.GetKey(KeyCode.RightShift));
+                bool ctrl = (excludeModifierKey != KeyCode.LeftControl && pairedExclude != KeyCode.LeftControl && Input.GetKey(KeyCode.LeftControl)) ||
+                            (excludeModifierKey != KeyCode.RightControl && pairedExclude != KeyCode.RightControl && Input.GetKey(KeyCode.RightControl));
+                bool alt = (excludeModifierKey != KeyCode.LeftAlt && pairedExclude != KeyCode.LeftAlt && Input.GetKey(KeyCode.LeftAlt)) ||
+                           (excludeModifierKey != KeyCode.RightAlt && pairedExclude != KeyCode.RightAlt && Input.GetKey(KeyCode.RightAlt));
 
-            if (shift) mask |= KeyModifierMask.Shift;
-            if (ctrl) mask |= KeyModifierMask.Ctrl;
-            if (alt) mask |= KeyModifierMask.Alt;
+                if (shift) mask |= KeyModifierMask.Shift;
+                if (ctrl) mask |= KeyModifierMask.Ctrl;
+                if (alt) mask |= KeyModifierMask.Alt;
+            }
+            finally
+            {
+                _rawInputCheckDepth--;
+            }
 
             return mask;
         }
@@ -562,23 +972,79 @@ namespace ProbablyUnifiedHotkeys
         public static bool IsKeyDownRaw(KeyCode k)
         {
             if (k == KeyCode.None) return false;
-            if (k >= KeyCode.Mouse0 && k <= KeyCode.Mouse6)
+            _rawInputCheckDepth++;
+            try
             {
-                int btn = (int)k - (int)KeyCode.Mouse0;
-                return Input.GetMouseButtonDown(btn) || Input.GetKeyDown(k);
+                if (k >= KeyCode.Mouse0 && k <= KeyCode.Mouse6)
+                {
+                    int btn = (int)k - (int)KeyCode.Mouse0;
+                    return Input.GetMouseButtonDown(btn) || Input.GetKeyDown(k);
+                }
+                return Input.GetKeyDown(k);
             }
-            return Input.GetKeyDown(k);
+            finally
+            {
+                _rawInputCheckDepth--;
+            }
         }
 
         public static bool IsKeyHeldRaw(KeyCode k)
         {
             if (k == KeyCode.None) return false;
-            if (k >= KeyCode.Mouse0 && k <= KeyCode.Mouse6)
+            _rawInputCheckDepth++;
+            try
             {
-                int btn = (int)k - (int)KeyCode.Mouse0;
-                return Input.GetMouseButton(btn) || Input.GetKey(k);
+                if (k >= KeyCode.Mouse0 && k <= KeyCode.Mouse6)
+                {
+                    int btn = (int)k - (int)KeyCode.Mouse0;
+                    return Input.GetMouseButton(btn) || Input.GetKey(k);
+                }
+                return Input.GetKey(k);
             }
-            return Input.GetKey(k);
+            finally
+            {
+                _rawInputCheckDepth--;
+            }
+        }
+
+        public static bool IsKeyUpRaw(KeyCode k)
+        {
+            if (k == KeyCode.None) return false;
+            _rawInputCheckDepth++;
+            try
+            {
+                if (k >= KeyCode.Mouse0 && k <= KeyCode.Mouse6)
+                {
+                    int btn = (int)k - (int)KeyCode.Mouse0;
+                    return Input.GetMouseButtonUp(btn) || Input.GetKeyUp(k);
+                }
+                return Input.GetKeyUp(k);
+            }
+            finally
+            {
+                _rawInputCheckDepth--;
+            }
+        }
+
+        public static bool IsKeyDownOrModifierPairRaw(KeyCode k)
+        {
+            if (IsKeyDownRaw(k)) return true;
+            KeyCode paired = GetPairedModifierKey(k);
+            return paired != KeyCode.None && IsKeyDownRaw(paired);
+        }
+
+        public static bool IsKeyHeldOrModifierPairRaw(KeyCode k)
+        {
+            if (IsKeyHeldRaw(k)) return true;
+            KeyCode paired = GetPairedModifierKey(k);
+            return paired != KeyCode.None && IsKeyHeldRaw(paired);
+        }
+
+        public static bool IsKeyUpOrModifierPairRaw(KeyCode k)
+        {
+            if (IsKeyUpRaw(k)) return true;
+            KeyCode paired = GetPairedModifierKey(k);
+            return paired != KeyCode.None && IsKeyUpRaw(paired);
         }
 
         /// <summary>
@@ -613,11 +1079,24 @@ namespace ProbablyUnifiedHotkeys
             EnsureLoaded();
 
             KeyModifierMask required = KeyModifierMask.None;
+            bool matchedCustom = false;
             if (candidateEntryIds != null)
             {
                 foreach (string id in candidateEntryIds)
                 {
                     if (string.IsNullOrEmpty(id)) continue;
+                    if (SavedCustomHotkeys.TryGetValue(id, out var customPair))
+                    {
+                        if (customPair.Key == KeyCode.None)
+                        {
+                            key = KeyCode.None;
+                            return;
+                        }
+                        key = customPair.Key;
+                        required = customPair.Modifiers;
+                        matchedCustom = true;
+                        break;
+                    }
                     if (SavedCombos.TryGetValue(id, out var pair) && pair.Key == key)
                     {
                         required = pair.Modifiers;
@@ -626,7 +1105,7 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
-            if (required == KeyModifierMask.None && !string.IsNullOrEmpty(modIdPrefix))
+            if (!matchedCustom && required == KeyModifierMask.None && !string.IsNullOrEmpty(modIdPrefix))
             {
                 foreach (var kvp in SavedCombos)
                 {
