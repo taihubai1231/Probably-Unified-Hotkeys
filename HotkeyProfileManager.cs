@@ -10,7 +10,7 @@ namespace ProbablyUnifiedHotkeys
     public sealed class ProfileSnapshot
     {
         public string Schema { get; set; } = HotkeyProfileManager.SchemaId;
-        public string Version { get; set; } = "1.4.5";
+        public string Version { get; set; } = "1.4.6";
         public string Name { get; set; } = string.Empty;
         public string Timestamp { get; set; } = string.Empty;
         public Dictionary<string, string> Hotkeys { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -181,7 +181,7 @@ namespace ProbablyUnifiedHotkeys
             var sb = new StringBuilder(4096);
             sb.Append('{');
             AppendJsonKeyVal(sb, "schema", SchemaId, first: true);
-            AppendJsonKeyVal(sb, "version", "1.4.5", first: false);
+            AppendJsonKeyVal(sb, "version", "1.4.6", first: false);
             AppendJsonKeyVal(sb, "name", profileName ?? "Custom", first: false);
             AppendJsonKeyVal(sb, "timestamp", timestamp, first: false);
 

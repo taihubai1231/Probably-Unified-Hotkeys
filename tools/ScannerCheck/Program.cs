@@ -126,7 +126,7 @@ internal static class Program
         var mgrType = modAsm.GetType("ProbablyUnifiedHotkeys.HotkeyProfileManager", throwOnError: true)!;
         var tryParse = mgrType.GetMethod("TryParseSnapshotJson", BindingFlags.Public | BindingFlags.Static)!;
 
-        string sample = "分享我的键位配置：{\"schema\":\"puh_profile_v1\",\"version\":\"1.4.5\",\"name\":\"方案一\",\"timestamp\":\"11-15 19:38\",\"hotkeys\":{\"vanilla.interact\":\"E\",\"smart_inventory_arrange.OpenSettingsHotkey\":\"Ctrl+F6\",\"ShowItemNames.Hotkey\":\"None\"},\"customHotkeys\":{\"chiqingsan.BetterPerformance.hover_peek_key\":\"Mouse3\"},\"general\":{\"ShowItemNames.Enabled\":\"b:1\",\"ShowItemNames.FontScale\":\"f:1.25\",\"item_details.expand_key\":\"i:2\",\"hollow.clientdemandhighlight.userIgnoredIds\":\"s:metal_scanner,uv_filter\"},\"forced\":[\"foo.bar\"],\"ignored\":[\"baz.qux\"]} 快试试！";
+        string sample = "分享我的键位配置：{\"schema\":\"puh_profile_v1\",\"version\":\"1.4.6\",\"name\":\"方案一\",\"timestamp\":\"11-15 19:38\",\"hotkeys\":{\"vanilla.interact\":\"E\",\"smart_inventory_arrange.OpenSettingsHotkey\":\"Ctrl+F6\",\"ShowItemNames.Hotkey\":\"None\"},\"customHotkeys\":{\"chiqingsan.BetterPerformance.hover_peek_key\":\"Mouse3\"},\"general\":{\"ShowItemNames.Enabled\":\"b:1\",\"ShowItemNames.FontScale\":\"f:1.25\",\"item_details.expand_key\":\"i:2\",\"hollow.clientdemandhighlight.userIgnoredIds\":\"s:metal_scanner,uv_filter\"},\"forced\":[\"foo.bar\"],\"ignored\":[\"baz.qux\"]} 快试试！";
         object?[] args = new object?[] { sample, null, null };
         bool ok = (bool)(tryParse.Invoke(null, args) ?? false);
         object? snap = args[1];

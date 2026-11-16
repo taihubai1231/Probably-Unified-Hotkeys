@@ -44,7 +44,7 @@ namespace ProbablyUnifiedHotkeys
         public static bool EnablePerformancePatches => _entryPerformancePatches?.Value ?? true;
 
         /// <summary>
-        /// 3. 优化退出游戏流程 (秒退，跳过进程销毁前的几十次重复卸载重编译与遥测空等)
+        /// 3. 优化退出游戏流程 (跳过进程销毁前的几十次重复卸载重编译与遥测空等)
         /// </summary>
         public static bool EnableFastQuit => _entryFastQuit?.Value ?? true;
 
@@ -96,7 +96,7 @@ namespace ProbablyUnifiedHotkeys
                     config,
                     KeyFastQuit,
                     defaultValue: true,
-                    () => I18n.Get("优化退出游戏流程 (秒退)", "Fast Game Exit"),
+                    () => I18n.Get("优化退出游戏流程", "Fast Game Exit"),
                     () => I18n.Get(
                         "退出游戏或返回主菜单时优先触发保存配置并跳过无意义的动态卸载重编译与遥测空等。",
                         "Saves mod configs first and skips redundant dynamic unpatch re-compilation and telemetry sleep during quit."),

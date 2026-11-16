@@ -238,6 +238,452 @@ namespace ProbablyUnifiedHotkeys
         private static GameObject? _selfProfileSectionContainer;
         private static readonly CustomUIElement?[] _selfProfileSlotDetailLabels = new CustomUIElement?[HotkeyProfileManager.SlotCount];
 
+        // 退出设置未保存防丢确认弹窗引用与状态
+        private static CustomUIWindow? _unsavedConfirmWindow;
+        private static bool _isExplicitWindowClosing = false;
+        private static int _suppressEscapeUntilFrame = -1;
+
+        public static CustomUIWindow? CurrentWindow => _currentWindow;
+        public static CustomUIWindow? UnsavedConfirmWindow => _unsavedConfirmWindow;
+        public static bool IsExplicitWindowClosing => _isExplicitWindowClosing;
+
+        public static bool IsCapturingAnyKey =>
+            _capturingEntry != null ||
+            KeyBindHelper.IsCapturing;
+
+        public static bool IsSuppressingEscapeAfterCapture =>
+            Time.frameCount <= _suppressEscapeUntilFrame;
+
+        public static bool HasUnsavedChanges()
+        {
+            if (_allHotkeys != null)
+            {
+                for (int i = 0; i < _allHotkeys.Count; i++)
+                {
+                    var hk = _allHotkeys[i];
+                    if (hk == null) continue;
+
+                    KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
+                    KeyModifierMask currentMods = hk.GetExternalModifiers != null
+                        ? hk.GetExternalModifiers.Invoke()
+                        : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey);
+
+                    if (hk.ModId == "vanilla")
+                    {
+                        if (hk.HasPendingChange)
+                        {
+                            if (hk.PendingKey != currentKey || hk.PendingModifiers != currentMods)
+                            {
+                                return true;
+                            }
+                        }
+
+                        if (_currentManager != null && PendingKeysField?.GetValue(_currentManager) is Dictionary<string, KeyCode> pkDict)
+                        {
+                            if (!string.IsNullOrEmpty(hk.RawOptionId) && pkDict.TryGetValue(hk.RawOptionId, out KeyCode pk))
+                            {
+                                if (pk != currentKey)
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (hk.HasPendingChange)
+                        {
+                            if (hk.EffectiveKey != currentKey || hk.EffectiveModifiers != currentMods)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (_modGroups != null)
+            {
+                for (int g = 0; g < _modGroups.Count; g++)
+                {
+                    var group = _modGroups[g];
+                    if (group == null) continue;
+                    for (int i = 0; i < group.GeneralSettings.Count; i++)
+                    {
+                        var gen = group.GeneralSettings[i];
+                        if (gen == null) continue;
+
+                        if (gen.PendingBool.HasValue && gen.PendingBool.Value != (gen.GetBool?.Invoke() ?? false))
+                        {
+                            return true;
+                        }
+                        if (gen.PendingFloat.HasValue && Mathf.Abs(gen.PendingFloat.Value - (gen.GetFloat?.Invoke() ?? gen.Min)) > 0.0001f)
+                        {
+                            return true;
+                        }
+                        if (gen.PendingIndex.HasValue && gen.PendingIndex.Value != (gen.GetIndex?.Invoke() ?? 0))
+                        {
+                            return true;
+                        }
+                        if (gen.PendingString != null && !string.Equals(gen.PendingString, gen.GetString?.Invoke() ?? string.Empty, StringComparison.Ordinal))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // 检查原版常规配置项（开关、滑块、下拉）是否有未保存修改
+            if (_vanillaCards != null && _currentWindow != null && _currentWindow.IsAlive)
+            {
+                for (int c = 0; c < _vanillaCards.Count; c++)
+                {
+                    var card = _vanillaCards[c];
+                    if (card == null || card.Entries == null) continue;
+                    for (int i = 0; i < card.Entries.Count; i++)
+                    {
+                        var item = card.Entries[i];
+                        var entry = item?.Entry;
+                        if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+
+                        var el = _currentWindow.Get(entry.id);
+                        if (el == null || !el.IsAlive) continue;
+
+                        switch (entry.kind)
+                        {
+                            case GameOptionRegistry.Kind.Toggle:
+                                if (entry.getBool != null && el.GetBool() != entry.getBool())
+                                {
+                                    return true;
+                                }
+                                break;
+                            case GameOptionRegistry.Kind.Slider:
+                                if (entry.getFloat != null && Mathf.Abs(el.GetFloat() - entry.getFloat()) > 0.001f)
+                                {
+                                    return true;
+                                }
+                                break;
+                            case GameOptionRegistry.Kind.Dropdown:
+                                if (entry.getIndex != null && el.GetIndex() != entry.getIndex())
+                                {
+                                    return true;
+                                }
+                                break;
+                        }
+                    }
+                }
+            }
+
+            if (_currentManager != null && OverriddenDropdownsField?.GetValue(_currentManager) is System.Collections.IDictionary od && od.Count > 0)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        public static void DiscardAllPendingChanges()
+        {
+            CancelCapture();
+
+            // 1. 原版待提交键位清空，恢复至当前生效键位
+            var pendingKeys = PendingKeysField?.GetValue(_currentManager) as Dictionary<string, KeyCode>;
+            pendingKeys?.Clear();
+
+            for (int i = 0; i < _allHotkeys.Count; i++)
+            {
+                var hk = _allHotkeys[i];
+                if (hk == null) continue;
+                KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
+                hk.HasPendingChange = false;
+                hk.PendingModifiers = hk.GetExternalModifiers != null
+                    ? hk.GetExternalModifiers.Invoke()
+                    : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey);
+                hk.PendingKey = currentKey;
+                UpdateHotkeyButtonVisual(hk);
+            }
+
+            // 2. 模组常规设置恢复并重置控件
+            for (int g = 0; g < _modGroups.Count; g++)
+            {
+                var group = _modGroups[g];
+                if (group == null) continue;
+                for (int i = 0; i < group.GeneralSettings.Count; i++)
+                {
+                    var gen = group.GeneralSettings[i];
+                    if (gen != null)
+                    {
+                        gen.PendingBool = null;
+                        gen.PendingFloat = null;
+                        gen.PendingIndex = null;
+                        gen.PendingString = null;
+                    }
+                }
+                if (group.IsContentBuilt)
+                {
+                    RefreshCardUI(group);
+                }
+            }
+
+            // 3. 原版常规设置恢复并重置控件
+            if (_vanillaCards != null && _currentWindow != null && _currentWindow.IsAlive)
+            {
+                for (int c = 0; c < _vanillaCards.Count; c++)
+                {
+                    var card = _vanillaCards[c];
+                    if (card == null || card.Entries == null) continue;
+                    for (int i = 0; i < card.Entries.Count; i++)
+                    {
+                        var item = card.Entries[i];
+                        var entry = item?.Entry;
+                        if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+
+                        var el = _currentWindow.Get(entry.id);
+                        if (el == null || !el.IsAlive) continue;
+
+                        switch (entry.kind)
+                        {
+                            case GameOptionRegistry.Kind.Toggle:
+                                if (entry.getBool != null)
+                                {
+                                    el.SetBool(entry.getBool(), notify: false);
+                                }
+                                break;
+                            case GameOptionRegistry.Kind.Slider:
+                                if (entry.getFloat != null)
+                                {
+                                    el.SetFloat(entry.getFloat(), notify: false);
+                                }
+                                break;
+                            case GameOptionRegistry.Kind.Dropdown:
+                                if (entry.getIndex != null)
+                                {
+                                    el.SetIndex(entry.getIndex(), notify: false);
+                                }
+                                break;
+                        }
+                    }
+                }
+            }
+
+            var overriddenDropdowns = OverriddenDropdownsField?.GetValue(_currentManager) as System.Collections.IDictionary;
+            overriddenDropdowns?.Clear();
+
+            RefreshConflicts();
+            if (IsConflictViewActive)
+            {
+                RebuildConflictView();
+            }
+        }
+
+        public static void CloseEnhancedWindowSafely()
+        {
+            CloseUnsavedChangesConfirmDialog();
+            _isExplicitWindowClosing = true;
+            if (_currentWindow != null && _currentWindow.IsAlive)
+            {
+                _currentWindow.Close();
+            }
+            else if (_currentManager != null)
+            {
+                _currentManager.CloseUI();
+            }
+        }
+
+        public static void CloseUnsavedChangesConfirmDialog()
+        {
+            if (_unsavedConfirmWindow != null)
+            {
+                var win = _unsavedConfirmWindow;
+                _unsavedConfirmWindow = null;
+                if (win.IsAlive)
+                {
+                    win.Close();
+                }
+            }
+        }
+
+        public static void ShowUnsavedChangesConfirmDialog(Action onSaveAndExit, Action onDiscardAndExit)
+        {
+            if (_unsavedConfirmWindow != null && _unsavedConfirmWindow.IsAlive)
+            {
+                return;
+            }
+
+            if (CustomUIManager.Instance == null)
+            {
+                return;
+            }
+
+            string title = I18n.Get("未保存的更改", "Unsaved Changes");
+            var promptBuilder = CustomUIManager.Instance.CreateWindow(
+                "puh_unsaved_confirm",
+                title,
+                "overlay",
+                null,
+                CustomUIManager.Style.Auto
+            );
+
+            _unsavedConfirmWindow = promptBuilder.Handle;
+            promptBuilder.SetSize(560f, 185f);
+            promptBuilder.Center();
+            promptBuilder.SetCloseOnEscape(true);
+            promptBuilder.SetDraggable(true);
+            promptBuilder.OnClose(() =>
+            {
+                _unsavedConfirmWindow = null;
+            });
+
+            if (_unsavedConfirmWindow?.frame?.titleText != null)
+            {
+                _unsavedConfirmWindow.frame.titleText.alignment = TextAlignmentOptions.Center;
+                _unsavedConfirmWindow.frame.titleText.margin = Vector4.zero;
+                I18n.ApplyFontIfRuntime(_unsavedConfirmWindow.frame.titleText, title);
+            }
+
+            promptBuilder.AddSpace(12f);
+
+            string body = I18n.Get(
+                "检测到您修改了按键或设置但尚未保存，是否保存后再退出？",
+                "You have unsaved changes to your keybinds or settings. Save now before exiting?"
+            );
+            promptBuilder.BeginRow(0f, TextAnchor.MiddleCenter);
+            promptBuilder.AddFlexibleSpace();
+            promptBuilder.AddLabel(body, "puh_unsaved_body");
+            var bodyEl = promptBuilder.Last;
+            if (bodyEl?.text != null)
+            {
+                bodyEl.text.alignment = TextAlignmentOptions.Center;
+                bodyEl.text.enableWordWrapping = false;
+                bodyEl.text.overflowMode = TextOverflowModes.Overflow;
+                I18n.ApplyFontIfRuntime(bodyEl.text, body);
+            }
+            promptBuilder.AddFlexibleSpace();
+            promptBuilder.End();
+
+            promptBuilder.AddSpace(14f);
+
+            promptBuilder.BeginRow(12f, TextAnchor.MiddleCenter);
+            promptBuilder.AddFlexibleSpace();
+
+            // 按钮 1：保存并退出
+            string btnSaveText = I18n.Get("保存并退出", "Save & Exit");
+            promptBuilder.AddButton(btnSaveText, () =>
+            {
+                CloseUnsavedChangesConfirmDialog();
+                onSaveAndExit?.Invoke();
+            }, "puh_btn_save_exit");
+            var btnSaveEl = promptBuilder.Last;
+            if (btnSaveEl != null)
+            {
+                btnSaveEl.SetFixedWidth(118f);
+                btnSaveEl.SetPreferredSize(118f, 36f);
+                btnSaveEl.SetFlexible(0f, 0f);
+                if (btnSaveEl.text != null)
+                {
+                    btnSaveEl.text.alignment = TextAlignmentOptions.Center;
+                    btnSaveEl.text.enableWordWrapping = false;
+                    btnSaveEl.text.overflowMode = TextOverflowModes.Overflow;
+                    I18n.ApplyFontIfRuntime(btnSaveEl.text, btnSaveText);
+                }
+            }
+
+            // 按钮 2：放弃修改
+            string btnDiscardText = I18n.Get("放弃修改", "Discard");
+            promptBuilder.AddButton(btnDiscardText, () =>
+            {
+                CloseUnsavedChangesConfirmDialog();
+                onDiscardAndExit?.Invoke();
+            }, "puh_btn_discard_exit");
+            var btnDiscardEl = promptBuilder.Last;
+            if (btnDiscardEl != null)
+            {
+                btnDiscardEl.SetFixedWidth(108f);
+                btnDiscardEl.SetPreferredSize(108f, 36f);
+                btnDiscardEl.SetFlexible(0f, 0f);
+                if (btnDiscardEl.text != null)
+                {
+                    btnDiscardEl.text.alignment = TextAlignmentOptions.Center;
+                    btnDiscardEl.text.enableWordWrapping = false;
+                    btnDiscardEl.text.overflowMode = TextOverflowModes.Overflow;
+                    I18n.ApplyFontIfRuntime(btnDiscardEl.text, btnDiscardText);
+                }
+            }
+
+            // 按钮 3：取消
+            string btnCancelText = I18n.Get("取消", "Cancel");
+            promptBuilder.AddButton(btnCancelText, () =>
+            {
+                CloseUnsavedChangesConfirmDialog();
+            }, "puh_btn_cancel");
+            var btnCancelEl = promptBuilder.Last;
+            if (btnCancelEl != null)
+            {
+                btnCancelEl.SetFixedWidth(96f);
+                btnCancelEl.SetPreferredSize(96f, 36f);
+                btnCancelEl.SetFlexible(0f, 0f);
+                if (btnCancelEl.text != null)
+                {
+                    btnCancelEl.text.alignment = TextAlignmentOptions.Center;
+                    btnCancelEl.text.enableWordWrapping = false;
+                    btnCancelEl.text.overflowMode = TextOverflowModes.Overflow;
+                    I18n.ApplyFontIfRuntime(btnCancelEl.text, btnCancelText);
+                }
+            }
+
+            promptBuilder.AddFlexibleSpace();
+            promptBuilder.End();
+
+            promptBuilder.AddSpace(12f);
+            promptBuilder.Show();
+        }
+
+        public static void PromptUnsavedChangesBeforeClosing()
+        {
+            if (_unsavedConfirmWindow != null && _unsavedConfirmWindow.IsAlive)
+            {
+                return;
+            }
+
+            ShowUnsavedChangesConfirmDialog(
+                onSaveAndExit: () =>
+                {
+                    if (_currentManager != null)
+                    {
+                        ApplyAllSettings(_currentManager);
+                    }
+                    CloseEnhancedWindowSafely();
+                },
+                onDiscardAndExit: () =>
+                {
+                    DiscardAllPendingChanges();
+                    CloseEnhancedWindowSafely();
+                }
+            );
+        }
+
+        private static void HookWindowCloseButton()
+        {
+            if (_currentWindow == null || _currentWindow.frame == null || _currentWindow.frame.closeButton == null)
+            {
+                return;
+            }
+
+            var btn = _currentWindow.frame.closeButton;
+            btn.onClick.RemoveAllListeners();
+            btn.onClick.AddListener(() =>
+            {
+                if (HasUnsavedChanges())
+                {
+                    PromptUnsavedChangesBeforeClosing();
+                }
+                else
+                {
+                    CloseEnhancedWindowSafely();
+                }
+            });
+        }
+
         // 缓存 ButtonTextColor 私有色彩字段（OnPointerEnter/Exit/Up/Disable 会使用 normal/highlight/pressed 覆写 text.color）
         private static readonly FieldInfo? BtcNormalField = AccessTools.Field(typeof(ButtonTextColor), "normal");
         private static readonly FieldInfo? BtcHighlightField = AccessTools.Field(typeof(ButtonTextColor), "highlight");
@@ -274,6 +720,13 @@ namespace ProbablyUnifiedHotkeys
         private static readonly FieldInfo? OverriddenDropdownsField = AccessTools.Field(typeof(GameOptionUIManager), "overriddenDropdowns");
         private static readonly FieldInfo? WindowField = AccessTools.Field(typeof(GameOptionUIManager), "window");
         private static readonly FieldInfo? ConsumedEscapeFrameField = AccessTools.Field(typeof(GameOptionUIManager), "consumedEscapeFrame");
+        private static readonly FieldInfo? CustomUIConsumedEscapeFrameField = AccessTools.Field(typeof(CustomUIManager), "consumedEscapeFrame");
+
+        public static void MarkEscapeConsumed()
+        {
+            ConsumedEscapeFrameField?.SetValue(null, Time.frameCount);
+            CustomUIConsumedEscapeFrameField?.SetValue(null, Time.frameCount);
+        }
 
         internal static void InvokeRefreshRulesSafe(GameOptionUIManager? manager)
         {
@@ -431,6 +884,8 @@ namespace ProbablyUnifiedHotkeys
             builder.SetCloseOnEscape(!isStoreUi);
             builder.OnClose(() =>
             {
+                CloseUnsavedChangesConfirmDialog();
+                _isExplicitWindowClosing = false;
                 _currentWindow = null;
                 _scrollRect = null;
                 _normalContentRoot = null;
@@ -769,49 +1224,20 @@ namespace ProbablyUnifiedHotkeys
             builder.End(); // 结束 BeginScrollFlexible
 
             // =================================================================
-            // 6. 底部操作栏：场景预设槽位、原生“应用设置”按钮与剪贴板 JSON 导入/导出
+            // 6. 底部操作栏：原生“应用设置”按钮（恢复纯净单按钮居中，与添加保存键位功能前保持完全一致）
             // =================================================================
             builder.AddSeparator(null, 2);
-
-            builder.BeginRow(6f, TextAnchor.MiddleCenter);
+            builder.BeginRow(4f, TextAnchor.MiddleCenter);
             builder.AddSpace(10f);
-
-            builder.AddButton(HotkeyProfileManager.GetBottomCycleButtonLabel(), OnCycleProfileSlotClicked, "btn_profile_slot_cycle");
-            _profileSlotCycleBtn = builder.Last;
-            StyleActionButton(_profileSlotCycleBtn, 96f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
-
-            builder.AddButton(I18n.Get("保存方案", "Save Preset"), () =>
-            {
-                OnSaveProfileSlotClicked(HotkeyProfileManager.ActiveSlotIndex);
-            }, "btn_profile_save");
-            _profileSaveBtn = builder.Last;
-            StyleActionButton(_profileSaveBtn, 96f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
-
-            builder.AddButton(I18n.Get("读取方案", "Load Preset"), () =>
-            {
-                OnLoadProfileSlotClicked(HotkeyProfileManager.ActiveSlotIndex);
-            }, "btn_profile_load");
-            _profileLoadBtn = builder.Last;
-            StyleActionButton(_profileLoadBtn, 96f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
-
             builder.AddFlexibleSpace();
 
             builder.AddButton(LocHelper.GetLocalizedMainMenu("option_apply"), () =>
             {
                 ApplyAllSettings(manager);
             }, "apply");
-            StyleNativeWidthButton(builder.Last, 168f);
+            StyleNativeWidthButton(builder.Last, 180f);
 
             builder.AddFlexibleSpace();
-
-            builder.AddButton(I18n.Get("导出剪贴板", "Export JSON"), OnExportClipboardClicked, "btn_profile_export");
-            _profileExportBtn = builder.Last;
-            StyleActionButton(_profileExportBtn, 112f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
-
-            builder.AddButton(I18n.Get("导入剪贴板", "Import JSON"), OnImportClipboardClicked, "btn_profile_import");
-            _profileImportBtn = builder.Last;
-            StyleActionButton(_profileImportBtn, 112f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
-
             builder.AddSpace(10f);
             builder.End();
 
@@ -824,6 +1250,7 @@ namespace ProbablyUnifiedHotkeys
             RefreshConflicts();
 
             _currentWindow = builder.Show();
+            HookWindowCloseButton();
             _currentWindowElements = CustomWindowElementsField?.GetValue(_currentWindow) as Dictionary<string, CustomUIElement>;
             _cachedSuspendableLayouts = null;
             _cachedSuspendableLayoutsDirty = true;
@@ -1882,6 +2309,13 @@ namespace ProbablyUnifiedHotkeys
                 _restoreCloseOnEscapeFrame = -1;
             }
 
+            // 正在录制按键或刚完成按键录制的缓冲帧内：由 Patch_CustomUIManager_HandleEscape 保证不触发未保存 Esc 弹窗
+            if (_capturingEntry == null && _currentWindow != null && _currentWindow.IsAlive && _currentWindow.IsVisible && _restoreCloseOnEscapeFrame < 0)
+            {
+                bool isStoreUi = StoreUIManager.Instance != null;
+                _currentWindow.closeOnEscape = !isStoreUi;
+            }
+
             if (_capturingEntry == null) return;
             if (Time.frameCount <= _capturingStartedFrame) return;
 
@@ -1897,7 +2331,7 @@ namespace ProbablyUnifiedHotkeys
             // 1. 仅 Esc 用于解除绑定（清空为无），Backspace 与 Delete 均作为普通可绑定按键
             if (Input.GetKeyDown(KeyCode.Escape))
             {
-                ConsumedEscapeFrameField?.SetValue(null, Time.frameCount);
+                MarkEscapeConsumed();
                 FinishCapture(KeyModifierMask.None, KeyCode.None, fromMouseClick: false);
                 return;
             }
@@ -2019,7 +2453,9 @@ namespace ProbablyUnifiedHotkeys
             _capturingEntry = null;
             _pendingStandaloneModifier = KeyCode.None;
             _hadMultipleModifiers = false;
+            _suppressEscapeUntilFrame = Time.frameCount + 2;
             _restoreCloseOnEscapeFrame = Time.frameCount + 2;
+            MarkEscapeConsumed();
 
             if (fromMouseClick)
             {
@@ -2047,7 +2483,13 @@ namespace ProbablyUnifiedHotkeys
             if (!entry.SupportsModifierCombos) newMods = KeyModifierMask.None;
             entry.PendingModifiers = newKey == KeyCode.None ? KeyModifierMask.None : newMods;
             entry.PendingKey = newKey;
-            entry.HasPendingChange = true;
+
+            // 校验是否有实质性修改
+            KeyCode currentKey = entry.GetKey?.Invoke() ?? KeyCode.None;
+            KeyModifierMask savedMods = entry.GetExternalModifiers != null
+                ? entry.GetExternalModifiers.Invoke()
+                : ComboKeyStore.GetSavedModifiers(entry.Id, currentKey);
+            entry.HasPendingChange = (newKey != currentKey || entry.PendingModifiers != savedMods);
 
             // 若捕获的是原版官方按键，立即同步主键到原版挂起字典
             if (entry.ModId == "vanilla" && _currentManager != null && !string.IsNullOrEmpty(entry.RawOptionId))
@@ -2061,7 +2503,9 @@ namespace ProbablyUnifiedHotkeys
             _capturingEntry = null;
             _pendingStandaloneModifier = KeyCode.None;
             _hadMultipleModifiers = false;
+            _suppressEscapeUntilFrame = Time.frameCount + 2;
             _restoreCloseOnEscapeFrame = Time.frameCount + 2;
+            MarkEscapeConsumed();
 
             if (fromMouseClick)
             {
@@ -4780,12 +5224,16 @@ namespace ProbablyUnifiedHotkeys
                 if (hk.ModId != "vanilla" || string.IsNullOrEmpty(hk.RawOptionId)) continue;
                 if (pendingKeys.TryGetValue(hk.RawOptionId, out KeyCode pk))
                 {
+                    KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
+                    KeyModifierMask savedMods = hk.GetExternalModifiers != null
+                        ? hk.GetExternalModifiers.Invoke()
+                        : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey);
                     if (!hk.HasPendingChange || hk.PendingKey != pk)
                     {
                         hk.PendingModifiers = KeyModifierMask.None;
                     }
                     hk.PendingKey = pk;
-                    hk.HasPendingChange = true;
+                    hk.HasPendingChange = (pk != currentKey || hk.PendingModifiers != savedMods);
                 }
                 else
                 {

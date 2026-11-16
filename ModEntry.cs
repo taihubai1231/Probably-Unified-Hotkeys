@@ -122,6 +122,104 @@ namespace ProbablyUnifiedHotkeys
     }
 
     /// <summary>
+    /// 拦截设置界面关闭：当处于按键录制期间或缓冲帧时压制关闭；当存在未保存更改时弹出防丢确认提示框
+    /// </summary>
+    [HarmonyPatch(typeof(GameOptionUIManager), nameof(GameOptionUIManager.CloseUI))]
+    public static class Patch_GameOptionUIManager_CloseUI
+    {
+        public static bool Prefix(GameOptionUIManager __instance)
+        {
+            try
+            {
+                if (UnifiedOptionUI.IsCapturingAnyKey || UnifiedOptionUI.IsSuppressingEscapeAfterCapture)
+                {
+                    return false;
+                }
+
+                if (UnifiedOptionUI.IsEnhancedWindowOpen && UnifiedOptionUI.HasUnsavedChanges() && !UnifiedOptionUI.IsExplicitWindowClosing)
+                {
+                    UnifiedOptionUI.PromptUnsavedChangesBeforeClosing();
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[ProbablyUnifiedHotkeys] Error in CloseUI unsaved check: {ex}");
+            }
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// 当处于按键录入状态或刚完成录入的缓冲帧时，告知商店 UI 本帧已消费 Esc，防止商店 UI 误触发 ResolveEscape 退出设置
+    /// </summary>
+    [HarmonyPatch(typeof(GameOptionUIManager), nameof(GameOptionUIManager.ConsumedEscapeThisFrame))]
+    public static class Patch_GameOptionUIManager_ConsumedEscapeThisFrame
+    {
+        public static void Postfix(ref bool __result)
+        {
+            if (__result) return;
+            if (UnifiedOptionUI.IsCapturingAnyKey || UnifiedOptionUI.IsSuppressingEscapeAfterCapture)
+            {
+                __result = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 当处于按键录入状态或刚完成录入的缓冲帧时，阻止 CustomUIManager 处理 Esc，防止按 Esc 清空键位时误关闭顶层窗口；
+    /// 并在选项窗口存在未保存更改时拦截 Esc，提示未保存防丢确认弹窗
+    /// </summary>
+    [HarmonyPatch(typeof(CustomUIManager), "HandleEscape")]
+    public static class Patch_CustomUIManager_HandleEscape
+    {
+        private static readonly FieldInfo? WindowOrderField = AccessTools.Field(typeof(CustomUIManager), "windowOrder");
+
+        public static bool Prefix(CustomUIManager __instance)
+        {
+            if (UnifiedOptionUI.IsCapturingAnyKey || UnifiedOptionUI.IsSuppressingEscapeAfterCapture)
+            {
+                return false;
+            }
+
+            if (UnifiedOptionUI.IsEnhancedWindowOpen && !UnifiedOptionUI.IsExplicitWindowClosing && KeyBindHelper.GetBackDown())
+            {
+                var windowOrder = WindowOrderField?.GetValue(__instance) as List<CustomUIWindow>;
+                if (windowOrder != null)
+                {
+                    CustomUIWindow? topWin = null;
+                    for (int i = windowOrder.Count - 1; i >= 0; i--)
+                    {
+                        var win = windowOrder[i];
+                        if (win != null && win.IsAlive && win.IsVisible && win.closeOnEscape)
+                        {
+                            topWin = win;
+                            break;
+                        }
+                    }
+
+                    if (topWin != null && topWin == UnifiedOptionUI.UnsavedConfirmWindow)
+                    {
+                        return true;
+                    }
+
+                    if (topWin != null && topWin == UnifiedOptionUI.CurrentWindow)
+                    {
+                        if (UnifiedOptionUI.HasUnsavedChanges())
+                        {
+                            UnifiedOptionUI.MarkEscapeConsumed();
+                            UnifiedOptionUI.PromptUnsavedChangesBeforeClosing();
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
     /// 隔离原版捕获轮询，避免修改模组快捷键时触发原版 KeyBindHelper 干扰
     /// </summary>
     [HarmonyPatch(typeof(GameOptionUIManager), "PollKeyCapture")]
