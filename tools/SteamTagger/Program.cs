@@ -264,10 +264,14 @@ internal static class Program
         });
         cr.Set(call);
 
-        for (int i = 0; i < 400 && !done; i++)
+        for (int i = 0; i < 1200 && !done; i++)
         {
             SteamAPI.RunCallbacks();
             Thread.Sleep(50);
+            if (i > 0 && i % 40 == 0)
+            {
+                Console.WriteLine($"[WaitCallResult] elapsed {i * 50 / 1000}s...");
+            }
         }
 
         result = captured;
