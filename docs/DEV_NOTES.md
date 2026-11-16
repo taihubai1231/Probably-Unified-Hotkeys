@@ -151,31 +151,47 @@
 
 ### 2. Steam 创意工坊发布流程（AppID `4348910` / Item `3837828444`）
 
-> **关键坑点**：
-> - `steamcmd` 会强制踢下线本地桌面的 Steam 客户端（`BLoggedOn=False`）；
-> - `steamcmd` 读取 VDF 时**会忽略 `"language"` 字段**，只更新默认语言槽位（导致简体中文客户端看到的介绍仍是旧版）。
-> - 多次连续提交元数据时，建议每次间隔约 **1 分钟**，避免触发 Steam Web / UGC 限流。
+> **核心机制与防不同步硬性红线**：
+> 1. **为什么不能删除 `schinese` 本地化词条？**
+>    - Valve 底层（Steamworks API `ISteamUGC`）**完全没有提供 `DeleteLanguage` 或注销语言槽位的接口**。
+>    - 历史上一旦对工坊物品设置过 `schinese`（简体中文），Steam 后端数据库就会永久保留该语言槽位。
+>    - **中文客户端优先逻辑**：所有简体中文客户端打开工坊页面时，Steam CDN 会**强制优先分发 `schinese` 槽位的文本**，完全忽略基础通用（Default/English）介绍。如果该槽位不更新，中文用户将永远停留在旧版本介绍！
+> 2. **为什么上传时会不同步？**
+>    - `steamcmd +workshop_build_item` 读取 VDF 时**默认仅更新通用（Default/English）槽位**，并不会触碰 `schinese` 本地化槽位。因此上传后文件包更新了、Change Notes 更新了，但工坊主页正文依然是旧版！
+>    - 同时，`steamcmd` 会强制踢下线本地桌面的 Steam 客户端（导致 `BLoggedOn=False`），使得紧随其后的 SteamAPI 调用直接报错 `k_EResultNotLoggedOn`。
+> 3. **严格禁止只执行 `default`**：每次发布新版本必须完整跑完「`default` 上传构建包 → 重新登录桌面 Steam → `schinese` 覆盖中文主页」闭环，严禁漏步！
 
-标准四步发布（见 `tools/publish_workshop.ps1`）：
+#### 标准三步闭环发布 SOP（严禁跳步）：
 
-1. **上传内容包 + 更新默认语言简介（`steamcmd`）**
+1. **第 1 步：上传内容包 + 写入改动说明（`steamcmd`）**
    ```powershell
    .\tools\publish_workshop.ps1 -Step default
    ```
-   （把仓库 `tools/steamcmd/probably_unified_hotkeys.vdf` 同步到 `E:\Program Files\steamcmd\probably_unified_hotkeys.vdf` 并交互登录 `steamcmd` 上传；提示需输入 Steam Guard 令牌，密码不落盘。）
-2. **重新登录桌面端 Steam 客户端**（确认在线后再继续）。
-3. **同步简体中文（`schinese`）标题与简介**
+   - 同步 `tools/steamcmd/probably_unified_hotkeys.vdf` 到 `E:\Program Files\steamcmd\probably_unified_hotkeys.vdf`；
+   - 通过 `steamcmd` 提交更新，输出 `Committing update...Success.`，完成构建包部署并生成官方「改动说明（Change Notes）」页面。
+   - **注意**：此时桌面端 Steam 会被踢下线，进入离线状态。
+
+2. **第 2 步：恢复桌面端 Steam 登录**
+   - 打开电脑桌面的 Steam 客户端，点击**重新连接**或重新登录账号；
+   - 验证登录状态：
+     ```powershell
+     .\tools\publish_workshop.ps1 -Step query
+     ```
+     必须输出 `BLoggedOn=True` 且 `Query eResult=k_EResultOK` 方可进入下一步。
+
+3. **第 3 步：强制同步简体中文（`schinese`）主页介绍与标签**
    ```powershell
-   .\tools\publish_workshop.ps1 -Step schinese
-   ```
-   底层通过 `tools/SteamTagger` 调用 `SteamUGC.SetItemUpdateLanguage("schinese")` 写入简体中文槽位；若 Steam 后端偶发 `k_EResultFileNotFound`，会自动补带 `SetItemContent` + `SetItemPreview` 重试。
-4. **（按需）恢复 11 个工坊分类标签 & 在线查验**
-   ```powershell
+   # 1. 覆盖工坊主页的简体中文文本槽位（防不同步的关键步骤）
+   .\tools\publish_workshop.ps1 -Step schinese -SkipCheck
+
+   # 2. （按需）确认保留 11 个工坊标准分类标签
    .\tools\publish_workshop.ps1 -Step tags
-   .\tools\publish_workshop.ps1 -Step query
    ```
-   固定保留的 11 个官方标签（大小写严格匹配工坊侧边栏）：
-   `Mod`、`Quality of Life`、`QoL`、`UI`、`Utilities`、`Simplified Chinese`、`Compatibility`、`Utility`、`Utilities for Players`、`Mono`、`English`。
+   - 底层通过 `tools/SteamTagger` 调用 `SteamUGC.SetItemUpdateLanguage("schinese")` 覆盖写入；
+   - **核验指标**：控制台输出的 `[AFTER] DescLen` 必须与本次 VDF 的 `Desc chars` 长度完全一致，且 `SubmitItemUpdate(schinese) result=k_EResultOK`；
+   - 在浏览器或 Steam 客户端中刷新创意工坊页面，肉眼确认主页版本号、特性介绍已完全同步。
+
+---
 
 ### 3. GitHub 归档发布
 
