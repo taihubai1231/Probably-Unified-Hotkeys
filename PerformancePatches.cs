@@ -320,6 +320,11 @@ namespace ProbablyUnifiedHotkeys
             return null;
         }
 
+        internal static CustomUIWindow? GetHandle(ModUIManager manager)
+        {
+            return HandleField?.GetValue(manager) as CustomUIWindow;
+        }
+
         internal static void ResetCaches()
         {
             ScopedModLookup.Clear();
@@ -949,6 +954,26 @@ namespace ProbablyUnifiedHotkeys
         {
             if (!ModFeatureConfig.EnablePerformancePatches) return true;
             return !ModUIManagerPerfHelper.ApplyFilterToRowsDiff(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(ModUIManager), "ApplyPreview")]
+    public static class Patch_ModUIManager_ApplyPreview
+    {
+        public static bool Prefix(ModUIManager __instance, LoadedMod? mod)
+        {
+            if (mod?.Manifest != null &&
+                string.Equals(mod.Manifest.ID, I18n.ModId, StringComparison.OrdinalIgnoreCase))
+            {
+                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
+                CustomUIElement? previewPanel = handle?.Get("preview_panel");
+                if (previewPanel != null)
+                {
+                    previewPanel.SetVisible(false);
+                }
+                return false;
+            }
+            return true;
         }
     }
 

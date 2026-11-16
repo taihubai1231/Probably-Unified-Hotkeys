@@ -64,6 +64,7 @@ namespace ProbablyUnifiedHotkeys
         private static readonly Dictionary<string, bool> InitialBoolSnapshots = new Dictionary<string, bool>(StringComparer.Ordinal);
         private static readonly Dictionary<string, float> InitialFloatSnapshots = new Dictionary<string, float>(StringComparer.Ordinal);
         private static readonly Dictionary<string, int> InitialIndexSnapshots = new Dictionary<string, int>(StringComparer.Ordinal);
+        private static readonly Dictionary<string, string> InitialStringSnapshots = new Dictionary<string, string>(StringComparer.Ordinal);
 
         private static bool IsLegacySelfModId(string? modId)
         {
@@ -297,7 +298,8 @@ namespace ProbablyUnifiedHotkeys
                         matchedConfigsByGroupId,
                         candidatesByGroupId,
                         managedStringIds,
-                        managedIntIds
+                        managedIntIds,
+                        mod
                     );
                 }
             }
@@ -332,7 +334,8 @@ namespace ProbablyUnifiedHotkeys
                             matchedConfigsByGroupId,
                             candidatesByGroupId,
                             managedStringIds,
-                            managedIntIds
+                            managedIntIds,
+                            ownerMod
                         );
                     }
                     else
@@ -350,7 +353,8 @@ namespace ProbablyUnifiedHotkeys
                             matchedConfigsByGroupId,
                             candidatesByGroupId,
                             managedStringIds,
-                            managedIntIds
+                            managedIntIds,
+                            null
                         );
                     }
                 }
@@ -462,6 +466,15 @@ namespace ProbablyUnifiedHotkeys
                         }
                         gen.SnapshotIndex = initIndex;
                     }
+                    else if (gen.Kind == OptionKind.Input && !gen.IsReadOnlyInfo)
+                    {
+                        if (!InitialStringSnapshots.TryGetValue(gen.Id, out string? initStr))
+                        {
+                            initStr = gen.GetString != null ? (gen.GetString() ?? string.Empty) : string.Empty;
+                            InitialStringSnapshots[gen.Id] = initStr;
+                        }
+                        gen.SnapshotString = initStr;
+                    }
                 }
 
                 List<ModConfig>? groupConfigs = null;
@@ -517,6 +530,7 @@ namespace ProbablyUnifiedHotkeys
                         gen.PendingBool = null;
                         gen.PendingFloat = null;
                         gen.PendingIndex = null;
+                        gen.PendingString = null;
                         if (!hasAnyConfig || gen.ResetToDefault == null)
                         {
                             gen.ResetToSnapshot();
@@ -723,7 +737,8 @@ namespace ProbablyUnifiedHotkeys
             Dictionary<string, List<ModConfig>> matchedConfigsByGroupId,
             Dictionary<string, List<DiagnosticCandidateEntry>> candidatesByGroupId,
             List<string> managedStringIds,
-            List<string> managedIntIds)
+            List<string> managedIntIds,
+            LoadedMod? ownerMod = null)
         {
             if (!matchedConfigsByGroupId.TryGetValue(group.ModId, out var cfgList))
             {
@@ -747,8 +762,15 @@ namespace ProbablyUnifiedHotkeys
                 string entryKey = entry.Key;
                 string label = entry.Label?.Invoke() ?? entryKey;
                 string tooltip = entry.Tooltip?.Invoke() ?? string.Empty;
+                string rawSection = entry.Section ?? string.Empty;
+                string sectionLabel = FormatModSectionLabel(rawSection, ownerMod, group.ModId);
                 string canonicalId = GetCanonicalConfigId(group.ModId, entry);
                 bool isForced = ComboKeyStore.IsForcedHotkey(canonicalId);
+
+                if (!isForced && IsInternalHiddenConfigEntry(group.ModId, entryKey))
+                {
+                    continue;
+                }
 
                 bool isHotkey = false;
                 bool isGeneral = false;
@@ -756,7 +778,7 @@ namespace ProbablyUnifiedHotkeys
 
                 if (IsHotkeyEntry(entry, canonicalId))
                 {
-                    var hotkey = CreateHotkeyFromConfigEntry(group, entry, canonicalId, label, tooltip);
+                    var hotkey = CreateHotkeyFromConfigEntry(group, entry, canonicalId, label, tooltip, rawSection, sectionLabel);
                     if (hotkey != null)
                     {
                         if (!ContainsHotkey(group, hotkey.Id, hotkey.DisplayName))
@@ -776,7 +798,7 @@ namespace ProbablyUnifiedHotkeys
                 }
                 else
                 {
-                    var general = CreateGeneralFromConfigEntry(group, entry, label, tooltip);
+                    var general = CreateGeneralFromConfigEntry(group, entry, label, tooltip, rawSection, sectionLabel);
                     if (general != null)
                     {
                         if (!ContainsGeneral(group, general.Id, general.DisplayName))
@@ -794,7 +816,11 @@ namespace ProbablyUnifiedHotkeys
                 // 收集潜在可转为按键的候选/被丢弃/已强转条目（用于诊断面板人工纠偏）
                 bool isOwnLanguageEntry = string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
                                           string.Equals(entryKey, I18n.LanguageConfigKey, StringComparison.Ordinal);
+                bool isReadOnlyTip = IsReadOnlyInfoConfigEntry(group.ModId, entryKey);
+                bool isDefinitelyTextSetting = !isForced && IsDefinitelyTextInputSetting(entryKey, label, entry);
                 bool isPromotableType = !isOwnLanguageEntry &&
+                                        !isReadOnlyTip &&
+                                        !isDefinitelyTextSetting &&
                                         (entry.ValueType == typeof(string) ||
                                          (entry.ValueType == typeof(int) && !entry.HasRange && (entry.Choices == null || entry.Choices.Length == 0)));
 
@@ -1522,7 +1548,447 @@ namespace ProbablyUnifiedHotkeys
                    kc == KeyCode.PageDown;
         }
 
-        private static ModHotkeyEntry? CreateHotkeyFromConfigEntry(ModOptionGroup group, ConfigEntry entry, string canonicalId, string label, string tooltip)
+        private static readonly string[] ChineseLocaleCandidates = new string[]
+        {
+            "zh", "zh-CN", "zh-Hans", "zh_CN", "zh-TW", "zh-Hant", "zh_TW", "cn", "chs"
+        };
+
+        private static readonly string[] EnglishLocaleCandidates = new string[]
+        {
+            "en", "en-US", "en_US", "en-GB", "eng"
+        };
+
+        private static readonly Dictionary<string, (string Zh, string En)> KnownSectionTitleTable =
+            new Dictionary<string, (string Zh, string En)>(StringComparer.OrdinalIgnoreCase)
+            {
+                // 通用默认分类
+                { "General", ("常规", "General") },
+                { "Default", ("常规", "General") },
+                { "General Settings", ("常规", "General") },
+                { "Settings", ("常规", "General") },
+                { "Config", ("常规", "General") },
+                { "Configuration", ("常规", "General") },
+                { "Options", ("常规", "General") },
+                { "Main", ("常规", "General") },
+
+                // nicokobo.speed-up (Nicokobo.ModUtilities ModText.AuthoredTables 静态字典键)
+                { "speed.config.dialogue", ("对话", "Dialogue") },
+                { "speed.config.animation", ("动画", "Animation") },
+                { "speed.config.global", ("全局", "Global") },
+                { "speed.config.display", ("显示", "Display") },
+                { "speed.config.hotkeys", ("快捷键", "Hotkeys") },
+
+                // item_details (启动阶段未打开 ModConfigWindow 时残留的英文分类或键名)
+                { "config.section.info", ("附加信息", "Extra Info") },
+                { "Extra Info", ("附加信息", "Extra Info") },
+                { "config.section.reveal", ("透视与揭露", "Reveal") },
+                { "Reveal", ("透视与揭露", "Reveal") },
+                { "config.section.layout", ("布局与排版", "Layout") },
+                { "Layout", ("布局与排版", "Layout") },
+                { "config.section.interaction", ("控制与交互", "Controls") },
+
+                // smart_inventory_arrange
+                { "Arrangement", ("整理规则", "Arrangement") },
+                { "Shortcuts", ("快捷操作", "Shortcuts") },
+                { "Diagnostics", ("诊断与日志", "Diagnostics") },
+
+                // item_durability_bars (物品耐久显示)
+                { "Item display", ("物品显示", "Item Display") },
+                { "Other settings", ("其他设置", "Other Settings") },
+
+                // better_liquid_scanner (更好的液体扫描仪)
+                { "Display", ("显示设置", "Display") },
+
+                // deep_space_trainer
+                { "QoL", ("便利性功能", "QoL") },
+                { "Quality of Life", ("便利性功能", "Quality of Life") },
+
+                // item_spawner
+                { "spawn", ("生成设置", "Spawn") },
+
+                // faction_reputation_expansion 及常见模组分类
+                { "Controls", ("控制与交互", "Controls") },
+                { "Control", ("控制与交互", "Control") },
+                { "Interaction", ("控制与交互", "Interaction") },
+                { "Presentation", ("界面与表现", "Presentation") },
+                { "Content", ("内容设置", "Content") },
+
+                // local.no-lost-items (NoF**kingDropItems)
+                { "counter", ("柜台防丢", "Counter") },
+                { "storage", ("仓储防丢", "Storage") },
+                { "suppliers", ("供货商防丢", "Suppliers") },
+
+                // 创意工坊常见通用分类词元
+                { "Debug", ("调试", "Debug") },
+                { "Debugging", ("调试", "Debugging") },
+                { "Hotkeys", ("快捷键", "Hotkeys") },
+                { "Hotkey", ("快捷键", "Hotkey") },
+                { "Keybinds", ("快捷键", "Keybinds") },
+                { "Keybindings", ("快捷键", "Keybindings") },
+                { "Dialogue", ("对话", "Dialogue") },
+                { "Dialog", ("对话", "Dialog") },
+                { "Animation", ("动画", "Animation") },
+                { "Animations", ("动画", "Animations") },
+                { "Global", ("全局", "Global") },
+                { "Audio", ("音频与音效", "Audio") },
+                { "Sound", ("音频与音效", "Sound") },
+                { "Sounds", ("音频与音效", "Sounds") },
+                { "UI", ("界面设置", "UI") },
+                { "Interface", ("界面设置", "Interface") },
+                { "Visual", ("外观与视觉", "Visual") },
+                { "Visuals", ("外观与视觉", "Visuals") },
+                { "Appearance", ("外观与视觉", "Appearance") },
+                { "Gameplay", ("玩法机制", "Gameplay") },
+                { "Mechanics", ("玩法机制", "Mechanics") },
+                { "Performance", ("性能与优化", "Performance") },
+                { "Optimization", ("性能与优化", "Optimization") },
+                { "Advanced", ("高级设置", "Advanced") },
+                { "Filter", ("过滤与筛选", "Filter") },
+                { "Filters", ("过滤与筛选", "Filters") },
+                { "Filtering", ("过滤与筛选", "Filtering") },
+                { "Notification", ("通知与提示", "Notification") },
+                { "Notifications", ("通知与提示", "Notifications") },
+                { "Experimental", ("实验性功能", "Experimental") },
+                { "Compatibility", ("兼容性", "Compatibility") },
+                { "Misc", ("其他设置", "Misc") },
+                { "Miscellaneous", ("其他设置", "Miscellaneous") },
+                { "Other", ("其他设置", "Other") },
+                { "Others", ("其他设置", "Others") },
+                { "Info", ("附加信息", "Info") },
+                { "Information", ("附加信息", "Information") },
+                { "Trade", ("交易设置", "Trade") },
+                { "Trading", ("交易设置", "Trading") },
+                { "Shop", ("店铺设置", "Shop") },
+                { "Inventory", ("背包与库存", "Inventory") },
+                { "Items", ("物品设置", "Items") },
+                { "Item", ("物品设置", "Item") },
+                { "Highlight", ("高亮设置", "Highlight") },
+                { "Tooltip", ("提示框设置", "Tooltip") },
+                { "Tooltips", ("提示框设置", "Tooltips") }
+            };
+
+        /// <summary>
+        /// 三层根治式模组分区标题本地化引擎：
+        /// 1. 优先查询游戏原生 LoadedMod.Localization 多语言表（支持原始本地化键名直查 + 启动期语言错位反向对齐）
+        /// 2. 命中内置创意工坊全生态分类词典（覆盖 nicokobo.speed-up 等内嵌字典模组及纯英文分类模组）
+        /// 3. 对未知未来模组的 xxx.config.yyy / settings_section_zzz 点分或下划线键名自动剥离前缀并人性化翻译
+        /// </summary>
+        internal static string FormatModSectionLabel(string? rawSection, LoadedMod? mod = null, string? modId = null)
+        {
+            if (string.IsNullOrWhiteSpace(rawSection))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = rawSection!.Trim();
+            if (trimmed.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            // 第 1 层：通过官方原生 LoadedMod.Localization 表解析（零反射、零权限）
+            LoadedMod? targetMod = mod ?? FindLoadedModById(modId);
+            if (targetMod != null && TryResolveFromModLocalization(targetMod, trimmed, out string localizedFromMod))
+            {
+                return localizedFromMod;
+            }
+
+            // 第 2 层：精确命中全生态分类词典
+            if (KnownSectionTitleTable.TryGetValue(trimmed, out var pair))
+            {
+                return I18n.Get(pair.Zh, pair.En);
+            }
+
+            // 第 3 层：针对 xxx.config.yyy / config.section.zzz / settings_section_xxx 等结构化原始键名的通用兜底净化
+            if (TryHumanizeStructuredSectionKey(trimmed, out string humanized))
+            {
+                return humanized;
+            }
+
+            return trimmed;
+        }
+
+        private static LoadedMod? FindLoadedModById(string? modId)
+        {
+            if (string.IsNullOrWhiteSpace(modId)) return null;
+            try
+            {
+                var mods = ModLoader.Mods;
+                if (mods == null) return null;
+                for (int i = 0; i < mods.Count; i++)
+                {
+                    var m = mods[i];
+                    if (m?.Manifest != null && string.Equals(m.Manifest.ID, modId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return m;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return null;
+        }
+
+        private static bool TryResolveFromModLocalization(LoadedMod mod, string rawSection, out string resolved)
+        {
+            resolved = string.Empty;
+            try
+            {
+                var loc = mod.Localization;
+                if (loc == null || loc.Count == 0) return false;
+
+                bool wantZh = I18n.IsChinese;
+                string[] primaryCandidates = wantZh ? ChineseLocaleCandidates : EnglishLocaleCandidates;
+                string primaryPrefix = wantZh ? "zh" : "en";
+
+                // 1a. 直接将 rawSection 作为本地化 Key 查询目标语言表（如 "speed.config.dialogue" / "config.section.info"）
+                if (TryLookupKeyInLocaleTables(loc, primaryCandidates, primaryPrefix, rawSection, out resolved))
+                {
+                    return true;
+                }
+
+                // 1b. 反向对齐：若模组在 OnLoad 启动期（LocalizationSettings 尚未就绪或语言切换前）将英文/旧语言值写死进了 Section，
+                // 在所有语言表中反查 Value == rawSection 的对应 Key，再取出当前目标语言下的译文
+                string? matchedKey = null;
+                foreach (var tableKvp in loc)
+                {
+                    var table = tableKvp.Value;
+                    if (table == null) continue;
+                    foreach (var entryKvp in table)
+                    {
+                        if (!string.IsNullOrWhiteSpace(entryKvp.Value) &&
+                            string.Equals(entryKvp.Value.Trim(), rawSection, StringComparison.OrdinalIgnoreCase))
+                        {
+                            matchedKey = entryKvp.Key;
+                            break;
+                        }
+                    }
+                    if (!string.IsNullOrEmpty(matchedKey)) break;
+                }
+
+                if (!string.IsNullOrEmpty(matchedKey) &&
+                    TryLookupKeyInLocaleTables(loc, primaryCandidates, primaryPrefix, matchedKey!, out resolved))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+            return false;
+        }
+
+        private static bool TryLookupKeyInLocaleTables(
+            Dictionary<string, Dictionary<string, string>> loc,
+            string[] candidates,
+            string localePrefix,
+            string key,
+            out string value)
+        {
+            value = string.Empty;
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (loc.TryGetValue(candidates[i], out var table) &&
+                    table != null &&
+                    TryGetNonEmptyIgnoreCase(table, key, out value))
+                {
+                    return true;
+                }
+            }
+
+            foreach (var kvp in loc)
+            {
+                if (kvp.Key != null &&
+                    kvp.Key.StartsWith(localePrefix, StringComparison.OrdinalIgnoreCase) &&
+                    kvp.Value != null &&
+                    TryGetNonEmptyIgnoreCase(kvp.Value, key, out value))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryGetNonEmptyIgnoreCase(Dictionary<string, string> table, string key, out string value)
+        {
+            if (table.TryGetValue(key, out string? exact) && !string.IsNullOrWhiteSpace(exact))
+            {
+                value = exact.Trim();
+                return true;
+            }
+
+            foreach (var kvp in table)
+            {
+                if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(kvp.Value))
+                {
+                    value = kvp.Value.Trim();
+                    return true;
+                }
+            }
+
+            value = string.Empty;
+            return false;
+        }
+
+        private static bool TryHumanizeStructuredSectionKey(string trimmed, out string result)
+        {
+            result = string.Empty;
+
+            // 含有空格或中文字符的已经是自然语言标题，不做标识符拆解
+            if (trimmed.IndexOf(' ') >= 0) return false;
+            for (int i = 0; i < trimmed.Length; i++)
+            {
+                if (trimmed[i] > 127) return false;
+            }
+
+            string tail = trimmed;
+            bool isStructuredKey = false;
+
+            // 处理点分路径：如 "speed.config.dialogue", "config.section.info", "mod.settings.audio"
+            if (trimmed.IndexOf('.') >= 0)
+            {
+                string[] parts = trimmed.Split(new[] { '.' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2)
+                {
+                    for (int i = 0; i < parts.Length - 1; i++)
+                    {
+                        string seg = parts[i];
+                        if (string.Equals(seg, "config", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(seg, "section", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(seg, "sections", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(seg, "settings", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(seg, "setting", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(seg, "options", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(seg, "option", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(seg, "ui", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(seg, "category", StringComparison.OrdinalIgnoreCase))
+                        {
+                            isStructuredKey = true;
+                            break;
+                        }
+                    }
+
+                    if (isStructuredKey || parts.Length >= 3)
+                    {
+                        isStructuredKey = true;
+                        tail = parts[parts.Length - 1];
+                    }
+                }
+            }
+
+            // 处理下划线前缀：如 "settings_section_general", "config_section_display", "section_audio"
+            string[] underscorePrefixes = new[]
+            {
+                "settings_section_",
+                "setting_section_",
+                "config_section_",
+                "cfg_section_",
+                "section_"
+            };
+            for (int i = 0; i < underscorePrefixes.Length; i++)
+            {
+                string pfx = underscorePrefixes[i];
+                if (tail.StartsWith(pfx, StringComparison.OrdinalIgnoreCase) && tail.Length > pfx.Length)
+                {
+                    tail = tail.Substring(pfx.Length);
+                    isStructuredKey = true;
+                    break;
+                }
+            }
+
+            if (!isStructuredKey || string.IsNullOrWhiteSpace(tail))
+            {
+                return false;
+            }
+
+            // 剥离出尾部语义词元后，优先再次查询内置词典（例如 tail == "dialogue" -> "对话"）
+            if (KnownSectionTitleTable.TryGetValue(tail, out var pair))
+            {
+                result = I18n.Get(pair.Zh, pair.En);
+                return true;
+            }
+
+            string tailSpaced = tail.Replace('_', ' ').Replace('-', ' ').Trim();
+            if (KnownSectionTitleTable.TryGetValue(tailSpaced, out var spacedPair))
+            {
+                result = I18n.Get(spacedPair.Zh, spacedPair.En);
+                return true;
+            }
+
+            // 将下划线/连字符拆分为首字母大写的整洁词组
+            string[] words = tailSpaced.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length == 0) return false;
+            for (int i = 0; i < words.Length; i++)
+            {
+                string w = words[i];
+                words[i] = w.Length == 1
+                    ? w.ToUpperInvariant()
+                    : char.ToUpperInvariant(w[0]) + w.Substring(1);
+            }
+            result = string.Join(" ", words);
+            return true;
+        }
+
+        private static bool IsInternalHiddenConfigEntry(string modId, string entryKey)
+        {
+            if (string.Equals(modId, "smart_inventory_arrange", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.Equals(entryKey, "PreserveFixedRules", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(entryKey, "KeepContainers", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsReadOnlyInfoConfigEntry(string modId, string entryKey)
+        {
+            if (string.Equals(modId, "faucet_filter", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(entryKey, "appearance_tip", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private static bool IsDefinitelyTextInputSetting(string entryKey, string label, ConfigEntry entry)
+        {
+            if (entry.ValueType != typeof(string)) return false;
+            if (ContainsNonHotkeyExclusion(entryKey, label)) return true;
+
+            string? sDef = entry.BoxedDefault as string;
+            string? sVal = entry.BoxedValue as string;
+            if ((sDef != null && (sDef.IndexOf(',') >= 0 || sDef.IndexOf(';') >= 0)) ||
+                (sVal != null && (sVal.IndexOf(',') >= 0 || sVal.IndexOf(';') >= 0)))
+            {
+                return true;
+            }
+
+            if (entryKey.IndexOf("IgnoredIds", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                entryKey.IndexOf("color", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                entryKey.IndexOf("_pins", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                label.IndexOf("颜色", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                label.IndexOf("忽略", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                label.IndexOf("置顶", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static ModHotkeyEntry? CreateHotkeyFromConfigEntry(
+            ModOptionGroup group,
+            ConfigEntry entry,
+            string canonicalId,
+            string label,
+            string tooltip,
+            string rawSection = "",
+            string sectionLabel = "")
         {
             bool usesComboString = entry.ValueType == typeof(string) &&
                 (string.Equals(group.ModId, "nicokobo.speed-up", StringComparison.OrdinalIgnoreCase) ||
@@ -1548,6 +2014,8 @@ namespace ProbablyUnifiedHotkeys
                 Id = canonicalId,
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
+                Section = rawSection,
+                SectionLabel = sectionLabel,
                 DisplayName = label,
                 Tooltip = tooltip,
                 DefaultKey = defaultKey,
@@ -1580,12 +2048,92 @@ namespace ProbablyUnifiedHotkeys
             return hk;
         }
 
-        private static ModGeneralEntry? CreateGeneralFromConfigEntry(ModOptionGroup group, ConfigEntry entry, string label, string tooltip)
+        private static string FormatEntryBoxedToString(ConfigEntry entry, object? boxed)
+        {
+            if (boxed == null) return string.Empty;
+            try
+            {
+                string formatted = ConfigEntry.Format(boxed);
+                if (formatted != null) return formatted;
+            }
+            catch
+            {
+            }
+            return boxed.ToString() ?? string.Empty;
+        }
+
+        private static bool TryParseEntryStringValue(ConfigEntry entry, string? rawText, out object? parsedValue)
+        {
+            parsedValue = null;
+            string text = rawText ?? string.Empty;
+            Type? vt = entry.ValueType;
+            if (vt == null || vt == typeof(string))
+            {
+                parsedValue = text;
+                return true;
+            }
+            if (vt.IsEnum)
+            {
+                try
+                {
+                    parsedValue = Enum.Parse(vt, text.Trim(), ignoreCase: true);
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+            if (vt == typeof(int) &&
+                int.TryParse(text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int iv))
+            {
+                parsedValue = iv;
+                return true;
+            }
+            if (vt == typeof(float) &&
+                float.TryParse(text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float fv))
+            {
+                parsedValue = fv;
+                return true;
+            }
+            if (vt == typeof(double) &&
+                double.TryParse(text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double dv))
+            {
+                parsedValue = dv;
+                return true;
+            }
+            return false;
+        }
+
+        private static void SetEntryFromInputString(ConfigEntry entry, string? rawText)
+        {
+            try
+            {
+                if (TryParseEntryStringValue(entry, rawText, out object? parsed) && parsed != null)
+                {
+                    SetEntryBoxed(entry, parsed);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[ProbablyUnifiedHotkeys] Error setting input config entry '{entry.Key}': {ex.Message}");
+            }
+        }
+
+        private static ModGeneralEntry? CreateGeneralFromConfigEntry(
+            ModOptionGroup group,
+            ConfigEntry entry,
+            string label,
+            string tooltip,
+            string rawSection = "",
+            string sectionLabel = "")
         {
             var item = new ModGeneralEntry
             {
                 Id = $"{group.ModId}.{entry.Key}",
                 ModId = group.ModId,
+                Section = rawSection,
+                SectionLabel = sectionLabel,
                 DisplayName = label,
                 Tooltip = tooltip,
                 ResetToDefault = () => ResetEntryToDefault(entry)
@@ -1596,25 +2144,6 @@ namespace ProbablyUnifiedHotkeys
                 item.Kind = OptionKind.Toggle;
                 item.GetBool = () => (bool)(entry.BoxedValue ?? false);
                 item.SetBool = (val) => SetEntryBoxed(entry, val);
-            }
-            else if (entry.HasRange || entry.ValueType == typeof(float) || entry.ValueType == typeof(int))
-            {
-                item.Kind = OptionKind.Slider;
-                item.Min = entry.Min;
-                item.Max = entry.Max > entry.Min ? entry.Max : 100f;
-                item.WholeNumbers = entry.ValueType == typeof(int);
-                item.GetFloat = () => Convert.ToSingle(entry.BoxedValue ?? 0f);
-                item.SetFloat = (val) =>
-                {
-                    if (entry.ValueType == typeof(int))
-                    {
-                        SetEntryBoxed(entry, Mathf.RoundToInt(val));
-                    }
-                    else
-                    {
-                        SetEntryBoxed(entry, val);
-                    }
-                };
             }
             else if (entry.Choices != null && entry.Choices.Length > 0)
             {
@@ -1633,15 +2162,79 @@ namespace ProbablyUnifiedHotkeys
                     {
                         string cur = entry.BoxedValue?.ToString() ?? string.Empty;
                         int idx = Array.IndexOf(entry.Choices, cur);
+                        if (idx < 0 && entry.Choices.Length > 0)
+                        {
+                            for (int i = 0; i < entry.Choices.Length; i++)
+                            {
+                                if (string.Equals(entry.Choices[i], cur, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    idx = i;
+                                    break;
+                                }
+                            }
+                        }
                         return idx >= 0 ? idx : 0;
                     };
                     item.SetIndex = (idx) =>
                     {
                         if (idx >= 0 && idx < entry.Choices.Length)
                         {
-                            SetEntryBoxed(entry, entry.Choices[idx]);
+                            string choiceStr = entry.Choices[idx];
+                            if (entry.ValueType != null && entry.ValueType.IsEnum)
+                            {
+                                try
+                                {
+                                    object enumVal = Enum.Parse(entry.ValueType, choiceStr, ignoreCase: true);
+                                    SetEntryBoxed(entry, enumVal);
+                                    return;
+                                }
+                                catch { }
+                            }
+                            if (entry.ValueType != typeof(string) && TryParseEntryStringValue(entry, choiceStr, out object? parsedChoice) && parsedChoice != null)
+                            {
+                                SetEntryBoxed(entry, parsedChoice);
+                                return;
+                            }
+                            SetEntryBoxed(entry, choiceStr);
                         }
                     };
+                }
+            }
+            else if (entry.HasRange && (entry.ValueType == typeof(float) || entry.ValueType == typeof(int) || entry.ValueType == typeof(double)))
+            {
+                item.Kind = OptionKind.Slider;
+                item.Min = entry.Min;
+                item.Max = entry.Max > entry.Min ? entry.Max : (entry.Min + 100f);
+                item.WholeNumbers = entry.ValueType == typeof(int);
+                item.GetFloat = () => Convert.ToSingle(entry.BoxedValue ?? 0f);
+                item.SetFloat = (val) =>
+                {
+                    if (entry.ValueType == typeof(int))
+                    {
+                        SetEntryBoxed(entry, Mathf.RoundToInt(val));
+                    }
+                    else
+                    {
+                        SetEntryBoxed(entry, val);
+                    }
+                };
+            }
+            else if (entry.ValueType == typeof(string) ||
+                     entry.ValueType == typeof(int) ||
+                     entry.ValueType == typeof(float) ||
+                     entry.ValueType == typeof(double))
+            {
+                item.Kind = OptionKind.Input;
+                if (IsReadOnlyInfoConfigEntry(group.ModId, entry.Key))
+                {
+                    item.IsReadOnlyInfo = true;
+                    item.GetString = () => string.Empty;
+                    item.SetString = null;
+                }
+                else
+                {
+                    item.GetString = () => FormatEntryBoxedToString(entry, entry.BoxedValue);
+                    item.SetString = (val) => SetEntryFromInputString(entry, val);
                 }
             }
             else
@@ -1760,6 +2353,14 @@ namespace ProbablyUnifiedHotkeys
                         registryMatchedModIds?.Add(group.ModId);
                         string label = entry.label?.Invoke() ?? entry.id;
                         string tooltip = entry.tooltip?.Invoke() ?? string.Empty;
+                        string rawSecId = !isVanillaSec ? (sec.id ?? string.Empty) : string.Empty;
+                        string rawSecTitle = !isVanillaSec ? (sec.label?.Invoke() ?? string.Empty) : string.Empty;
+                        LoadedMod? regOwnerMod = null;
+                        if (modById != null && !string.IsNullOrEmpty(group.ModId))
+                        {
+                            modById.TryGetValue(group.ModId, out regOwnerMod);
+                        }
+                        string secLabel = FormatModSectionLabel(!string.IsNullOrEmpty(rawSecTitle) ? rawSecTitle : rawSecId, regOwnerMod, group.ModId);
 
                         if (entry.kind == GameOptionRegistry.Kind.KeyBind)
                         {
@@ -1770,6 +2371,8 @@ namespace ProbablyUnifiedHotkeys
                                 RawOptionId = entry.id,
                                 ModId = group.ModId,
                                 ModDisplayName = group.DisplayName,
+                                Section = rawSecId,
+                                SectionLabel = secLabel,
                                 DisplayName = label,
                                 Tooltip = tooltip,
                                 GetKey = entry.getKey ?? (() => KeyCode.None),
@@ -1785,6 +2388,8 @@ namespace ProbablyUnifiedHotkeys
                             {
                                 Id = entry.id,
                                 ModId = group.ModId,
+                                Section = rawSecId,
+                                SectionLabel = secLabel,
                                 DisplayName = label,
                                 Tooltip = tooltip
                             };

@@ -63,12 +63,27 @@ namespace ProbablyUnifiedHotkeys
         private static Dictionary<string, ModHotkeyEntry> _vanillaHotkeyByRawId = new Dictionary<string, ModHotkeyEntry>(StringComparer.OrdinalIgnoreCase);
         private static Dictionary<KeyCombo, List<ModHotkeyEntry>> _conflicts = new Dictionary<KeyCombo, List<ModHotkeyEntry>>();
 
-        // 会话内记住原版分区折叠状态（默认展开，支持随时折叠）
+        // 会话内记住原版分区折叠状态（默认折叠，支持随时展开/折叠）
         private static readonly Dictionary<string, bool> VanillaExpandedStates = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
         // 卡片内部分区头部及分隔线引用（供搜索过滤动态显示/隐藏）
-        private static readonly Dictionary<ModOptionGroup, (GameObject? hkHeader, GameObject? genHeader, GameObject? probedHeader, GameObject? midSep, GameObject? probedSep)> CardParts
-            = new Dictionary<ModOptionGroup, (GameObject?, GameObject?, GameObject?, GameObject?, GameObject?)>();
+        private sealed class GeneralSectionBlock
+        {
+            public GameObject? SeparatorObj;
+            public GameObject? HeaderObj;
+            public readonly List<ModGeneralEntry> Entries = new List<ModGeneralEntry>();
+        }
+
+        private sealed class ModCardUiParts
+        {
+            public GameObject? HkHeader;
+            public GameObject? ProbedHeader;
+            public GameObject? ProbedSep;
+            public readonly List<GeneralSectionBlock> GeneralSections = new List<GeneralSectionBlock>();
+        }
+
+        private static readonly Dictionary<ModOptionGroup, ModCardUiParts> CardParts
+            = new Dictionary<ModOptionGroup, ModCardUiParts>();
 
         // UI 元素级高性能缓存（窗口关闭时清理）
         private struct ButtonFitSpec
@@ -215,6 +230,13 @@ namespace ProbablyUnifiedHotkeys
         private static CustomUIElement? _normalDisplayDropdown;
         private static CustomUIElement? _diagnosticFilterDropdown;
         private static TMP_InputField? _searchInputField;
+        private static CustomUIElement? _profileSlotCycleBtn;
+        private static CustomUIElement? _profileSaveBtn;
+        private static CustomUIElement? _profileLoadBtn;
+        private static CustomUIElement? _profileExportBtn;
+        private static CustomUIElement? _profileImportBtn;
+        private static GameObject? _selfProfileSectionContainer;
+        private static readonly CustomUIElement?[] _selfProfileSlotDetailLabels = new CustomUIElement?[HotkeyProfileManager.SlotCount];
 
         // 缓存 ButtonTextColor 私有色彩字段（OnPointerEnter/Exit/Up/Disable 会使用 normal/highlight/pressed 覆写 text.color）
         private static readonly FieldInfo? BtcNormalField = AccessTools.Field(typeof(ButtonTextColor), "normal");
@@ -288,6 +310,16 @@ namespace ProbablyUnifiedHotkeys
             ButtonFitSpecCache.Clear();
             CardParts.Clear();
             _diagnosticSectionViews.Clear();
+            _profileSlotCycleBtn = null;
+            _profileSaveBtn = null;
+            _profileLoadBtn = null;
+            _profileExportBtn = null;
+            _profileImportBtn = null;
+            _selfProfileSectionContainer = null;
+            for (int i = 0; i < _selfProfileSlotDetailLabels.Length; i++)
+            {
+                _selfProfileSlotDetailLabels[i] = null;
+            }
         }
 
         private static void ResetDiagnosticSectionDefaults()
@@ -464,6 +496,15 @@ namespace ProbablyUnifiedHotkeys
             );
             var searchEl = builder.Last;
             searchEl.SetFlexible(1f, 0f);
+            if (searchEl.root != null)
+            {
+                var searchLe = searchEl.root.GetComponent<LayoutElement>() ?? searchEl.root.AddComponent<LayoutElement>();
+                searchLe.layoutPriority = 100;
+                searchLe.minWidth = 180f;
+                searchLe.preferredWidth = 240f;
+                searchLe.flexibleWidth = 1f;
+                searchLe.flexibleHeight = 0f;
+            }
             if (searchEl.input != null)
             {
                 _searchInputField = searchEl.input;
@@ -728,20 +769,49 @@ namespace ProbablyUnifiedHotkeys
             builder.End(); // 结束 BeginScrollFlexible
 
             // =================================================================
-            // 6. 底部操作栏：原生“应用设置”按钮
+            // 6. 底部操作栏：场景预设槽位、原生“应用设置”按钮与剪贴板 JSON 导入/导出
             // =================================================================
             builder.AddSeparator(null, 2);
-            builder.BeginRow(4f, TextAnchor.MiddleCenter);
+
+            builder.BeginRow(6f, TextAnchor.MiddleCenter);
             builder.AddSpace(10f);
+
+            builder.AddButton(HotkeyProfileManager.GetBottomCycleButtonLabel(), OnCycleProfileSlotClicked, "btn_profile_slot_cycle");
+            _profileSlotCycleBtn = builder.Last;
+            StyleActionButton(_profileSlotCycleBtn, 96f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+
+            builder.AddButton(I18n.Get("保存方案", "Save Preset"), () =>
+            {
+                OnSaveProfileSlotClicked(HotkeyProfileManager.ActiveSlotIndex);
+            }, "btn_profile_save");
+            _profileSaveBtn = builder.Last;
+            StyleActionButton(_profileSaveBtn, 96f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+
+            builder.AddButton(I18n.Get("读取方案", "Load Preset"), () =>
+            {
+                OnLoadProfileSlotClicked(HotkeyProfileManager.ActiveSlotIndex);
+            }, "btn_profile_load");
+            _profileLoadBtn = builder.Last;
+            StyleActionButton(_profileLoadBtn, 96f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+
             builder.AddFlexibleSpace();
 
             builder.AddButton(LocHelper.GetLocalizedMainMenu("option_apply"), () =>
             {
                 ApplyAllSettings(manager);
             }, "apply");
-            StyleNativeWidthButton(builder.Last, 180f);
+            StyleNativeWidthButton(builder.Last, 168f);
 
             builder.AddFlexibleSpace();
+
+            builder.AddButton(I18n.Get("导出剪贴板", "Export JSON"), OnExportClipboardClicked, "btn_profile_export");
+            _profileExportBtn = builder.Last;
+            StyleActionButton(_profileExportBtn, 112f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+
+            builder.AddButton(I18n.Get("导入剪贴板", "Import JSON"), OnImportClipboardClicked, "btn_profile_import");
+            _profileImportBtn = builder.Last;
+            StyleActionButton(_profileImportBtn, 112f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+
             builder.AddSpace(10f);
             builder.End();
 
@@ -810,7 +880,8 @@ namespace ProbablyUnifiedHotkeys
         {
             builder.BeginRow(8f, TextAnchor.MiddleLeft);
             headerRow = builder.CurrentContainer.gameObject;
-            builder.AddSpace(6f);
+            ConfigureStretchRowObject(headerRow, 38f);
+            AddFixedHorizontalSpace(builder, 6f);
 
             builder.AddButton(initialExpanded ? "▼" : "▶", onFoldClicked, foldButtonId);
             foldBtn = builder.Last;
@@ -832,7 +903,7 @@ namespace ProbablyUnifiedHotkeys
                 );
             string cardHeaderText = $"<b>{title}</b> {badge}";
             builder.AddLabel(cardHeaderText, labelId);
-            I18n.ApplyFontIfRuntime(builder.Last?.text, cardHeaderText);
+            ConfigureSingleLineRowLabel(builder.Last, cardHeaderText, minWidth: 200f, minHeight: 32f);
 
             builder.AddFlexibleSpace();
             buildRightContent?.Invoke(builder);
@@ -841,7 +912,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 if (buildRightContent != null)
                 {
-                    builder.AddSpace(6f);
+                    AddFixedHorizontalSpace(builder, 6f);
                 }
                 builder.AddButton(I18n.Get("恢复默认", "Reset"), () =>
                 {
@@ -853,7 +924,7 @@ namespace ProbablyUnifiedHotkeys
                 card.ResetButtonElement?.SetVisible(initialExpanded && card.ResetToDefaultsAction != null);
             }
 
-            builder.AddSpace(6f);
+            AddFixedHorizontalSpace(builder, 6f);
             builder.End();
         }
 
@@ -884,7 +955,7 @@ namespace ProbablyUnifiedHotkeys
 
             if (filteredEntries.Count == 0) return;
 
-            bool isExpanded = VanillaExpandedStates.TryGetValue(section.id, out bool savedState) ? savedState : true;
+            bool isExpanded = VanillaExpandedStates.TryGetValue(section.id, out bool savedState) ? savedState : false;
             VanillaExpandedStates[section.id] = isExpanded;
 
             var card = new VanillaSectionCard
@@ -923,10 +994,12 @@ namespace ProbablyUnifiedHotkeys
             // 构建折叠内容容器：顶部细分隔线 + 与模组卡片完全一致的 18px/10px 内缩进列
             builder.BeginColumn(2f, TextAnchor.UpperLeft);
             card.ContentContainerObject = builder.CurrentContainer.gameObject;
+            ConfigureStretchColumnObject(card.ContentContainerObject);
             builder.AddSeparator(null, 1);
 
             builder.BeginColumn(4f, TextAnchor.UpperLeft);
             var entriesColumnRt = builder.CurrentContainer;
+            ConfigureStretchColumnObject(entriesColumnRt.gameObject);
             var entriesLayout = entriesColumnRt.GetComponent<VerticalLayoutGroup>();
             if (entriesLayout != null)
             {
@@ -939,13 +1012,25 @@ namespace ProbablyUnifiedHotkeys
                 int childBefore = entriesColumnRt.childCount;
                 BuildEntryDelegate?.Invoke(manager, builder, entry);
 
+                var vanillaLabelEl = builder.Handle?.Get("label_" + entry.id);
+                if (vanillaLabelEl != null)
+                {
+                    ConfigureSingleLineRowLabel(vanillaLabelEl, vanillaLabelEl.text != null ? vanillaLabelEl.text.text : SafeSectionText(entry.label, entry.id), minWidth: 180f);
+                }
+                var vanillaCtrlEl = builder.Handle?.Get(entry.id);
+                if (vanillaCtrlEl?.input != null && vanillaCtrlEl.root != null)
+                {
+                    var vLe = vanillaCtrlEl.root.GetComponent<LayoutElement>() ?? vanillaCtrlEl.root.AddComponent<LayoutElement>();
+                    vLe.layoutPriority = 100;
+                }
+
                 ModHotkeyEntry? linked = null;
                 if (entry.kind == GameOptionRegistry.Kind.KeyBind)
                 {
                     if (_vanillaHotkeyByRawId.TryGetValue(entry.id, out linked) && linked != null && builder.Handle != null)
                     {
-                        linked.LabelElement = builder.Handle.Get("label_" + entry.id);
-                        linked.ButtonElement = builder.Handle.Get(entry.id);
+                        linked.LabelElement = vanillaLabelEl;
+                        linked.ButtonElement = vanillaCtrlEl;
                     }
                 }
 
@@ -958,7 +1043,9 @@ namespace ProbablyUnifiedHotkeys
                 };
                 for (int i = childBefore; i < entriesColumnRt.childCount; i++)
                 {
-                    item.RowObjects.Add(entriesColumnRt.GetChild(i).gameObject);
+                    var rowGo = entriesColumnRt.GetChild(i).gameObject;
+                    ConfigureStretchRowObject(rowGo, 32f);
+                    item.RowObjects.Add(rowGo);
                 }
                 card.Entries.Add(item);
             }
@@ -1019,6 +1106,7 @@ namespace ProbablyUnifiedHotkeys
             // 2. 卡片展开内容占位容器（折叠态初始为空，由窗口开启后的静默后台预建或按需触发填充）
             builder.BeginColumn(3f, TextAnchor.UpperLeft);
             group.ContentContainerObject = builder.CurrentContainer.gameObject;
+            ConfigureStretchColumnObject(group.ContentContainerObject);
             group.ContentContainerObject.SetActive(false);
             builder.End();
 
@@ -1058,20 +1146,20 @@ namespace ProbablyUnifiedHotkeys
                 builder.AddSeparator(null, 1);
 
                 GameObject? hkHeaderObj = null;
-                GameObject? genHeaderObj = null;
                 GameObject? probedHeaderObj = null;
-                GameObject? midSepObj = null;
                 GameObject? probedSepObj = null;
+                var cardParts = new ModCardUiParts();
 
                 // --- 上半截：快捷键绑定 ---
                 if (group.Hotkeys.Count > 0)
                 {
                     builder.BeginRow(4f, TextAnchor.MiddleLeft);
                     hkHeaderObj = builder.CurrentContainer.gameObject;
-                    builder.AddSpace(18f);
+                    ConfigureStretchRowObject(hkHeaderObj, 26f);
+                    AddFixedHorizontalSpace(builder, 18f);
                     string hkHdrText = I18n.Get("<color=#9ec4ff><b>快捷键</b></color>", "<color=#9ec4ff><b>Hotkeys</b></color>");
                     builder.AddLabel(hkHdrText, "hk_hdr_" + group.ModId);
-                    I18n.ApplyFontIfRuntime(builder.Last?.text, hkHdrText);
+                    ConfigureSingleLineRowLabel(builder.Last, hkHdrText, minWidth: 160f, minHeight: 24f);
                     builder.End();
 
                     foreach (var hotkey in group.Hotkeys)
@@ -1080,30 +1168,42 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
 
-                // --- 中间横线分隔（上半快捷键与下半常规同时存在时显示） ---
-                if (group.Hotkeys.Count > 0 && group.GeneralSettings.Count > 0)
-                {
-                    builder.AddSeparator(null, 1);
-                    if (contentRt.childCount > 0)
-                    {
-                        midSepObj = contentRt.GetChild(contentRt.childCount - 1).gameObject;
-                    }
-                }
-
-                // --- 下半截：常规通用配置 (开关 / 滑块 / 下拉框) ---
+                // --- 下半截：常规通用配置 (按原模组 Section 分组展示：开关 / 滑块 / 下拉框 / 文本输入框) ---
                 if (group.GeneralSettings.Count > 0)
                 {
-                    builder.BeginRow(4f, TextAnchor.MiddleLeft);
-                    genHeaderObj = builder.CurrentContainer.gameObject;
-                    builder.AddSpace(18f);
-                    string genHdrText = I18n.Get("<color=#a8d8b9><b>常规设置</b></color>", "<color=#a8d8b9><b>General Settings</b></color>");
-                    builder.AddLabel(genHdrText, "gen_hdr_" + group.ModId);
-                    I18n.ApplyFontIfRuntime(builder.Last?.text, genHdrText);
-                    builder.End();
-
-                    foreach (var gen in group.GeneralSettings)
+                    var orderedSections = GroupGeneralSettingsBySection(group);
+                    for (int sIdx = 0; sIdx < orderedSections.Count; sIdx++)
                     {
-                        BuildGeneralSettingRow(builder, gen);
+                        var (secTitle, secEntries) = orderedSections[sIdx];
+                        var secBlock = new GeneralSectionBlock();
+                        secBlock.Entries.AddRange(secEntries);
+
+                        // 分隔线（首个常规分区仅在上方有可见快捷键时显示；后续分区在前序有可见内容时显示）
+                        builder.AddSeparator(null, 1);
+                        if (contentRt.childCount > 0)
+                        {
+                            secBlock.SeparatorObj = contentRt.GetChild(contentRt.childCount - 1).gameObject;
+                            if (sIdx == 0 && group.Hotkeys.Count == 0)
+                            {
+                                secBlock.SeparatorObj.SetActive(false);
+                            }
+                        }
+
+                        builder.BeginRow(4f, TextAnchor.MiddleLeft);
+                        secBlock.HeaderObj = builder.CurrentContainer.gameObject;
+                        ConfigureStretchRowObject(secBlock.HeaderObj, 26f);
+                        AddFixedHorizontalSpace(builder, 18f);
+                        string genHdrText = $"<color=#a8d8b9><b>{secTitle}</b></color>";
+                        builder.AddLabel(genHdrText, $"gen_hdr_{group.ModId}_{sIdx}");
+                        ConfigureSingleLineRowLabel(builder.Last, genHdrText, minWidth: 160f, minHeight: 24f);
+                        builder.End();
+
+                        for (int eIdx = 0; eIdx < secEntries.Count; eIdx++)
+                        {
+                            BuildGeneralSettingRow(builder, secEntries[eIdx]);
+                        }
+
+                        cardParts.GeneralSections.Add(secBlock);
                     }
                 }
 
@@ -1121,12 +1221,13 @@ namespace ProbablyUnifiedHotkeys
 
                     builder.BeginRow(4f, TextAnchor.MiddleLeft);
                     probedHeaderObj = builder.CurrentContainer.gameObject;
-                    builder.AddSpace(18f);
+                    ConfigureStretchRowObject(probedHeaderObj, 26f);
+                    AddFixedHorizontalSpace(builder, 18f);
                     string probedHdrText = I18n.Get(
                         "<color=#d8b4fe><b>自动探测热键 (只读 · 仅供冲突排查)</b></color>",
                         "<color=#d8b4fe><b>Probed Hotkeys (Read-Only · Conflict Check)</b></color>");
                     builder.AddLabel(probedHdrText, "probed_hdr_" + group.ModId);
-                    I18n.ApplyFontIfRuntime(builder.Last?.text, probedHdrText);
+                    ConfigureSingleLineRowLabel(builder.Last, probedHdrText, minWidth: 200f, minHeight: 24f);
                     builder.End();
 
                     foreach (var probed in group.ReadOnlyProbedHotkeys)
@@ -1135,8 +1236,17 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
 
+                // --- 本模组专属：键位与设置方案快照管理面板（3 套场景预设槽位 + 剪贴板 JSON 导入/导出） ---
+                if (string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase))
+                {
+                    BuildSelfModProfileSection(builder);
+                }
+
                 builder.AddSpace(4f);
-                CardParts[group] = (hkHeaderObj, genHeaderObj, probedHeaderObj, midSepObj, probedSepObj);
+                cardParts.HkHeader = hkHeaderObj;
+                cardParts.ProbedHeader = probedHeaderObj;
+                cardParts.ProbedSep = probedSepObj;
+                CardParts[group] = cardParts;
 
                 if (_normalDisplayMode != NormalDisplayMode.All || !string.IsNullOrWhiteSpace(_searchQuery))
                 {
@@ -1174,13 +1284,121 @@ namespace ProbablyUnifiedHotkeys
             group.SetExpanded(expanded);
         }
 
+        private static List<(string SectionTitle, List<ModGeneralEntry> Entries)> GroupGeneralSettingsBySection(ModOptionGroup group)
+        {
+            string defaultHeader = I18n.Get("常规设置", "General Settings");
+            var buckets = new List<(string RawTitle, List<ModGeneralEntry> Entries)>();
+            var indexByTitle = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < group.GeneralSettings.Count; i++)
+            {
+                var gen = group.GeneralSettings[i];
+                if (gen == null) continue;
+
+                string rawTitle = !string.IsNullOrWhiteSpace(gen.SectionLabel)
+                    ? gen.SectionLabel.Trim()
+                    : (!string.IsNullOrWhiteSpace(gen.Section)
+                        ? ModOptionScanner.FormatModSectionLabel(gen.Section, null, group.ModId)
+                        : string.Empty);
+
+                if (IsDefaultOrSelfModSectionTitle(rawTitle, group) ||
+                    IsDefaultOrSelfModSectionTitle(gen.Section, group))
+                {
+                    rawTitle = string.Empty;
+                }
+
+                if (!indexByTitle.TryGetValue(rawTitle, out int idx))
+                {
+                    idx = buckets.Count;
+                    indexByTitle[rawTitle] = idx;
+                    buckets.Add((rawTitle, new List<ModGeneralEntry>()));
+                }
+                buckets[idx].Entries.Add(gen);
+            }
+
+            var result = new List<(string SectionTitle, List<ModGeneralEntry> Entries)>(buckets.Count);
+            for (int i = 0; i < buckets.Count; i++)
+            {
+                string title = string.IsNullOrEmpty(buckets[i].RawTitle) ? defaultHeader : buckets[i].RawTitle;
+                result.Add((title, buckets[i].Entries));
+            }
+            return result;
+        }
+
+        private static bool IsDefaultOrSelfModSectionTitle(string? title, ModOptionGroup group)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return true;
+            string t = title!.Trim();
+            if (string.Equals(t, "常规", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t, "常规设置", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t, "General", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t, "General Settings", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t, "Default", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t, "Settings", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t, "Config", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.Equals(t, group.DisplayName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t, group.ModId, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // 识别去作者前缀后的模组名（如 chiqingsan.AquaSense 的 Section 填为 "AquaSense"）
+            if (!string.IsNullOrEmpty(group.ModId))
+            {
+                int dot = group.ModId.IndexOf('.');
+                if (dot >= 0 && dot + 1 < group.ModId.Length)
+                {
+                    string modIdTail = group.ModId.Substring(dot + 1);
+                    if (string.Equals(t, modIdTail, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            // 识别中英双语正反序模组名（如 DisplayName 为 "幸运特性增强 / Lucky Perk Plus" 而 Section 为 "Lucky Perk Plus / 幸运特性增强"）
+            if (!string.IsNullOrEmpty(group.DisplayName) && group.DisplayName.IndexOf('/') >= 0)
+            {
+                string[] dispParts = group.DisplayName.Split('/');
+                for (int i = 0; i < dispParts.Length; i++)
+                {
+                    string dp = dispParts[i].Trim();
+                    if (dp.Length > 0 && string.Equals(t, dp, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                if (dispParts.Length == 2 && t.IndexOf('/') >= 0)
+                {
+                    string[] secParts = t.Split('/');
+                    if (secParts.Length == 2 &&
+                        string.Equals(dispParts[0].Trim(), secParts[1].Trim(), StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(dispParts[1].Trim(), secParts[0].Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         private static void BuildGeneralSettingRow(CustomUIBuilder builder, ModGeneralEntry gen)
         {
             builder.BeginRow(6f, TextAnchor.MiddleLeft);
             gen.RowObject = builder.CurrentContainer.gameObject;
-            builder.AddSpace(18f);
+            ConfigureStretchRowObject(gen.RowObject, 34f);
+            AddFixedHorizontalSpace(builder, 18f);
 
             string labelText = gen.DisplayName;
+            if (gen.IsReadOnlyInfo)
+            {
+                labelText = $"<color=#99a3b0>{labelText}</color>";
+            }
             if (!string.IsNullOrEmpty(gen.Tooltip))
             {
                 string link = "modopt:" + gen.Id;
@@ -1189,7 +1407,15 @@ namespace ProbablyUnifiedHotkeys
             }
 
             builder.AddLabel(labelText, "label_" + gen.Id);
-            I18n.ApplyFontIfRuntime(builder.Last?.text, labelText);
+            if (gen.IsReadOnlyInfo)
+            {
+                ConfigureWrappedDiagnosticLabel(builder.Last, labelText);
+                AddFixedHorizontalSpace(builder, 10f);
+                builder.End();
+                return;
+            }
+
+            ConfigureSingleLineRowLabel(builder.Last, labelText, minWidth: 200f, minHeight: 30f);
             builder.AddFlexibleSpace();
 
             switch (gen.Kind)
@@ -1205,9 +1431,17 @@ namespace ProbablyUnifiedHotkeys
 
                 case OptionKind.Slider:
                     float currentFloat = gen.GetFloat?.Invoke() ?? gen.Min;
-                    builder.AddLabel(FormatSliderValue(gen, currentFloat), "val_" + gen.Id);
+                    string sliderValText = FormatSliderValue(gen, currentFloat);
+                    builder.AddLabel(sliderValText, "val_" + gen.Id);
                     gen.ValueLabelElement = builder.Last;
-                    gen.ValueLabelElement?.SetFixedWidth(58f);
+                    ConfigureFixedWidthControl(gen.ValueLabelElement, 58f, 30f);
+                    if (gen.ValueLabelElement?.text != null)
+                    {
+                        gen.ValueLabelElement.text.enableWordWrapping = false;
+                        gen.ValueLabelElement.text.overflowMode = TextOverflowModes.Overflow;
+                        gen.ValueLabelElement.text.alignment = TextAlignmentOptions.MidlineRight;
+                        I18n.ApplyFontIfRuntime(gen.ValueLabelElement.text, sliderValText);
+                    }
 
                     builder.AddSlider(gen.Min, gen.Max, currentFloat, (val) =>
                     {
@@ -1215,7 +1449,7 @@ namespace ProbablyUnifiedHotkeys
                         gen.ValueLabelElement?.SetText(FormatSliderValue(gen, val));
                     }, gen.WholeNumbers, "slider_" + gen.Id);
                     gen.ControlElement = builder.Last;
-                    gen.ControlElement?.SetFixedWidth(242f);
+                    ConfigureFixedWidthControl(gen.ControlElement, 242f, 30f);
                     break;
 
                 case OptionKind.Dropdown:
@@ -1226,13 +1460,40 @@ namespace ProbablyUnifiedHotkeys
                         gen.PendingIndex = idx;
                     }, "drop_" + gen.Id);
                     gen.ControlElement = builder.Last;
-                    gen.ControlElement?.SetFixedWidth(306f);
+                    ConfigureFixedWidthControl(gen.ControlElement, 306f, 36f);
                     bool isLangDrop = string.Equals(gen.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase);
                     I18n.ApplyFontToDropdown(gen.ControlElement, forceCjkCapableList: isLangDrop || I18n.IsChinese);
                     break;
+
+                case OptionKind.Input:
+                    string currentStr = gen.PendingString ?? (gen.GetString?.Invoke() ?? string.Empty);
+                    builder.AddInput(
+                        I18n.Get("输入内容...", "Enter text..."),
+                        currentStr,
+                        (val) =>
+                        {
+                            gen.PendingString = val ?? string.Empty;
+                        },
+                        "input_" + gen.Id,
+                        (val) =>
+                        {
+                            gen.PendingString = val ?? string.Empty;
+                        }
+                    );
+                    gen.ControlElement = builder.Last;
+                    ConfigureFixedWidthControl(gen.ControlElement, 306f, 36f);
+                    if (gen.ControlElement?.input != null)
+                    {
+                        I18n.ApplyFontIfRuntime(gen.ControlElement.input.textComponent, null);
+                        if (gen.ControlElement.input.placeholder is TextMeshProUGUI phTmp)
+                        {
+                            I18n.ApplyFontIfRuntime(phTmp, phTmp.text);
+                        }
+                    }
+                    break;
             }
 
-            builder.AddSpace(10f);
+            AddFixedHorizontalSpace(builder, 10f);
             builder.End();
         }
 
@@ -1240,12 +1501,13 @@ namespace ProbablyUnifiedHotkeys
         {
             builder.BeginRow(6f, TextAnchor.MiddleLeft);
             hotkey.RowObject = builder.CurrentContainer.gameObject;
-            builder.AddSpace(18f);
+            ConfigureStretchRowObject(hotkey.RowObject, 36f);
+            AddFixedHorizontalSpace(builder, 18f);
 
             string hkLabel = BuildHotkeyLabelText(hotkey);
             builder.AddLabel(hkLabel, "label_" + hotkey.Id);
             hotkey.LabelElement = builder.Last;
-            I18n.ApplyFontIfRuntime(hotkey.LabelElement?.text, hkLabel);
+            ConfigureSingleLineRowLabel(hotkey.LabelElement, hkLabel, minWidth: 200f, minHeight: 30f);
 
             builder.AddFlexibleSpace();
 
@@ -1270,7 +1532,7 @@ namespace ProbablyUnifiedHotkeys
                 ApplySingleButtonColor(hotkey.ButtonElement, hotkey.EffectiveCombo, hotkey.IsReadOnlyProbed);
             }
 
-            builder.AddSpace(10f);
+            AddFixedHorizontalSpace(builder, 10f);
             builder.End();
         }
 
@@ -1358,7 +1620,8 @@ namespace ProbablyUnifiedHotkeys
             var sortedConflicts = ConflictDetector.GetSortedConflictGroups(_conflicts);
 
             builder.BeginRow(4f, TextAnchor.MiddleLeft);
-            builder.AddSpace(8f);
+            ConfigureStretchRowObject(builder.CurrentContainer.gameObject, 28f);
+            AddFixedHorizontalSpace(builder, 8f);
             string headerText = sortedConflicts.Count > 0
                 ? I18n.Format(
                     "<color=#ffb347><b>当前共有 {0} 组按键发生冲突！</b></color> (点击下方按键可直接改绑，按 Esc 设为空)",
@@ -1368,8 +1631,8 @@ namespace ProbablyUnifiedHotkeys
                     "<color=#55dd88><b>太棒了！当前没有任何按键冲突。</b></color>",
                     "<color=#55dd88><b>Great! No hotkey conflicts found.</b></color>");
             builder.AddHeader(headerText, "header_conflict_status");
-            I18n.ApplyFontIfRuntime(builder.Last?.text, headerText);
-            builder.AddSpace(8f);
+            ConfigureSingleLineRowLabel(builder.Last, headerText, minWidth: 240f, minHeight: 28f);
+            AddFixedHorizontalSpace(builder, 8f);
             builder.End();
             builder.AddSeparator(null, 2);
 
@@ -1377,20 +1640,22 @@ namespace ProbablyUnifiedHotkeys
             {
                 string keyName = ComboKeyStore.FormatCombo(cg.Combo.Modifiers, cg.Combo.Key);
                 builder.BeginRow(4f, TextAnchor.MiddleLeft);
-                builder.AddSpace(8f);
+                ConfigureStretchRowObject(builder.CurrentContainer.gameObject, 26f);
+                AddFixedHorizontalSpace(builder, 8f);
                 string cgHdrText = I18n.Format(
                     "<b>【 冲突按键: <color=#ffb347>{0}</color> 】</b> (共 {1} 个功能重叠)",
                     "<b>[ Conflict Key: <color=#ffb347>{0}</color> ]</b> ({1} bindings overlap)",
                     keyName,
                     cg.ConflictingEntries.Count);
                 builder.AddLabel(cgHdrText, $"cg_header_{(int)cg.Combo.Modifiers}_{(int)cg.Combo.Key}");
-                I18n.ApplyFontIfRuntime(builder.Last?.text, cgHdrText);
+                ConfigureSingleLineRowLabel(builder.Last, cgHdrText, minWidth: 200f, minHeight: 24f);
                 builder.End();
 
                 foreach (var entry in cg.ConflictingEntries)
                 {
                     builder.BeginRow(6f, TextAnchor.MiddleLeft);
-                    builder.AddSpace(20f);
+                    ConfigureStretchRowObject(builder.CurrentContainer.gameObject, 36f);
+                    AddFixedHorizontalSpace(builder, 20f);
                     string rowLabel = entry.IsReadOnlyProbed
                         ? I18n.Get("<color=#d8b4fe>[探测·只读]</color> ", "<color=#d8b4fe>[Probed·Read-Only]</color> ") + $"[{entry.ModDisplayName}]  {entry.DisplayName}"
                         : $"[{entry.ModDisplayName}]  {entry.DisplayName}";
@@ -1401,7 +1666,7 @@ namespace ProbablyUnifiedHotkeys
                         rowLabel += $" <link=\"{infoLink}\"><sprite name=\"info\" tint=1></link>";
                     }
                     builder.AddLabel(rowLabel, "cg_label_" + entry.Id);
-                    I18n.ApplyFontIfRuntime(builder.Last?.text, rowLabel);
+                    ConfigureSingleLineRowLabel(builder.Last, rowLabel, minWidth: 200f, minHeight: 30f);
                     builder.AddFlexibleSpace();
 
                     builder.AddButton(FormatHotkeyComboText(entry), () =>
@@ -1421,7 +1686,7 @@ namespace ProbablyUnifiedHotkeys
                     entry.ConflictButtonElement = btn;
                     if (btn != null) ApplySingleButtonColor(btn, entry.EffectiveCombo, entry.IsReadOnlyProbed);
 
-                    builder.AddSpace(10f);
+                    AddFixedHorizontalSpace(builder, 10f);
                     builder.End();
                 }
 
@@ -1893,6 +2158,14 @@ namespace ProbablyUnifiedHotkeys
             {
                 return true;
             }
+            if (!string.IsNullOrEmpty(hotkey.SectionLabel) && PinyinEngine.Matches(hotkey.SectionLabel, query))
+            {
+                return true;
+            }
+            if (!string.IsNullOrEmpty(hotkey.Section) && PinyinEngine.Matches(hotkey.Section, query))
+            {
+                return true;
+            }
             if (hotkey.IsReadOnlyProbed && !string.IsNullOrEmpty(hotkey.ProbedSourceDetail) &&
                 PinyinEngine.Matches(hotkey.ProbedSourceDetail, query))
             {
@@ -2234,7 +2507,19 @@ namespace ProbablyUnifiedHotkeys
 
         private static bool IsGeneralMatchQuery(ModGeneralEntry gen, string query)
         {
-            return PinyinEngine.Matches(gen.DisplayName, query);
+            if (PinyinEngine.Matches(gen.DisplayName, query))
+            {
+                return true;
+            }
+            if (!string.IsNullOrEmpty(gen.SectionLabel) && PinyinEngine.Matches(gen.SectionLabel, query))
+            {
+                return true;
+            }
+            if (!string.IsNullOrEmpty(gen.Section) && PinyinEngine.Matches(gen.Section, query))
+            {
+                return true;
+            }
+            return false;
         }
 
         private static bool IsVanillaItemMatchQuery(VanillaOptionItem item, string query)
@@ -2298,6 +2583,10 @@ namespace ProbablyUnifiedHotkeys
 
         private static bool GroupHasVisibleItemsInCurrentMode(ModOptionGroup group, bool modeAllowsHotkeys, bool modeAllowsGeneral)
         {
+            if (string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase))
+            {
+                return modeAllowsHotkeys || modeAllowsGeneral;
+            }
             return (modeAllowsHotkeys && (group.Hotkeys.Count > 0 || group.ReadOnlyProbedHotkeys.Count > 0)) ||
                    (modeAllowsGeneral && group.GeneralSettings.Count > 0);
         }
@@ -2335,7 +2624,7 @@ namespace ProbablyUnifiedHotkeys
                             }
                             SetObjectActive(card.HeaderRowObject, true);
                             SetObjectActive(card.OuterSeparatorObject, true);
-                            bool savedExpanded = VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : true;
+                            bool savedExpanded = VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : false;
                             card.SetExpanded(savedExpanded);
                             visibleVanillaCount++;
                             continue;
@@ -2357,7 +2646,7 @@ namespace ProbablyUnifiedHotkeys
                             }
                             SetObjectActive(card.HeaderRowObject, true);
                             SetObjectActive(card.OuterSeparatorObject, true);
-                            bool savedExpanded = VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : true;
+                            bool savedExpanded = VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : false;
                             card.SetExpanded(savedExpanded);
                             visibleVanillaCount++;
                             continue;
@@ -2435,8 +2724,11 @@ namespace ProbablyUnifiedHotkeys
                             (group.Hotkeys.Any(hk => IsHotkeyMatchQuery(hk, _searchQuery)) ||
                              group.ReadOnlyProbedHotkeys.Any(hk => IsHotkeyMatchQuery(hk, _searchQuery)));
                         bool anyGeneralMatch = allowGeneral && group.GeneralSettings.Any(gen => IsGeneralMatchQuery(gen, _searchQuery));
+                        bool anyProfileMatch = string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
+                            (allowGeneral || allowHotkeys) &&
+                            IsProfileSectionMatchQuery(_searchQuery);
 
-                        if (!groupNameMatch && !anyHotkeyMatch && !anyGeneralMatch)
+                        if (!groupNameMatch && !anyHotkeyMatch && !anyGeneralMatch && !anyProfileMatch)
                         {
                             SetCardHiddenForSearch(group);
                             continue;
@@ -2548,11 +2840,36 @@ namespace ProbablyUnifiedHotkeys
 
             if (CardParts.TryGetValue(group, out var matchedParts))
             {
-                SetObjectActive(matchedParts.hkHeader, visibleHotkeys > 0);
-                SetObjectActive(matchedParts.genHeader, visibleGeneral > 0);
-                SetObjectActive(matchedParts.probedHeader, visibleProbed > 0);
-                SetObjectActive(matchedParts.midSep, visibleHotkeys > 0 && visibleGeneral > 0);
-                SetObjectActive(matchedParts.probedSep, (visibleHotkeys > 0 || visibleGeneral > 0) && visibleProbed > 0);
+                SetObjectActive(matchedParts.HkHeader, visibleHotkeys > 0);
+                bool hasVisibleContentAbove = visibleHotkeys > 0;
+                for (int s = 0; s < matchedParts.GeneralSections.Count; s++)
+                {
+                    var secBlock = matchedParts.GeneralSections[s];
+                    int secVisible = 0;
+                    for (int e = 0; e < secBlock.Entries.Count; e++)
+                    {
+                        var entry = secBlock.Entries[e];
+                        if (entry.RowObject != null && entry.RowObject.activeSelf)
+                        {
+                            secVisible++;
+                        }
+                    }
+                    bool showSec = secVisible > 0;
+                    SetObjectActive(secBlock.HeaderObj, showSec);
+                    SetObjectActive(secBlock.SeparatorObj, showSec && hasVisibleContentAbove);
+                    if (showSec)
+                    {
+                        hasVisibleContentAbove = true;
+                    }
+                }
+                SetObjectActive(matchedParts.ProbedHeader, visibleProbed > 0);
+                SetObjectActive(matchedParts.ProbedSep, hasVisibleContentAbove && visibleProbed > 0);
+            }
+
+            if (string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) && _selfProfileSectionContainer != null)
+            {
+                bool showProfileSection = (allowGeneral || allowHotkeys) && (!hasQuery || groupNameMatch || IsProfileSectionMatchQuery(_searchQuery));
+                SetObjectActive(_selfProfileSectionContainer, showProfileSection);
             }
         }
 
@@ -2831,6 +3148,79 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
             RefreshExpandAllButtonState();
+        }
+
+        private static void ConfigureStretchColumnObject(GameObject? colObj)
+        {
+            if (colObj == null) return;
+            var vlg = colObj.GetComponent<VerticalLayoutGroup>();
+            if (vlg != null)
+            {
+                vlg.childControlWidth = true;
+                vlg.childForceExpandWidth = true;
+            }
+            var le = colObj.GetComponent<LayoutElement>() ?? colObj.AddComponent<LayoutElement>();
+            le.flexibleWidth = 1f;
+        }
+
+        private static void ConfigureStretchRowObject(GameObject? rowObj, float minHeight = 32f)
+        {
+            if (rowObj == null) return;
+            var hlg = rowObj.GetComponent<HorizontalLayoutGroup>();
+            if (hlg != null)
+            {
+                hlg.childControlWidth = true;
+                hlg.childForceExpandWidth = false;
+            }
+            var le = rowObj.GetComponent<LayoutElement>() ?? rowObj.AddComponent<LayoutElement>();
+            le.flexibleWidth = 1f;
+            if (minHeight > 0f && le.minHeight < minHeight)
+            {
+                le.minHeight = minHeight;
+            }
+        }
+
+        private static void ConfigureSingleLineRowLabel(CustomUIElement? el, string text, float minWidth = 180f, float minHeight = 28f)
+        {
+            if (el == null) return;
+            if (el.root != null)
+            {
+                var le = el.root.GetComponent<LayoutElement>() ?? el.root.AddComponent<LayoutElement>();
+                le.layoutPriority = 10;
+                le.minWidth = minWidth;
+                le.preferredWidth = -1f;
+                le.minHeight = minHeight;
+                le.flexibleWidth = 1f;
+                le.flexibleHeight = 0f;
+            }
+            if (el.text != null)
+            {
+                el.text.alignment = TextAlignmentOptions.MidlineLeft;
+                el.text.enableWordWrapping = false;
+                el.text.overflowMode = TextOverflowModes.Ellipsis;
+                I18n.ApplyFontIfRuntime(el.text, text);
+            }
+        }
+
+        private static void ConfigureFixedWidthControl(CustomUIElement? el, float width, float height = 36f)
+        {
+            if (el == null) return;
+            el.SetFixedWidth(width);
+            if (el.root != null)
+            {
+                var le = el.root.GetComponent<LayoutElement>() ?? el.root.AddComponent<LayoutElement>();
+                // 关键：TMP_InputField 自身实现了 ILayoutElement (layoutPriority = 1)，
+                // 若不提高 LayoutElement.layoutPriority，超长文本会导致 preferredWidth 暴涨至上千像素并把左侧标签挤压成单字竖排！
+                le.layoutPriority = 100;
+                le.minWidth = width;
+                le.preferredWidth = width;
+                le.flexibleWidth = 0f;
+                if (height > 0f)
+                {
+                    le.preferredHeight = height;
+                    le.flexibleHeight = 0f;
+                }
+            }
         }
 
         private static void AddFixedHorizontalSpace(CustomUIBuilder builder, float pixels)
@@ -4902,6 +5292,12 @@ namespace ProbablyUnifiedHotkeys
             SyncCompactActionButton(_conflictToggleBtn);
             SyncCompactActionButton(_expandToggleBtn);
             SyncCompactActionButton(_diagnosticToggleBtn);
+            SyncCompactActionButton(_profileSlotCycleBtn);
+            SyncCompactActionButton(_profileSaveBtn);
+            SyncCompactActionButton(_profileLoadBtn);
+            SyncCompactActionButton(_profileExportBtn);
+            SyncCompactActionButton(_profileImportBtn);
+            RefreshProfileSlotButtonAppearance();
 
             for (int i = 0; i < _vanillaCards.Count; i++)
             {
@@ -4999,6 +5395,7 @@ namespace ProbablyUnifiedHotkeys
                 gen.PendingBool = null;
                 gen.PendingFloat = null;
                 gen.PendingIndex = null;
+                gen.PendingString = null;
 
                 if (gen.Kind == OptionKind.Toggle && gen.ControlElement != null)
                 {
@@ -5013,6 +5410,18 @@ namespace ProbablyUnifiedHotkeys
                 else if (gen.Kind == OptionKind.Dropdown && gen.ControlElement != null)
                 {
                     gen.ControlElement.SetIndex(gen.GetIndex?.Invoke() ?? 0, false);
+                }
+                else if (gen.Kind == OptionKind.Input && !gen.IsReadOnlyInfo && gen.ControlElement != null)
+                {
+                    string val = gen.GetString?.Invoke() ?? string.Empty;
+                    if (gen.ControlElement.input != null)
+                    {
+                        gen.ControlElement.input.SetTextWithoutNotify(val);
+                    }
+                    else
+                    {
+                        gen.ControlElement.SetString(val, false);
+                    }
                 }
             }
 
@@ -5160,7 +5569,7 @@ namespace ProbablyUnifiedHotkeys
 
                 foreach (var gen in group.GeneralSettings)
                 {
-                    if (gen.PendingBool.HasValue || gen.PendingFloat.HasValue || gen.PendingIndex.HasValue)
+                    if (gen.PendingBool.HasValue || gen.PendingFloat.HasValue || gen.PendingIndex.HasValue || gen.PendingString != null)
                     {
                         if (string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase))
                         {
@@ -5241,6 +5650,310 @@ namespace ProbablyUnifiedHotkeys
                 {
                     RebuildDiagnosticView();
                 }
+            }
+        }
+
+        // =====================================================================
+        // 键位与设置方案快照管理 (3 套预设槽位 & 剪贴板 JSON 备份/恢复)
+        // =====================================================================
+        private static bool IsProfileSectionMatchQuery(string? query)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return true;
+            return PinyinEngine.Matches("键位与设置方案快照 预设 方案一 方案二 方案三 保存方案 读取方案 清空 导出剪贴板 导入剪贴板 剪贴板 JSON 备份 恢复 快捷键 强转表", query!) ||
+                   PinyinEngine.Matches("Keybind Preset Profile Snapshot Export Import Clipboard JSON Backup Restore", query!);
+        }
+
+        private static void BuildSelfModProfileSection(CustomUIBuilder builder)
+        {
+            builder.BeginColumn(4f, TextAnchor.UpperLeft);
+            _selfProfileSectionContainer = builder.CurrentContainer.gameObject;
+            var vlg = _selfProfileSectionContainer.GetComponent<VerticalLayoutGroup>();
+            if (vlg != null) vlg.childForceExpandWidth = true;
+            var le = _selfProfileSectionContainer.GetComponent<LayoutElement>() ?? _selfProfileSectionContainer.AddComponent<LayoutElement>();
+            le.flexibleWidth = 1f;
+
+            builder.AddSeparator(null, 1);
+
+            builder.BeginRow(4f, TextAnchor.MiddleLeft);
+            ConfigureStretchRowObject(builder.CurrentContainer.gameObject, 26f);
+            AddFixedHorizontalSpace(builder, 18f);
+            string hdrText = I18n.Get(
+                "<color=#a8d8b9><b>键位与设置方案快照</b></color>",
+                "<color=#a8d8b9><b>Keybind & Settings Profiles</b></color>");
+            builder.AddLabel(hdrText, "profile_hdr_self");
+            ConfigureSingleLineRowLabel(builder.Last, hdrText, minWidth: 180f, minHeight: 24f);
+            builder.End();
+
+            for (int slot = 0; slot < HotkeyProfileManager.SlotCount; slot++)
+            {
+                int capturedSlot = slot;
+                builder.BeginRow(6f, TextAnchor.MiddleLeft);
+                ConfigureStretchRowObject(builder.CurrentContainer.gameObject, 36f);
+                AddFixedHorizontalSpace(builder, 18f);
+
+                string rowLabelText = BuildSelfModSlotRowLabelText(capturedSlot);
+                builder.AddLabel(rowLabelText, $"label_profile_slot_{capturedSlot}");
+                _selfProfileSlotDetailLabels[capturedSlot] = builder.Last;
+                ConfigureSingleLineRowLabel(builder.Last, rowLabelText, minWidth: 220f, minHeight: 30f);
+
+                builder.AddFlexibleSpace();
+
+                builder.AddButton(I18n.Get("保存", "Save"), () =>
+                {
+                    HotkeyProfileManager.ActiveSlotIndex = capturedSlot;
+                    OnSaveProfileSlotClicked(capturedSlot);
+                }, $"btn_slot_save_{capturedSlot}");
+                StyleActionButton(builder.Last, 78f, 36f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.84f);
+                SyncCompactActionButton(builder.Last);
+
+                builder.AddButton(I18n.Get("读取", "Load"), () =>
+                {
+                    HotkeyProfileManager.ActiveSlotIndex = capturedSlot;
+                    OnLoadProfileSlotClicked(capturedSlot);
+                }, $"btn_slot_load_{capturedSlot}");
+                StyleActionButton(builder.Last, 78f, 36f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.84f);
+                SyncCompactActionButton(builder.Last);
+
+                builder.AddButton(I18n.Get("清空", "Clear"), () =>
+                {
+                    OnClearProfileSlotClicked(capturedSlot);
+                }, $"btn_slot_clear_{capturedSlot}");
+                StyleActionButton(builder.Last, 78f, 36f, lrMargin: 6f, tbMargin: 2f, fontScale: 0.84f);
+                SyncCompactActionButton(builder.Last);
+
+                AddFixedHorizontalSpace(builder, 10f);
+                builder.End();
+            }
+
+            builder.BeginRow(6f, TextAnchor.MiddleLeft);
+            ConfigureStretchRowObject(builder.CurrentContainer.gameObject, 36f);
+            AddFixedHorizontalSpace(builder, 18f);
+            string clipDesc = I18n.Get(
+                "<b>剪贴板 JSON 备份</b>  <color=#99a3b0>一键导出或恢复全部快捷键、模组设置与强转表</color>",
+                "<b>Clipboard JSON Backup</b>  <color=#99a3b0>Export or restore all hotkeys, mod settings & forced tables</color>");
+            builder.AddLabel(clipDesc, "label_profile_clipboard_row");
+            ConfigureSingleLineRowLabel(builder.Last, clipDesc, minWidth: 220f, minHeight: 30f);
+
+            builder.AddFlexibleSpace();
+
+            builder.AddButton(I18n.Get("导出剪贴板", "Export JSON"), OnExportClipboardClicked, "btn_self_export_json");
+            StyleActionButton(builder.Last, 112f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+            SyncCompactActionButton(builder.Last);
+
+            builder.AddButton(I18n.Get("导入剪贴板", "Import JSON"), OnImportClipboardClicked, "btn_self_import_json");
+            StyleActionButton(builder.Last, 112f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.84f);
+            SyncCompactActionButton(builder.Last);
+
+            AddFixedHorizontalSpace(builder, 10f);
+            builder.End();
+
+            builder.End(); // End _selfProfileSectionContainer
+        }
+
+        private static string BuildSelfModSlotRowLabelText(int slotIndex)
+        {
+            string slotTitle = HotkeyProfileManager.GetSlotDisplayName(slotIndex);
+            string detail = HotkeyProfileManager.GetSlotDetailSummary(slotIndex);
+            bool isSelected = HotkeyProfileManager.ActiveSlotIndex == slotIndex;
+            string prefix = isSelected ? "<color=#a8d8b9>▶ </color>" : "    ";
+            return $"{prefix}<b>{slotTitle}</b>   {detail}";
+        }
+
+        private static void RefreshProfileSlotButtonAppearance()
+        {
+            if (_profileSlotCycleBtn != null)
+            {
+                SetButtonTextFast(_profileSlotCycleBtn, HotkeyProfileManager.GetBottomCycleButtonLabel());
+                ApplyButtonTextTheme(_profileSlotCycleBtn, GetDefaultButtonTextColor(), useDefaultTheme: true);
+            }
+
+            for (int i = 0; i < HotkeyProfileManager.SlotCount; i++)
+            {
+                var lbl = _selfProfileSlotDetailLabels[i];
+                if (lbl != null)
+                {
+                    string txt = BuildSelfModSlotRowLabelText(i);
+                    SetTextIfChanged(lbl, txt);
+                    I18n.ApplyFontIfRuntime(lbl.text, txt);
+                }
+            }
+        }
+
+        private static void OnCycleProfileSlotClicked()
+        {
+            CancelCapture();
+            HotkeyProfileManager.CycleNextSlot();
+            RefreshProfileSlotButtonAppearance();
+        }
+
+        private static void OnSaveProfileSlotClicked(int slotIndex)
+        {
+            CancelCapture();
+            if (_currentManager != null)
+            {
+                ApplyAllSettings(_currentManager);
+            }
+
+            HotkeyProfileManager.SaveToSlot(slotIndex, _allHotkeys, _modGroups, out _, out _);
+            RefreshProfileSlotButtonAppearance();
+        }
+
+        private static void OnLoadProfileSlotClicked(int slotIndex)
+        {
+            CancelCapture();
+            if (!HotkeyProfileManager.TryLoadSlotSnapshot(slotIndex, out var snapshot, out _) || snapshot == null)
+            {
+                return;
+            }
+
+            ApplyProfileSnapshotToCurrentSession(snapshot);
+            RefreshProfileSlotButtonAppearance();
+        }
+
+        private static void OnClearProfileSlotClicked(int slotIndex)
+        {
+            CancelCapture();
+            HotkeyProfileManager.ClearSlot(slotIndex);
+            RefreshProfileSlotButtonAppearance();
+        }
+
+        private static void OnExportClipboardClicked()
+        {
+            CancelCapture();
+            if (_currentManager != null)
+            {
+                ApplyAllSettings(_currentManager);
+            }
+
+            string profileName = HotkeyProfileManager.GetSlotDisplayName(HotkeyProfileManager.ActiveSlotIndex);
+            string json = HotkeyProfileManager.BuildSnapshotJson(profileName, _allHotkeys, _modGroups, out _, out _, out _);
+            GUIUtility.systemCopyBuffer = json;
+        }
+
+        private static void OnImportClipboardClicked()
+        {
+            CancelCapture();
+            string rawClipboard = GUIUtility.systemCopyBuffer ?? string.Empty;
+            if (!HotkeyProfileManager.TryParseSnapshotJson(rawClipboard, out var snapshot, out _) || snapshot == null)
+            {
+                return;
+            }
+
+            ApplyProfileSnapshotToCurrentSession(snapshot);
+            RefreshProfileSlotButtonAppearance();
+        }
+
+        private static void ApplyProfileSnapshotToCurrentSession(ProfileSnapshot snapshot)
+        {
+            if (_currentManager == null) return;
+
+            bool wasChinese = I18n.IsChinese;
+
+            // 1. 恢复强制纳管表与忽略表（若强制纳管列表变化，先原位重扫以便生成对应的热键条目）
+            ComboKeyStore.ReplaceForcedAndIgnoredSets(snapshot.Forced, snapshot.Ignored, out bool forcedChanged);
+            if (forcedChanged)
+            {
+                PerformFullRescanAndRefreshInPlace(forceInvalidateCache: false, targetModId: null, statusMessage: null);
+            }
+
+            // 2. 恢复自定义/探测热键映射表
+            if (snapshot.CustomHotkeys.Count > 0)
+            {
+                var customMap = new Dictionary<string, KeyCombo>(snapshot.CustomHotkeys.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var kvp in snapshot.CustomHotkeys)
+                {
+                    if (ModOptionScanner.TryParseComboString(kvp.Value, out var cMods, out var cKey))
+                    {
+                        customMap[kvp.Key] = new KeyCombo(cMods, cKey);
+                    }
+                }
+                ComboKeyStore.ApplyCustomHotkeysMap(customMap);
+            }
+
+            // 3. 逐项恢复原版与所有模组快捷键
+            int appliedHkCount = 0;
+            for (int i = 0; i < _allHotkeys.Count; i++)
+            {
+                var hk = _allHotkeys[i];
+                if (hk == null || string.IsNullOrEmpty(hk.Id)) continue;
+                if (!snapshot.Hotkeys.TryGetValue(hk.Id, out string? comboStr)) continue;
+                if (!ModOptionScanner.TryParseComboString(comboStr, out var targetMods, out var targetKey)) continue;
+
+                KeyModifierMask finalMods = (hk.SupportsModifierCombos && targetKey != KeyCode.None)
+                    ? targetMods
+                    : KeyModifierMask.None;
+                hk.PendingModifiers = finalMods;
+                hk.PendingKey = targetKey;
+                hk.HasPendingChange = true;
+                appliedHkCount++;
+            }
+
+            // 4. 逐项恢复所有模组常规配置 (开关 / 滑块 / 下拉框)
+            int appliedGenCount = 0;
+            for (int g = 0; g < _modGroups.Count; g++)
+            {
+                var group = _modGroups[g];
+                if (group == null) continue;
+                for (int i = 0; i < group.GeneralSettings.Count; i++)
+                {
+                    var gen = group.GeneralSettings[i];
+                    if (gen == null || string.IsNullOrEmpty(gen.Id)) continue;
+                    if (!snapshot.General.TryGetValue(gen.Id, out string? encoded) || string.IsNullOrEmpty(encoded)) continue;
+
+                    if (gen.Kind == OptionKind.Toggle && encoded.StartsWith("b:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string valPart = encoded.Substring(2).Trim();
+                        bool bVal = valPart == "1" || string.Equals(valPart, "true", StringComparison.OrdinalIgnoreCase);
+                        gen.PendingBool = bVal;
+                        appliedGenCount++;
+                    }
+                    else if (gen.Kind == OptionKind.Slider && encoded.StartsWith("f:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string valPart = encoded.Substring(2).Trim();
+                        if (float.TryParse(valPart, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float fVal))
+                        {
+                            float clamped = Mathf.Clamp(fVal, gen.Min, gen.Max > gen.Min ? gen.Max : fVal);
+                            gen.PendingFloat = gen.WholeNumbers ? Mathf.Round(clamped) : clamped;
+                            appliedGenCount++;
+                        }
+                    }
+                    else if (gen.Kind == OptionKind.Dropdown && encoded.StartsWith("i:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string valPart = encoded.Substring(2).Trim();
+                        if (int.TryParse(valPart, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int iVal) && iVal >= 0)
+                        {
+                            gen.PendingIndex = iVal;
+                            appliedGenCount++;
+                        }
+                    }
+                    else if (gen.Kind == OptionKind.Input && !gen.IsReadOnlyInfo && encoded.StartsWith("s:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        gen.PendingString = encoded.Substring(2);
+                        appliedGenCount++;
+                    }
+                }
+            }
+
+            // 5. 提交并立即生效（内部会自动处理原版键位保存、模组回调通知与语言切换重开）
+            ApplyAllSettings(_currentManager);
+            if (wasChinese != I18n.IsChinese)
+            {
+                return;
+            }
+
+            // 6. 同步刷新当前已构建的所有卡片控件显示
+            using (ComboKeyStore.EnterBypass())
+            {
+                for (int g = 0; g < _modGroups.Count; g++)
+                {
+                    var group = _modGroups[g];
+                    if (group != null && group.IsContentBuilt)
+                    {
+                        RefreshCardUI(group);
+                    }
+                }
+                SyncVanillaKeyButtonColors();
+                RefreshConflicts();
             }
         }
     }

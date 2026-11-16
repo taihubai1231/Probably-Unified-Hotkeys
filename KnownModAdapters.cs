@@ -1009,7 +1009,14 @@ namespace ProbablyUnifiedHotkeys
             const string entryId = "chiqingsan.BetterPerformance.hover_peek_key";
             for (int i = 0; i < group.Hotkeys.Count; i++)
             {
-                if (string.Equals(group.Hotkeys[i].Id, entryId, StringComparison.OrdinalIgnoreCase)) return;
+                var h = group.Hotkeys[i];
+                if (string.Equals(h.Id, entryId, StringComparison.OrdinalIgnoreCase) ||
+                    h.Id.IndexOf("peek", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    h.DisplayName.IndexOf("预览", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    h.DisplayName.IndexOf("Peek", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return;
+                }
             }
 
             group.Hotkeys.Add(new ModHotkeyEntry
@@ -1038,7 +1045,14 @@ namespace ProbablyUnifiedHotkeys
             const string entryId = "precise_group_drag.shift_held_key";
             for (int i = 0; i < group.Hotkeys.Count; i++)
             {
-                if (string.Equals(group.Hotkeys[i].Id, entryId, StringComparison.OrdinalIgnoreCase)) return;
+                var h = group.Hotkeys[i];
+                if (string.Equals(h.Id, entryId, StringComparison.OrdinalIgnoreCase) ||
+                    h.Id.IndexOf("shift", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    h.DisplayName.IndexOf("精准", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    h.DisplayName.IndexOf("紧凑", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return;
+                }
             }
 
             group.Hotkeys.Add(new ModHotkeyEntry

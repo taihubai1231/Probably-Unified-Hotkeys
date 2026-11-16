@@ -384,6 +384,96 @@ namespace ProbablyUnifiedHotkeys
             return _forcedHotkeysRevision;
         }
 
+        public static List<string> GetForcedHotkeyIdsSnapshot()
+        {
+            EnsureLoaded();
+            var list = new List<string>(ForcedHotkeyIds);
+            list.Sort(StringComparer.OrdinalIgnoreCase);
+            return list;
+        }
+
+        public static List<string> GetIgnoredCandidateIdsSnapshot()
+        {
+            EnsureLoaded();
+            var list = new List<string>(IgnoredCandidateIds);
+            list.Sort(StringComparer.OrdinalIgnoreCase);
+            return list;
+        }
+
+        public static bool ReplaceForcedAndIgnoredSets(IEnumerable<string>? forcedIds, IEnumerable<string>? ignoredIds, out bool forcedChanged)
+        {
+            EnsureLoaded();
+            var nextForced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (forcedIds != null)
+            {
+                foreach (var id in forcedIds)
+                {
+                    if (!string.IsNullOrWhiteSpace(id)) nextForced.Add(id.Trim());
+                }
+            }
+
+            var nextIgnored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (ignoredIds != null)
+            {
+                foreach (var id in ignoredIds)
+                {
+                    if (!string.IsNullOrWhiteSpace(id))
+                    {
+                        string trimmed = id.Trim();
+                        if (!nextForced.Contains(trimmed))
+                        {
+                            nextIgnored.Add(trimmed);
+                        }
+                    }
+                }
+            }
+
+            forcedChanged = !ForcedHotkeyIds.SetEquals(nextForced);
+            bool ignoredChanged = !IgnoredCandidateIds.SetEquals(nextIgnored);
+            if (!forcedChanged && !ignoredChanged)
+            {
+                return false;
+            }
+
+            ForcedHotkeyIds.Clear();
+            foreach (var id in nextForced) ForcedHotkeyIds.Add(id);
+
+            IgnoredCandidateIds.Clear();
+            foreach (var id in nextIgnored) IgnoredCandidateIds.Add(id);
+
+            _forcedHotkeysRevision++;
+            SaveForcedHotkeys();
+            SaveIdSet(IgnoredCandidatesPrefsKey, IgnoredCandidateIds, "ignored candidates");
+            return true;
+        }
+
+        public static Dictionary<string, KeyCombo> GetSavedCustomHotkeysSnapshot()
+        {
+            EnsureLoaded();
+            var map = new Dictionary<string, KeyCombo>(SavedCustomHotkeys.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in SavedCustomHotkeys)
+            {
+                map[kvp.Key] = new KeyCombo(kvp.Value.Modifiers, kvp.Value.Key);
+            }
+            return map;
+        }
+
+        public static void ApplyCustomHotkeysMap(IDictionary<string, KeyCombo>? customMap)
+        {
+            EnsureLoaded();
+            if (customMap == null) return;
+            foreach (var kvp in customMap)
+            {
+                if (string.IsNullOrEmpty(kvp.Key)) continue;
+                var kc = kvp.Value.Key;
+                var mods = kc == KeyCode.None ? KeyModifierMask.None : (kvp.Value.Modifiers & ~GetModifierBit(kc));
+                SavedCustomHotkeys[kvp.Key] = (mods, kc);
+            }
+            SaveCustomHotkeysCore();
+            SavePrefsStorage();
+            RebuildRuntimeFromSaved();
+        }
+
         public static void RegisterManagedConfigKeyIds(IEnumerable<string>? stringIds, IEnumerable<string>? intIds)
         {
             var nextStr = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

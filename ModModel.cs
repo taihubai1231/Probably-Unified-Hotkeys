@@ -183,6 +183,8 @@ namespace ProbablyUnifiedHotkeys
         public string RawOptionId { get; set; } = string.Empty; // 原版 UI 中的元素 ID（如 keybind_rotate_cw）
         public string ModId { get; set; } = string.Empty;
         public string ModDisplayName { get; set; } = string.Empty;
+        public string Section { get; set; } = string.Empty;
+        public string SectionLabel { get; set; } = string.Empty;
         public string DisplayName { get; set; } = string.Empty;
         public string Tooltip { get; set; } = string.Empty;
 
@@ -243,9 +245,12 @@ namespace ProbablyUnifiedHotkeys
     {
         public string Id { get; set; } = string.Empty;
         public string ModId { get; set; } = string.Empty;
+        public string Section { get; set; } = string.Empty;
+        public string SectionLabel { get; set; } = string.Empty;
         public string DisplayName { get; set; } = string.Empty;
         public string Tooltip { get; set; } = string.Empty;
         public OptionKind Kind { get; set; } = OptionKind.Toggle;
+        public bool IsReadOnlyInfo { get; set; } = false;
 
         // 布尔开关
         public Func<bool>? GetBool { get; set; }
@@ -269,6 +274,12 @@ namespace ProbablyUnifiedHotkeys
         public int? PendingIndex { get; set; }
         public int SnapshotIndex { get; set; }
         public Func<IList<string>>? GetChoices { get; set; }
+
+        // 文本输入框
+        public Func<string>? GetString { get; set; }
+        public Action<string>? SetString { get; set; }
+        public string? PendingString { get; set; }
+        public string SnapshotString { get; set; } = string.Empty;
 
         // 默认值重置
         public Action? ResetToDefault { get; set; }
@@ -305,6 +316,13 @@ namespace ProbablyUnifiedHotkeys
                             PendingIndex = null;
                         }
                         break;
+                    case OptionKind.Input:
+                        if (PendingString != null && SetString != null && !IsReadOnlyInfo)
+                        {
+                            SetString(PendingString);
+                            PendingString = null;
+                        }
+                        break;
                 }
             }
             catch (Exception ex)
@@ -339,6 +357,14 @@ namespace ProbablyUnifiedHotkeys
                         PendingIndex = SnapshotIndex;
                         SetIndex?.Invoke(SnapshotIndex);
                         PendingIndex = null;
+                        break;
+                    case OptionKind.Input:
+                        if (!IsReadOnlyInfo)
+                        {
+                            PendingString = SnapshotString;
+                            SetString?.Invoke(SnapshotString);
+                            PendingString = null;
+                        }
                         break;
                 }
             }

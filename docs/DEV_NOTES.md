@@ -138,6 +138,17 @@
 3. 校验 `tools/steamcmd/probably_unified_hotkeys.vdf` 的 `description` 小于 8,000 UTF-8 字节；
 4. 构建并运行 `tools/ScannerCheck`，验证 `ModScanner.Scan` 零告警通过。
 
+> **重要排坑（避免 `powershell.exe - 系统错误：无法创建新的堆栈防护页面` 弹窗）**：
+> - **绝对禁止**在 Windows PowerShell 5.1 进程中注册 `AppDomain.CurrentDomain.add_AssemblyResolve` 去加载游戏 `Managed\` 目录并反射调用 `Assembly-CSharp.dll`。因为 `Managed\` 目录下包含 Unity Mono 版的 `mscorlib.dll`、`System.Core.dll`、`netstandard.dll`，一旦未做递归重入保护或把 `mscorlib.dll` 加载进 PowerShell 的 .NET Framework 4.8 CLR，会立即触发死递归 `StackOverflowException` 并弹出 Windows 系统错误框「`powershell.exe - 系统错误：无法创建新的堆栈防护页面`」。
+> - 如需查看游戏 `Assembly-CSharp.dll` 的类/字段/方法签名，或批量测试工坊 DLL 热键探测，**请统一通过独立 `.NET 8` 工具 `tools/ScannerCheck` 执行**（底层基于 `DseCecil` 静态元数据读取 + 重入保护）：
+>   ```powershell
+>   # 安全查看游戏类型签名（基于 DseCecil 静态解析，零 CLR 冲突）
+>   dotnet run --project .\tools\ScannerCheck -c Release -- --inspect ModConfig ConfigEntry GameOptionRegistry "GameOptionRegistry+Entry"
+>
+>   # 安全扫描创意工坊模组目录热键
+>   dotnet run --project .\tools\ScannerCheck -c Release -- --probe-workshop
+>   ```
+
 ### 2. Steam 创意工坊发布流程（AppID `4348910` / Item `3837828444`）
 
 > **关键坑点**：
