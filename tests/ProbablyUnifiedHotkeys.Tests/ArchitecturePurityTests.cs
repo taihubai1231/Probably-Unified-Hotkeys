@@ -31,6 +31,16 @@ namespace ProbablyUnifiedHotkeys.Tests
             typeof(KeySearchMatcher)
         };
 
+        private static readonly Type[] AdapterDomainTypes = new[]
+        {
+            typeof(SectionLocalizer),
+            typeof(ModCatalogCache),
+            typeof(ModOptionScanner),
+            typeof(KnownModAdapters),
+            typeof(DllKeyProbe),
+            typeof(ProbedKeyRecord)
+        };
+
         private static readonly string[] ForbiddenKeywords = new[]
         {
             "UnityEngine.GameObject",
@@ -46,6 +56,13 @@ namespace ProbablyUnifiedHotkeys.Tests
             "GameOptionRegistry"
         };
 
+        private static readonly string[] AdapterForbiddenKeywords = new[]
+        {
+            "TMPro",
+            "TextMeshPro",
+            "UnityEngine.UI."
+        };
+
         [Fact]
         public void CoreDomainModels_ZeroUIAndHarmonyReferences()
         {
@@ -53,12 +70,12 @@ namespace ProbablyUnifiedHotkeys.Tests
 
             foreach (var coreType in CoreDomainTypes)
             {
-                CheckTypePurity(coreType, violations);
+                CheckTypePurity(coreType, ForbiddenKeywords, violations);
 
                 // Also check any nested types
                 foreach (var nested in coreType.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
                 {
-                    CheckTypePurity(nested, violations);
+                    CheckTypePurity(nested, ForbiddenKeywords, violations);
                 }
             }
 
@@ -69,46 +86,69 @@ namespace ProbablyUnifiedHotkeys.Tests
             );
         }
 
-        private static void CheckTypePurity(Type type, List<string> violations)
+        [Fact]
+        public void AdapterLayer_ZeroTMProAndUnityEngineUIPurity()
+        {
+            var violations = new List<string>();
+
+            foreach (var adapterType in AdapterDomainTypes)
+            {
+                CheckTypePurity(adapterType, AdapterForbiddenKeywords, violations);
+
+                // Also check any nested types
+                foreach (var nested in adapterType.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    CheckTypePurity(nested, AdapterForbiddenKeywords, violations);
+                }
+            }
+
+            Assert.True(
+                violations.Count == 0,
+                $"Architecture purity violations found in Adapter layer ({violations.Count} items):\n" +
+                string.Join("\n", violations)
+            );
+        }
+
+        private static void CheckTypePurity(Type type, string[] forbiddenKeywords, List<string> violations)
         {
             const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 
             // 1. Check BaseType and Interfaces
             if (type.BaseType != null && type.BaseType != typeof(object) && type.BaseType != typeof(ValueType))
             {
-                CheckTypeReference(type, "BaseType", type.BaseType, violations);
+                CheckTypeReference(type, "BaseType", type.BaseType, forbiddenKeywords, violations);
             }
             foreach (var iface in type.GetInterfaces())
             {
-                CheckTypeReference(type, $"Interface({iface.Name})", iface, violations);
+                CheckTypeReference(type, $"Interface({iface.Name})", iface, forbiddenKeywords, violations);
             }
 
             // 2. Check Fields
             foreach (var field in type.GetFields(flags))
             {
-                CheckTypeReference(type, $"Field({field.Name})", field.FieldType, violations);
+                CheckTypeReference(type, $"Field({field.Name})", field.FieldType, forbiddenKeywords, violations);
             }
 
             // 3. Check Properties
             foreach (var prop in type.GetProperties(flags))
             {
-                CheckTypeReference(type, $"Property({prop.Name})", prop.PropertyType, violations);
+                CheckTypeReference(type, $"Property({prop.Name})", prop.PropertyType, forbiddenKeywords, violations);
             }
 
             // 4. Check Methods
             foreach (var method in type.GetMethods(flags))
             {
                 // Skip compiler-generated property/event accessors to avoid duplicate reporting
-                CheckTypeReference(type, $"Method({method.Name}) ReturnType", method.ReturnType, violations);
+                CheckTypeReference(type, $"Method({method.Name}) ReturnType", method.ReturnType, forbiddenKeywords, violations);
                 foreach (var param in method.GetParameters())
                 {
-                    CheckTypeReference(type, $"Method({method.Name}) Param({param.Name})", param.ParameterType, violations);
+                    CheckTypeReference(type, $"Method({method.Name}) Param({param.Name})", param.ParameterType, forbiddenKeywords, violations);
                 }
                 if (method.IsGenericMethod)
                 {
                     foreach (var arg in method.GetGenericArguments())
                     {
-                        CheckTypeReference(type, $"Method({method.Name}) GenericArg({arg.Name})", arg, violations);
+                        CheckTypeReference(type, $"Method({method.Name}) GenericArg({arg.Name})", arg, forbiddenKeywords, violations);
                     }
                 }
             }
@@ -118,12 +158,12 @@ namespace ProbablyUnifiedHotkeys.Tests
             {
                 if (evt.EventHandlerType != null)
                 {
-                    CheckTypeReference(type, $"Event({evt.Name})", evt.EventHandlerType, violations);
+                    CheckTypeReference(type, $"Event({evt.Name})", evt.EventHandlerType, forbiddenKeywords, violations);
                 }
             }
         }
 
-        private static void CheckTypeReference(Type ownerType, string memberDescription, Type targetType, List<string> violations)
+        private static void CheckTypeReference(Type ownerType, string memberDescription, Type targetType, string[] forbiddenKeywords, List<string> violations)
         {
             foreach (var leafType in EnumerateTypes(targetType))
             {
@@ -131,7 +171,7 @@ namespace ProbablyUnifiedHotkeys.Tests
                 string? ns = leafType.Namespace;
                 string? asm = leafType.Assembly?.GetName()?.Name;
 
-                foreach (var forbidden in ForbiddenKeywords)
+                foreach (var forbidden in forbiddenKeywords)
                 {
                     bool match = (fullName != null && fullName.IndexOf(forbidden, StringComparison.OrdinalIgnoreCase) >= 0) ||
                                  (ns != null && ns.IndexOf(forbidden, StringComparison.OrdinalIgnoreCase) >= 0) ||

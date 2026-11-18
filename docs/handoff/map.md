@@ -108,11 +108,46 @@
   - `SlotCycleSwitching_AndOutOfRangeReset`：3 槽位循环切换与越界安全归零。
   - `SaveToSlot_ExportToJson_Clear_Import_Apply_RoundTrip`：全类型项无损保存导出与恢复应用全链路。
   - `BackwardCompatibility_V147_ProfileImport`：`v1.4.7` 旧版 `puh_profile_v1` JSON 100% 兼容导入。
-- `ArchitecturePurityTests.cs`（1 项用例）：
+- `ArchitecturePurityTests.cs`（2 项用例）：
   - `CoreDomainModels_ZeroUIAndHarmonyReferences`：反射审计 Core 领域类型零 UI/TMP/Harmony 依赖。
+  - `AdapterLayer_ZeroTMProAndUnityEngineUIPurity`：反射审计 Adapter 适配层类型零 TMPro / TextMeshPro / UnityEngine.UI 依赖。
 - `FoundationAndConfigTests.cs`（5 项用例）：
   - `ModLogger_AndSafeExecution_HandleExceptionsGracefully`：日志各级别输出与 SafeExecution 异常保护。
   - `BilingualText_ModesAndLanguageSwitching`：语言模式切换、解析与事件派发。
   - `ModFeatureConfig_SwitchesAndTestOverrides`：特性开关与单测覆盖注入。
   - `TradSimpTable_Exact2473MappingsIntegrity`：2,473 组繁简字符映射完整度。
   - `ModGeneralEntry_ApplyPendingAndResetToSnapshot`：各配置类型待定应用与快照复位。
+
+---
+
+## 5. 阶段 3 第 2 批 (Batch 2) 已落地资产与单测覆盖图谱
+
+> **状态**：阶段 3 第 2 批（模组扫描引擎、三层本地化引擎、工坊模组桥接、静态探测双分支、Harmony 薄钩子、解耦 UI 桥梁与流畅度优化）已全部落地完成并通过 28 项 xUnit 离线单元测试，成功热部署至游戏 `Mods/probably_unified_hotkeys/` 且通过官方 `ModScanner` 0 权限纯净门禁。
+
+### 5.1 落地源码清单
+- `src/ProbablyUnifiedHotkeys/Client/I18n/`：
+  - `I18n.cs`：`BilingualText` 完整超集兼容门面，保留 `v1/I18n.cs` 全量公开常量与 API，实现 UGUI/TMP 字体实时回退辅助（`ApplyFontIfRuntime`、`ApplyFontToDropdown`）。
+- `src/ProbablyUnifiedHotkeys/Adapter/Scanner/`：
+  - `SectionLocalizer.cs`：三层模组分区与条目标题本地化引擎独立抽离，**零 TMPro / UnityEngine.UI 逆向依赖**，支持原生 `LoadedMod.Localization` 直查与错位对齐、内置全生态词典映射及点分/下划线结构化键名智能净化。
+  - `ModCatalogCache.cs`：模组配置轻量化扫描缓存与指纹校验，提供 `EnsureEventSubscriptions` 幂等事件监听，`ResetPendingSessionState` 重置纯数据待定字段并通过 `SessionResetRequested` 解耦通知 UI 表现层。
+  - `ModOptionScanner.cs`：全生态配置扫描引擎，100% 保留外部程序集归属判定、首次会话快照、工坊适配桥接、条件编译探测合并与 `ModScanReport` 诊断报告。
+- `src/ProbablyUnifiedHotkeys/Adapter/ExternalMods/`：
+  - `KnownModAdapters.cs`：11 款主流创意工坊模组专属适配器与强类型委托池（`ShowItemNames`、`ConflictScanner`、`SmartInventoryArrange`、`chiqingsan.BetterPerformance`、`item_details` 等），纯只读接入 `probablystolen.trainer` 维持官方 0 反射审计红线。
+- `src/ProbablyUnifiedHotkeys/Adapter/StaticProbe/`：
+  - `DllKeyProbe.cs`：基于 DseCecil 的静态黑盒探测引擎，严格执行 `#if !DISABLE_DLL_KEY_PROBE ... #else ... #endif` 编译隔离，默认构建绝对 0 引用 `System.IO.File` / `Directory` / `DseCecil`。
+- `src/ProbablyUnifiedHotkeys/Patches/Lifecycle/`：
+  - `IOptionUiBridge.cs`：`IOptionUiBridge` 与 `OptionUiHost` 抽象桥梁，切断 Harmony 钩子对巨石 UI 的强依赖，在 UI 未挂载时优雅降级放行原版，杜绝黑屏死锁。
+  - `ModEntry.cs`：官方原生 `IMod` 契约（`Init`、`OnEnable`、`OnDisable`），按序装配底座、绑定 `ComboKeyStore.ExternalBypassPredicate`，退出期快速短路与限定自身 ID 的 `UnpatchAll`。
+  - `OptionAndKeyBindPatches.cs`：原版选项与改键系统薄拦截钩子，显式声明参数类型数组杜绝 `AmbiguousMatchException`，集成 Esc 录制与未保存仲裁。
+  - `WorkshopModPatcher.cs`：主流工坊模组输入拦截与 `ConfigEntry<T>` / `UnityEngine.Input` 底层重定向，异常统一走规范日志隔离。
+- `src/ProbablyUnifiedHotkeys/Patches/Performance/`：
+  - `PerformancePatches.cs`：退出游戏极速秒退、主菜单闲置分帧预热 `IdleWarmupRunner`、改造件 `RowPool` 行对象池与缺失元素静默钩子。
+
+### 5.2 补充单元测试套件 (`Batch2AdapterAndBridgeTests.cs`)
+- `tests/ProbablyUnifiedHotkeys.Tests/Batch2AdapterAndBridgeTests.cs`（5 项新增用例）：
+  - `SectionLocalizer_KnownDictionary_BilingualMapping_Chinese`：验证已知分类词典（General, Hotkeys, Inventory, Tooltips）中文模式精准转换。
+  - `SectionLocalizer_KnownDictionary_BilingualMapping_English`：验证已知分类词典英文模式精准对齐。
+  - `SectionLocalizer_StructuredKey_IntelligentHumanization`：验证 `speed.config.dialogue` 词典命中、`some_mod.settings_section_combat` 净化为 `Combat`、前缀剥离与空安全。
+  - `OptionUiHost_NullSafe_And_ComboKeyStore_ExternalBypass_Linkage`：验证 `OptionUiHost.Active == null` 空安全，以及接入 Mock 桥梁后开窗与录键对 `ComboKeyStore.IsBypassed` 的精准旁路联动。
+  - `ModCatalogCache_EventSubscriptions_And_ResetSession`：验证事件订阅幂等性与会话重置委托通知。
+- **全套单测当前状态**：28/28 项测试 100% 绿灯通过，耗时约 180ms，0 错误 0 警告。
