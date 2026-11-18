@@ -1,0 +1,32 @@
+<Project>
+  <!-- Standard hot-deployment target for main mod project -->
+  <Target Name="HotDeployToGame" AfterTargets="Build"
+          Condition="'$(IsModProject)' == 'true' and '$(DeployToGame)' == 'true' and '$(CI)' != 'true' and '$(ContinuousIntegrationBuild)' != 'true' and Exists('$(GameDir)\Probably Stolen_Data')">
+    <Message Importance="high" Text="[Hot-Deploy] ----------------------------------------" />
+    <Message Importance="high" Text="[Hot-Deploy] Deploying mod to: $(DeployDir)" />
+
+    <MakeDir Directories="$(DeployDir)" Condition="!Exists('$(DeployDir)')" />
+
+    <!-- 1. Mod Output DLL -->
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="[Hot-Deploy] Copied: $(TargetFileName)" />
+
+    <!-- 2. Mod Manifest -->
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\manifest.xml" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="true"
+          Condition="Exists('$(MSBuildProjectDirectory)\manifest.xml')" />
+    <Message Importance="high" Text="[Hot-Deploy] Copied: manifest.xml" Condition="Exists('$(MSBuildProjectDirectory)\manifest.xml')" />
+
+    <!-- 3. Repository README (if exists) -->
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)README.md" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="true"
+          Condition="Exists('$(MSBuildThisFileDirectory)README.md')" />
+    <Message Importance="high" Text="[Hot-Deploy] Copied: README.md" Condition="Exists('$(MSBuildThisFileDirectory)README.md')" />
+
+    <!-- 4. Preview Image (if exists) -->
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\preview.png" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="true"
+          Condition="Exists('$(MSBuildProjectDirectory)\preview.png')" />
+    <Message Importance="high" Text="[Hot-Deploy] Copied: preview.png" Condition="Exists('$(MSBuildProjectDirectory)\preview.png')" />
+
+    <Message Importance="high" Text="[Hot-Deploy] Deployment completed successfully." />
+    <Message Importance="high" Text="[Hot-Deploy] ----------------------------------------" />
+  </Target>
+</Project>

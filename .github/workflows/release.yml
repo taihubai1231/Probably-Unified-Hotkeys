@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (e.g. v1.5.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Run Offline Unit Tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run Unit Tests
+        run: dotnet test tests/ProbablyUnifiedHotkeys.Tests/ProbablyUnifiedHotkeys.Tests.csproj -c Release --verbosity normal
+
+  build-release:
+    name: Build & Package Release
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore Game Managed Assemblies Cache
+        id: cache-game-assemblies
+        uses: actions/cache@v4
+        with:
+          path: managed-libs
+          key: game-managed-assemblies-${{ runner.os }}
+
+      - name: Check Game Dependencies
+        id: check-deps
+        shell: pwsh
+        run: |
+          $managedDir = "managed-libs"
+          if (Test-Path "$managedDir\Assembly-CSharp.dll") {
+            Write-Host "Found cached game assemblies in $managedDir"
+            "has_deps=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "managed_dir=$managedDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            Write-Host "Game assemblies not found in cache. Checking default or environment paths..."
+            if ($env:PROBABLY_STOLEN_DIR -and (Test-Path "$env:PROBABLY_STOLEN_DIR\Probably Stolen_Data\Managed\Assembly-CSharp.dll")) {
+              "has_deps=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "managed_dir=$env:PROBABLY_STOLEN_DIR\Probably Stolen_Data\Managed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            } else {
+              Write-Host "::warning::Game assemblies not available in CI environment. Mod compilation skipped."
+              "has_deps=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            }
+          }
+
+      - name: Build Mod (if dependencies available)
+        if: steps.check-deps.outputs.has_deps == 'true'
+        shell: pwsh
+        run: |
+          $managedDir = "${{ steps.check-deps.outputs.managed_dir }}"
+          dotnet build src/ProbablyUnifiedHotkeys/ProbablyUnifiedHotkeys.csproj -c Release -p:ContinuousIntegrationBuild=true -p:DeployToGame=false -p:ManagedDir="$managedDir"
+
+      - name: Assemble Release Package
+        if: steps.check-deps.outputs.has_deps == 'true'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag) -or $tag -eq "main") {
+            $tag = "${{ github.event.inputs.release_tag }}"
+            if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "v1.5.0" }
+          }
+          $zipName = "ProbablyUnifiedHotkeys-$tag.zip"
+          $stageDir = "staging/probably_unified_hotkeys"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+
+          Copy-Item "src/ProbablyUnifiedHotkeys/bin/Release/netstandard2.1/ProbablyUnifiedHotkeys.dll" -Destination $stageDir/
+          Copy-Item "src/ProbablyUnifiedHotkeys/manifest.xml" -Destination $stageDir/
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" -Destination $stageDir/
+          }
+          if (Test-Path "src/ProbablyUnifiedHotkeys/preview.png") {
+            Copy-Item "src/ProbablyUnifiedHotkeys/preview.png" -Destination $stageDir/
+          }
+
+          Compress-Archive -Path "staging/*" -DestinationPath $zipName
+          Write-Host "Successfully packaged $zipName"
+
+      - name: Publish GitHub Release
+        if: steps.check-deps.outputs.has_deps == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ProbablyUnifiedHotkeys-*.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true

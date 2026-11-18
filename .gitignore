@@ -1,0 +1,33 @@
+# User-specific build properties (local secrets, private paths)
+Directory.Build.props.user
+*.user
+*.user.*
+!*.example
+!Directory.Build.props.user.example
+
+# Build outputs
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+TestResults/
+staging/
+*.zip
+
+# Visual Studio / IDE caches
+.vs/
+.idea/
+.vscode/
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Steam & Game artifacts
+steam_api64.dll
+steam_appid.txt
+Probably Stolen_Data/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,85 @@
+name: Bug 报告 (Bug Report)
+description: 报告《深空当铺 (Probably Stolen)》模组「可能是按键统一优化 (Probably Unified Hotkeys)」的功能异常、UI 排版问题或与其他模组的按键冲突/兼容性问题
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题！在提交 Bug 报告前，请先核实当前模组是否已更新至最新版，并尽量提供详细的复现步骤与运行日志。
+
+  - type: input
+    id: versions
+    attributes:
+      label: 环境与版本信息 (必填)
+      description: 请填写本模组版本、游戏本体版本、界面语言以及获取渠道（Steam 创意工坊 / GitHub Release 手动安装）
+      placeholder: "例如: Mod v1.5.0 / Game v0.46D / 简体中文 / Steam 创意工坊 (3837828444)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 问题归属模块 (必填)
+      description: 请选择最接近问题现象的模块分类
+      options:
+        - "快捷键绑定 / 组合键 / 鼠标侧键 (Mouse3~6) 录入或触发异常"
+        - "未保存更改弹窗误报 / 退出死锁 / Esc 键录制冲突"
+        - "第三方模组设置未显示 / 疑难按键强转异常 (模组排查)"
+        - "界面排版 / 字体显示 / 折叠展开 / 搜索定位问题"
+        - "预设方案保存 / 切换 / 剪贴板 JSON 导入导出异常"
+        - "性能卡顿 (打开选项 / 全部展开 / 改造件面板 / 退出游戏)"
+        - "官方 ModScanner 安全扫描告警或模组被拒绝加载"
+        - "其他异常"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤 (必填)
+      description: 请按顺序详细描述触发该问题的操作步骤
+      placeholder: |
+        1. 按 ESC 打开选项
+        2. 展开某模组卡片
+        3. 点击录制按键并按下 Ctrl+C
+        4. 点击底部「应用」保存
+        5. 按 Esc 退出
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_vs_actual
+    attributes:
+      label: 期望行为与实际现象 (必填)
+      description: 请描述你期望发生的行为以及实际观察到的异常现象
+      placeholder: "期望解绑后点击应用退出不弹窗，实际退出时误报「检测到未保存的更改」"
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostic_summary
+    attributes:
+      label: 模组排查汇总信息 (推荐填写)
+      description: 若涉及其他工坊模组快捷键未识别或按键冲突，请在游戏内「ESC -> 选项 -> 模组排查」中点击右上角「复制排查汇总」，直接粘贴至此处
+      placeholder: "粘贴从「模组排查」复制的结构化文本..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 完整运行日志 Player.log / F8 控制台输出 (必填)
+      description: 请粘贴 Player.log（位于 %USERPROFILE%\AppData\LocalLow\ProbablyStolen\Player.log）或按 F8 调试控制台中的完整相关日志，切勿只截取最后一行
+      placeholder: "在此粘贴完整的日志堆栈信息..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: other_mods
+    attributes:
+      label: 同时启用的其他创意工坊模组 (选填)
+      description: 列出同时启用的相关工坊模组名称或 ID（如 SpeedUp、SmartInventoryArrange、ConflictScanner 等），便于开发者本地复现兼容问题
+      placeholder: "例如: SpeedUp (工坊ID: ...), SmartInventoryArrange"
+    validations:
+      required: false

@@ -1,0 +1,105 @@
+# 更新日志 (Changelog)
+
+本项目（**可能是按键统一优化 / Probably Unified Hotkeys**）的所有显著变更均记录在此文件中。  
+格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号严格遵循 [语义化版本 (SemVer 2.0.0)](https://semver.org/lang/zh-CN/)。
+
+---
+
+## [1.5.0] - 2026-11-18
+
+### Added
+- **7 层单向解耦架构落地**：
+  - 确立 `Diagnostics` -> `Config` -> `Core` -> `Persistence` -> `Adapter` -> `Patches` -> `Client` 单向分层拓扑，彻底杜绝逆向跨层调用。
+- **UI 运行时状态独立管理 (`UiSessionState.cs`)**：
+  - 彻底修复历史版本与 `v2` 遗留的设计缺陷：将 `Core/Model/ModModel.cs` 净化为 100% 纯业务领域模型（零 `GameObject` / `CustomUIElement` 控件依赖）；
+  - 新增 `src/Client/State/UiSessionState.cs` 独立集中维护所有运行时 UI 控件句柄、卡片展开状态、`BaselineSnapshot` 基准快照与未保存脏状态机。
+- **5,137 行巨石 UI (`UnifiedOptionUI.cs`) 正交拆解**：
+  - 按职责正交拆分为 10 个高内聚子组件：`UnifiedOptionWindow`、`UnsavedConfirmDialog`、`TopSearchAndActionBar`、`CollapsibleCardView`、`KeyCaptureController`、`ConflictAggregationView`、`ModDiagnosticView`、`ProfilePresetCardView`、`SectionLocalizer`、`UiLayoutAndFontHelper`。
+- **完备的工程治理与标准化技术基建**：
+  - 新增《AI Agent 协作宪章》(AGENTS.md)，落地单层星型扁平拓扑、零历史自包含派发与防并发红线；
+  - 新增《踩坑全景账本》(docs/PITFALLS.md)，按四元组收录 18 大历史深坑；
+  - 新增《Harmony 补丁与 ModScanner 解耦规范》(docs/HARMONY_SPEC.md)；
+  - 新增《9 阶段实机回归验收清单》(docs/REGRESSION_CHECKLIST.md)；
+  - 新增《标准化发布作业程序》(docs/RELEASE_SOP.md) 与《跨阶段交接三件套》(docs/handoff/)。
+
+### Changed
+- **异常防崩网加固**：全库消灭空 `catch {}`，统一通过 `SafeExecution.SafeExecute` / `SafeFunc` 执行并记录结构化日志（`[ProbablyUnifiedHotkeys][LEVEL]`）。
+- **0 权限默认纯净契约**：默认构建注入 `DisableDllKeyProbe=true` 编译宏，`manifest.xml` 保持空 `<Capabilities />`，确保静态扫描达到 `0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`，面向官方 2026-12-10 安全白名单门禁。
+
+---
+
+## [1.4.7] - 2026-11-18
+
+### Fixed
+- **彻底修复解绑按键（设为「无」）点击「应用」后退出仍误触发「未保存更改」弹窗的 Bug**：
+  - 修复 `ComboKeyStore.GetSavedModifiers` 在查询 `KeyCode.None` 目标键时未严格阻断而意外回落返回历史残留修饰位（如 `Ctrl / Shift`）的问题。
+  - 在 `HasUnsavedChanges()` 中加入显式解绑容错豁免，当按键处于两端解绑（`None`）状态时不再因第三方模组 Getter 滞后而误报脏标记。
+  - 在 `ApplyAllSettings()` 执行完毕后强制刷新全量基准快照（Baseline Snapshot）并彻底复位脏标记与临时变动。
+
+### Changed
+- **0 权限纯净构建默认强制化**：`src/ProbablyUnifiedHotkeys/ProbablyUnifiedHotkeys.csproj` 默认启用 `DisableDllKeyProbe=true`（`DISABLE_DLL_KEY_PROBE`），`manifest.xml` 保持空 `<Capabilities />`，全面通过官方 `ModScanner` 0 权限安全扫描（`0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`）。
+
+---
+
+## [1.4.6] - 2026-11-17
+
+### Added
+- **退出设置未保存防丢确认弹窗（Unsaved Changes Confirmation Dialog）**：
+  - 覆盖全部原版设置与第三方模组快捷键、组合键修饰及常规配置项；在顶层 `CustomUIManager.HandleEscape` 拦截，解决主菜单修改后按 Esc 无反应的死锁问题，全面覆盖主菜单、局内暂停及商店 Esc 菜单。
+  - 提供数学级居中对齐的「保存并退出」、「放弃修改」与「取消」三项原生样式按钮；严格保障快捷键录制状态（`请按键... (Esc=无)`）及缓冲帧内按 `Esc` 仅清空绑定为「无」，绝不误触发退出弹窗。
+
+### Changed
+- **选项页底部「应用」按钮纯净居中复原**：移除底部栏拥挤的 5 个方案辅助按钮，恢复官方原生绝对居中的单个 180px「应用」按钮；3 套预设快照与剪贴板 JSON 导入/导出完整收纳于「统一快捷键管理」独立折叠卡片内。
+
+---
+
+## [1.4.5] - 2026-11-15
+
+### Added
+- **键位与设置方案快照管理（`HotkeyProfileManager.cs`）**：
+  - 新增 3 套本地场景预设槽位（`方案一 (日常)`、`方案二 (搜刮)`、`方案三 (备用)`）与剪贴板紧凑 JSON 一键导出/导入（Schema: `puh_profile_v1`），全量备份与恢复快捷键、适配器自定义热键、常规模组设置、强转表与忽略表。
+- **三层根治式模组分区标题本地化引擎**：
+  - 第 1 层通过零反射、零权限读取原生 `LoadedMod.Localization` 多语言表并支持英文值反向对齐中文译文；第 2 层内置工坊全生态分区词典；第 3 层对未知 `xxx.config.yyy` 键名自动剥离前缀净化排版。
+- **改造件面板本模组封面独立剔除**：选中本模组时隐藏大块封面，使介绍、指南与依赖信息置顶完整展示。
+
+### Fixed
+- 修复超长文本输入框（如需求高亮模组「忽略指定物品 ID」）被挤压至单字符垂直换行的排版缺陷。
+
+---
+
+## [1.4.4] - 2026-11-13
+
+### Added
+- **可选静态只读热键探测（`DllKeyProbe.cs`，Route B · `<Capability>files</Capability>`）**与 **模组功能模块化体系（`ModFeatureConfig.cs`）**。
+- **「模组排查」疑难收口与顶部操作栏像素级对齐（`158×36`）**，支持 `忽略(非按键)` 与 `恢复提醒`。
+
+### Fixed
+- 修复原版官方快捷键发生冲突时仅按钮变橙但左侧缺少 `[!]` 叹号徽章与悬浮冲突详情提示的问题。
+
+---
+
+## [1.4.3] - 2026-11-12
+
+### Added
+- 官方渠道深度防漏检（野 `ModConfig` 与 `GameOptionRegistry` 委托归属回收）、交互式「模组排查」子视图、全界面中英双语本地化（`I18n.cs`）及 `probablystolen.trainer` 合规适配。
+
+---
+
+## [1.4.2] - 2026-11-12
+
+### Fixed
+- 修复 `Meta_Button` 内边距吞字导致的四大核心按钮文字空白问题；修复整体搜索 `"yp"` 误命中 `KeyCode.Keypad6` 问题；消除「改造件」面板 `ConflictScanner` 双扫卡顿并完成全库热路径委托化。
+
+---
+
+## [1.4.1] - 2026-11-11
+
+### Added / Fixed
+- 打通 `SpeedUp` 与 `SmartInventoryArrange` 原生 `"Ctrl/Shift/Alt+Key"` 组合热键串双向读写；提取静态 `BindableKeyboardKeys` 表并加固 `Application.wantsToQuit` 生命周期边界。
+
+---
+
+## [1.4.0] - 2026-11-11
+
+### Added
+- **四大核心交互全链路流畅度重构（`PerformancePatches.cs`）**：实现「退出游戏秒退」、「改造件面板行对象池与 O(1) 依赖索引」、「全部展开单次字号拟合与帧预算预建」及「选项开窗空闲预热与离线装配」。

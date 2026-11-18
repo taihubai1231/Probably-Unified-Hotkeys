@@ -1,0 +1,14 @@
+<Project>
+  <!-- Local Developer Configuration Template -->
+  <!-- Copy this file to 'Directory.Build.props.user' to customize your local environment -->
+  <PropertyGroup>
+    <!-- Path to your local game installation directory -->
+    <GameDir>E:\Program Files (x86)\steam\steamapps\common\Probably Stolen</GameDir>
+
+    <!-- Set to 'false' if you want to build without hot-deploying into the game folder -->
+    <!-- <DeployToGame>false</DeployToGame> -->
+
+    <!-- Set to 'false' if you need to enable legacy reflection DLL key probe during development -->
+    <!-- <DisableDllKeyProbe>false</DisableDllKeyProbe> -->
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,34 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <Deterministic>true</Deterministic>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Version>1.5.0</Version>
+    <Authors>太湖白1231</Authors>
+    <Company>ProbablyUnifiedHotkeys</Company>
+  </PropertyGroup>
+
+  <!-- Import user-specific overrides if present -->
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Build.props.user" Condition="Exists('$(MSBuildThisFileDirectory)Directory.Build.props.user')" />
+
+  <!-- Game directory resolution (User props -> PROBABLY_STOLEN_DIR environment variable -> Default Steam installation) -->
+  <PropertyGroup>
+    <GameDir Condition="'$(GameDir)' == '' and '$(PROBABLY_STOLEN_DIR)' != ''">$(PROBABLY_STOLEN_DIR)</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">E:\Program Files (x86)\steam\steamapps\common\Probably Stolen</GameDir>
+    <ManagedDir Condition="'$(ManagedDir)' == ''">$(GameDir)\Probably Stolen_Data\Managed</ManagedDir>
+    <DeployDir Condition="'$(DeployDir)' == ''">$(GameDir)\Mods\probably_unified_hotkeys</DeployDir>
+  </PropertyGroup>
+
+  <!-- Game deployment flag: default true in local dev; false in CI / automated builds -->
+  <PropertyGroup>
+    <DeployToGame Condition="'$(DeployToGame)' == '' and '$(CI)' != 'true' and '$(ContinuousIntegrationBuild)' != 'true'">true</DeployToGame>
+    <DeployToGame Condition="'$(DeployToGame)' == ''">false</DeployToGame>
+  </PropertyGroup>
+
+  <!-- DisableDllKeyProbe flag & compile constant -->
+  <PropertyGroup>
+    <DisableDllKeyProbe Condition="'$(DisableDllKeyProbe)' == ''">true</DisableDllKeyProbe>
+    <DefineConstants Condition="'$(DisableDllKeyProbe)' == 'true'">$(DefineConstants);DISABLE_DLL_KEY_PROBE</DefineConstants>
+  </PropertyGroup>
+</Project>

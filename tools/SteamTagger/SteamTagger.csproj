@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <IsModProject>false</IsModProject>
+    <DeployToGame>false</DeployToGame>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="com.rlabrecque.steamworks.net">
+      <HintPath>$(ManagedDir)\com.rlabrecque.steamworks.net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="CopyNativeSteam" AfterTargets="Build" Condition="Exists('$(GameDir)\Probably Stolen_Data\Plugins\x86_64\steam_api64.dll')">
+    <Copy SourceFiles="$(GameDir)\Probably Stolen_Data\Plugins\x86_64\steam_api64.dll" DestinationFolder="$(OutDir)" />
+    <WriteLinesToFile File="$(OutDir)steam_appid.txt" Lines="4348910" Overwrite="true" />
+  </Target>
+</Project>
