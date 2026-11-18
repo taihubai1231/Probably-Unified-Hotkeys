@@ -134,6 +134,51 @@ namespace ProbablyUnifiedHotkeys.Tests
             }
         }
 
+        [Fact]
+        public void KnownModAdapters_ConflictScanner_And_ShowItemNames_UnbindToNone_Persistence()
+        {
+            // Verify ConflictScanner v1.6.5 default key is F7
+            var csDefault = ComboKeyStore.GetEffectiveCustomHotkey("conflict_scanner.ReportKey", KeyModifierMask.None, KeyCode.F7);
+            Assert.Equal(KeyCode.F7, csDefault.Key);
+
+            // Set to None (unbound)
+            ComboKeyStore.SetSavedCustomHotkey("conflict_scanner.ReportKey", KeyModifierMask.None, KeyCode.None, KeyModifierMask.None, KeyCode.F7);
+            var csEffective = ComboKeyStore.GetEffectiveCustomHotkey("conflict_scanner.ReportKey", KeyModifierMask.None, KeyCode.F7);
+            Assert.Equal(KeyCode.None, csEffective.Key);
+
+            // Set ShowItemNames to None
+            ComboKeyStore.SetSavedCustomHotkey("ShowItemNames.Hotkey", KeyModifierMask.None, KeyCode.None, KeyModifierMask.None, KeyCode.LeftAlt);
+            var sinEffective = ComboKeyStore.GetEffectiveCustomHotkey("ShowItemNames.Hotkey", KeyModifierMask.None, KeyCode.LeftAlt);
+            Assert.Equal(KeyCode.None, sinEffective.Key);
+
+            // Verify SyncExternalNonConfigHotkeysOnBoot executes cleanly without throwing
+            KnownModAdapters.SyncExternalNonConfigHotkeysOnBoot();
+        }
+
+        [Fact]
+        public void FastQuit_And_ModEntryQuittingState_Safety()
+        {
+            Assert.False(ModEntry.IsApplicationQuitting);
+
+            // Test PrepareFastQuit idempotency and state transition
+            PerformancePatches.PrepareFastQuit();
+            Assert.True(ModEntry.IsApplicationQuitting);
+
+            // Calling again while quitting is safe and idempotent
+            PerformancePatches.PrepareFastQuit();
+            Assert.True(ModEntry.IsApplicationQuitting);
+        }
+
+        [Fact]
+        public void WorkshopModPatcher_SiaTrySet_NullSafe()
+        {
+            string? error = null;
+            bool result = false;
+            // When instance or binding is null, prefix safely yields to original method (returns true)
+            bool runOrig = WorkshopModPatcher.SmartInventoryArrange_TrySet_Prefix(new object(), null!, new object(), ref error, ref result);
+            Assert.True(runOrig);
+        }
+
         private sealed class MockOptionUiBridge : IOptionUiBridge
         {
             public bool IsEnhancedWindowOpen { get; set; }

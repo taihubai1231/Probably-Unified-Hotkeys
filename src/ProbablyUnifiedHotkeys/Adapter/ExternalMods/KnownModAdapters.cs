@@ -52,6 +52,8 @@ namespace ProbablyUnifiedHotkeys
         // 2. ConflictScanner 缓存
         private static int _csEpoch = -1;
         private static PropertyInfo? _csKeyProp;
+        private static FieldInfo? _csKeyField;
+        private static FieldInfo? _csLoadedField;
         private static Func<KeyCode>? _csGetKeyFn;
         private static Action<KeyCode>? _csSetKeyPropFn;
         private static Action<KeyCode>? _csSaveMethodFn;
@@ -135,6 +137,7 @@ namespace ProbablyUnifiedHotkeys
                 {
                     // 访问 SettingsRuntime.Gui 会触发 UnifiedSettingsGui 构造并将 OpenSettingsHotkey / ArrangeOpenContainersHotkey / UndoArrangeHotkey 注册进 ModConfig
                     _ = _smartArrangeGuiProp.GetValue(null);
+                    SyncSmartArrangeRuntimeHotkeysFromStore();
                 }
             }
             catch (Exception ex)
@@ -280,33 +283,27 @@ namespace ProbablyUnifiedHotkeys
                 SetKey = (key) =>
                 {
                     ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.LeftAlt);
-                    if (key != KeyCode.None)
+                    if (setHotkey != null) setHotkey(key);
+                    else
                     {
-                        if (setHotkey != null) setHotkey(key);
-                        else
-                        {
-                            if (setHotkeyProp != null) setHotkeyProp(key);
-                            else hotkeyProp.SetValue(null, key);
-                            try { PlayerPrefs.SetInt("snd.hotkey", (int)key); }
-                            catch (Exception ex) { ModLogger.Debug($"PlayerPrefs.SetInt snd.hotkey error: {ex.Message}"); }
-                            commit?.Invoke();
-                        }
+                        if (setHotkeyProp != null) setHotkeyProp(key);
+                        else hotkeyProp.SetValue(null, key);
+                        try { PrefsStorage.SetInt("snd.hotkey", (int)key); }
+                        catch (Exception ex) { ModLogger.Debug($"PrefsStorage.SetInt snd.hotkey error: {ex.Message}"); }
+                        commit?.Invoke();
                     }
                 },
                 SetCombo = (mods, key) =>
                 {
                     ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, KeyCode.LeftAlt);
-                    if (key != KeyCode.None)
+                    if (setHotkey != null) setHotkey(key);
+                    else
                     {
-                        if (setHotkey != null) setHotkey(key);
-                        else
-                        {
-                            if (setHotkeyProp != null) setHotkeyProp(key);
-                            else hotkeyProp.SetValue(null, key);
-                            try { PlayerPrefs.SetInt("snd.hotkey", (int)key); }
-                            catch (Exception ex) { ModLogger.Debug($"PlayerPrefs.SetInt snd.hotkey error: {ex.Message}"); }
-                            commit?.Invoke();
-                        }
+                        if (setHotkeyProp != null) setHotkeyProp(key);
+                        else hotkeyProp.SetValue(null, key);
+                        try { PrefsStorage.SetInt("snd.hotkey", (int)key); }
+                        catch (Exception ex) { ModLogger.Debug($"PrefsStorage.SetInt snd.hotkey error: {ex.Message}"); }
+                        commit?.Invoke();
                     }
                 }
             });
@@ -447,6 +444,8 @@ namespace ProbablyUnifiedHotkeys
                 if (keybindType != null)
                 {
                     _csKeyProp = AccessTools.Property(keybindType, "Key");
+                    _csKeyField = AccessTools.Field(keybindType, "_key");
+                    _csLoadedField = AccessTools.Field(keybindType, "_loaded");
                     _csGetKeyFn = CreateStaticDelegate<Func<KeyCode>>(_csKeyProp?.GetGetMethod(true));
                     _csSetKeyPropFn = CreateStaticDelegate<Action<KeyCode>>(_csKeyProp?.GetSetMethod(true));
                     _csSaveMethodFn = CreateStaticDelegate<Action<KeyCode>>(AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) }));
@@ -455,7 +454,8 @@ namespace ProbablyUnifiedHotkeys
             }
 
             PropertyInfo? keyProp = _csKeyProp;
-            if (keyProp == null) return;
+            FieldInfo? keyField = _csKeyField;
+            if (keyProp == null && keyField == null) return;
 
             Func<KeyCode>? getKey = _csGetKeyFn;
             Action<KeyCode>? setKeyProp = _csSetKeyPropFn;
@@ -469,34 +469,74 @@ namespace ProbablyUnifiedHotkeys
                 PinyinSortKey = PinyinEngine.ToInitials(csName)
             };
 
+            const string csEntryId = "conflict_scanner.ReportKey";
             group.Hotkeys.Add(new ModHotkeyEntry
             {
-                Id = "conflict_scanner.ReportKey",
+                Id = csEntryId,
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
                 DisplayName = BilingualText.Get("冲突报告窗口快捷键", "Open Conflict Report"),
-                Tooltip = BilingualText.Get("按下后呼出模组冲突检测器诊断面板", "Press to open the Mod Conflict Scanner diagnostic window"),
-                DefaultKey = KeyCode.F8,
+                Tooltip = BilingualText.Get("按下后呼出模组冲突检测器诊断面板（默认 F7；支持单键、组合键、鼠标侧键与 Esc 清空）", "Press to open the Mod Conflict Scanner diagnostic window (default F7; supports rebinding, combos & Esc)"),
+                DefaultKey = KeyCode.F7,
                 HasExplicitDefault = true,
-                GetKey = () => getKey != null ? getKey() : (KeyCode)(keyProp.GetValue(null) ?? KeyCode.None),
+                SupportsModifierCombos = true,
+                GetKey = () =>
+                {
+                    KeyCode raw = getKey != null ? getKey() : (KeyCode)((_csKeyProp?.GetValue(null) ?? _csKeyField?.GetValue(null)) ?? KeyCode.None);
+                    return ComboKeyStore.GetEffectiveCustomHotkey(csEntryId, KeyModifierMask.None, raw).Key;
+                },
+                GetExternalModifiers = () =>
+                {
+                    KeyCode raw = getKey != null ? getKey() : (KeyCode)((_csKeyProp?.GetValue(null) ?? _csKeyField?.GetValue(null)) ?? KeyCode.None);
+                    return ComboKeyStore.GetEffectiveCustomHotkey(csEntryId, KeyModifierMask.None, raw).Modifiers;
+                },
                 SetKey = (key) =>
                 {
-                    if (saveMethod != null)
+                    ComboKeyStore.SetSavedCustomHotkey(csEntryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.F7);
+                    _csKeyField?.SetValue(null, key);
+                    _csLoadedField?.SetValue(null, true);
+                    if (setKeyProp != null) setKeyProp(key);
+                    else _csKeyProp?.SetValue(null, key);
+
+                    if (key != KeyCode.None && saveMethod != null)
                     {
                         saveMethod(key);
                     }
                     else
                     {
-                        if (setKeyProp != null) setKeyProp(key);
-                        else keyProp.SetValue(null, key);
                         try
                         {
-                            PlayerPrefs.SetString("conflict_scanner.report_key", key.ToString());
-                            PlayerPrefs.Save();
+                            PrefsStorage.SetString("conflict_scanner.report_key", key == KeyCode.None ? "None" : key.ToString());
+                            PrefsStorage.Save();
                         }
                         catch (Exception ex)
                         {
-                            ModLogger.Debug($"PlayerPrefs.SetString conflict_scanner.report_key error: {ex.Message}");
+                            ModLogger.Debug($"PrefsStorage.SetString conflict_scanner.report_key error: {ex.Message}");
+                        }
+                    }
+                },
+                SetCombo = (mods, key) =>
+                {
+                    ComboKeyStore.SetSavedCustomHotkey(csEntryId, mods, key, KeyModifierMask.None, KeyCode.F7);
+                    _csKeyField?.SetValue(null, key);
+                    _csLoadedField?.SetValue(null, true);
+                    if (setKeyProp != null) setKeyProp(key);
+                    else _csKeyProp?.SetValue(null, key);
+
+                    if (key != KeyCode.None && saveMethod != null)
+                    {
+                        saveMethod(key);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            PrefsStorage.SetString("conflict_scanner.report_key", key == KeyCode.None ? "None" : key.ToString());
+                            PrefsStorage.Save();
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"PrefsStorage.SetString conflict_scanner.report_key error: {ex.Message}");
                         }
                     }
                 }
@@ -623,12 +663,12 @@ namespace ProbablyUnifiedHotkeys
                     else toggleField?.SetValue(null, key);
                     try
                     {
-                        PlayerPrefs.SetInt("clientdemandhighlight.key", (int)key);
-                        PlayerPrefs.Save();
+                        PrefsStorage.SetInt("clientdemandhighlight.key", (int)key);
+                        PrefsStorage.Save();
                     }
                     catch (Exception ex)
                     {
-                        ModLogger.Debug($"PlayerPrefs.SetInt clientdemandhighlight.key error: {ex.Message}");
+                        ModLogger.Debug($"PrefsStorage.SetInt clientdemandhighlight.key error: {ex.Message}");
                     }
                 }
             });
@@ -1270,10 +1310,107 @@ namespace ProbablyUnifiedHotkeys
             return false;
         }
 
+        private static bool _externalHotkeysBootSynced = false;
+
         /// <summary>
-        /// 在主菜单空闲预热或首扫时补同步“清空(None) / 鼠标侧键(Mouse3~6)”等原版 LoadHotkey 会跳过的持久键位。
+        /// 在主菜单空闲预热或首扫时补同步“清空(None) / 鼠标侧键(Mouse3~6)”等原版 LoadHotkey 会跳过的持久键位，
+        /// 同时对齐 SmartInventoryArrange, ConflictScanner, ShowItemNames 等未通过 ModConfig 初始化的已知模组运行时键位。
         /// </summary>
         public static void SyncExternalNonConfigHotkeysOnBoot()
+        {
+            if (_externalHotkeysBootSynced) return;
+            _externalHotkeysBootSynced = true;
+
+            SyncTrainerOnBoot();
+            SyncSmartArrangeRuntimeHotkeysFromStore();
+            SyncConflictScannerOnBoot();
+            SyncShowItemNamesOnBoot();
+        }
+
+        private static void SyncConflictScannerOnBoot()
+        {
+            try
+            {
+                Type? keybindType = AccessTools.TypeByName("ConflictScanner.Keybind");
+                if (keybindType == null) return;
+
+                PropertyInfo? keyProp = AccessTools.Property(keybindType, "Key");
+                FieldInfo? keyField = AccessTools.Field(keybindType, "_key");
+                FieldInfo? loadedField = AccessTools.Field(keybindType, "_loaded");
+                MethodInfo? saveMethod = AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) });
+
+                var effective = ComboKeyStore.GetEffectiveCustomHotkey("conflict_scanner.ReportKey", KeyModifierMask.None, KeyCode.F7);
+                KeyCode targetKey = effective.Key;
+
+                keyField?.SetValue(null, targetKey);
+                loadedField?.SetValue(null, true);
+                if (keyProp != null && keyProp.CanWrite)
+                {
+                    keyProp.SetValue(null, targetKey);
+                }
+
+                if (targetKey != KeyCode.None && saveMethod != null)
+                {
+                    saveMethod.Invoke(null, new object[] { targetKey });
+                }
+                else
+                {
+                    try
+                    {
+                        PrefsStorage.SetString("conflict_scanner.report_key", targetKey == KeyCode.None ? "None" : targetKey.ToString());
+                        PrefsStorage.Save();
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Debug($"SyncConflictScannerOnBoot PrefsStorage error: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"SyncConflictScannerOnBoot error: {ex.Message}");
+            }
+        }
+
+        private static void SyncShowItemNamesOnBoot()
+        {
+            try
+            {
+                Type? settingsType = AccessTools.TypeByName("ShowItemNames.Settings");
+                if (settingsType == null) return;
+
+                PropertyInfo? hotkeyProp = AccessTools.Property(settingsType, "Hotkey");
+                MethodInfo? setHotkey = AccessTools.Method(settingsType, "SetHotkey", new Type[] { typeof(KeyCode) });
+                MethodInfo? commit = AccessTools.Method(settingsType, "Commit");
+
+                var effective = ComboKeyStore.GetEffectiveCustomHotkey("ShowItemNames.Hotkey", KeyModifierMask.None, KeyCode.LeftAlt);
+                KeyCode targetKey = effective.Key;
+
+                if (setHotkey != null)
+                {
+                    setHotkey.Invoke(null, new object[] { targetKey });
+                }
+                else if (hotkeyProp != null && hotkeyProp.CanWrite)
+                {
+                    hotkeyProp.SetValue(null, targetKey);
+                }
+                try
+                {
+                    PrefsStorage.SetInt("snd.hotkey", (int)targetKey);
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"SyncShowItemNamesOnBoot PrefsStorage error: {ex.Message}");
+                }
+                commit?.Invoke(null, null);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"SyncShowItemNamesOnBoot error: {ex.Message}");
+            }
+        }
+
+        private static void SyncTrainerOnBoot()
         {
             if (_trainerBootSynced) return;
 

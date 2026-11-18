@@ -38,51 +38,93 @@ namespace ProbablyUnifiedHotkeys
 
         private static void PatchUnityInputRedirection(Harmony harmony, ModLog? log)
         {
+            int patchedCount = 0;
+
             try
             {
                 MethodInfo? getKey = AccessTools.Method(typeof(Input), "GetKey", new Type[] { typeof(KeyCode) });
                 if (getKey != null)
                 {
                     harmony.Patch(getKey, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetKey_Prefix))));
+                    patchedCount++;
                 }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[WorkshopModPatcher] Failed to patch Input.GetKey: {ex.Message}");
+            }
 
+            try
+            {
                 MethodInfo? getKeyDown = AccessTools.Method(typeof(Input), "GetKeyDown", new Type[] { typeof(KeyCode) });
                 if (getKeyDown != null)
                 {
                     harmony.Patch(getKeyDown, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetKeyDown_Prefix))));
+                    patchedCount++;
                 }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[WorkshopModPatcher] Failed to patch Input.GetKeyDown: {ex.Message}");
+            }
 
+            try
+            {
                 MethodInfo? getKeyUp = AccessTools.Method(typeof(Input), "GetKeyUp", new Type[] { typeof(KeyCode) });
                 if (getKeyUp != null)
                 {
                     harmony.Patch(getKeyUp, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetKeyUp_Prefix))));
+                    patchedCount++;
                 }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[WorkshopModPatcher] Failed to patch Input.GetKeyUp: {ex.Message}");
+            }
 
+            try
+            {
                 MethodInfo? getMouse = AccessTools.Method(typeof(Input), "GetMouseButton", new Type[] { typeof(int) });
                 if (getMouse != null)
                 {
                     harmony.Patch(getMouse, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetMouseButton_Prefix))));
+                    patchedCount++;
                 }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[WorkshopModPatcher] Input.GetMouseButton is an InternalCall and skipped: {ex.Message}");
+            }
 
+            try
+            {
                 MethodInfo? getMouseDown = AccessTools.Method(typeof(Input), "GetMouseButtonDown", new Type[] { typeof(int) });
                 if (getMouseDown != null)
                 {
                     harmony.Patch(getMouseDown, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetMouseButtonDown_Prefix))));
+                    patchedCount++;
                 }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[WorkshopModPatcher] Input.GetMouseButtonDown is an InternalCall and skipped: {ex.Message}");
+            }
 
+            try
+            {
                 MethodInfo? getMouseUp = AccessTools.Method(typeof(Input), "GetMouseButtonUp", new Type[] { typeof(int) });
                 if (getMouseUp != null)
                 {
                     harmony.Patch(getMouseUp, prefix: new HarmonyMethod(AccessTools.Method(typeof(WorkshopModPatcher), nameof(Input_GetMouseButtonUp_Prefix))));
+                    patchedCount++;
                 }
-
-                log?.Log("Patched UnityEngine.Input key & mouse redirection hooks");
             }
             catch (Exception ex)
             {
-                log?.Warning($"[WorkshopModPatcher] Failed to patch UnityEngine.Input: {ex.Message}");
-                ModLogger.Warn($"[WorkshopModPatcher] Failed to patch UnityEngine.Input: {ex.Message}");
+                ModLogger.Debug($"[WorkshopModPatcher] Input.GetMouseButtonUp is an InternalCall and skipped: {ex.Message}");
             }
+
+            log?.Log($"Patched UnityEngine.Input key & mouse redirection hooks ({patchedCount} methods)");
         }
 
         public static bool Input_GetKey_Prefix(KeyCode key, ref bool __result)
@@ -721,6 +763,8 @@ namespace ProbablyUnifiedHotkeys
         private static PropertyInfo? _siaHkCtrlProp;
         private static PropertyInfo? _siaHkAltProp;
         private static PropertyInfo? _siaHkShiftProp;
+        private static MethodInfo? _siaOpenSetter;
+        private static PropertyInfo? _siaBoundProp;
         private static bool _siaBootSynced = false;
 
         private static void PatchSmartInventoryArrange(Harmony harmony, ModLog? log)
@@ -736,6 +780,20 @@ namespace ProbablyUnifiedHotkeys
                 _siaHkCtrlProp = AccessTools.Property(settingsHotkeyType, "Ctrl");
                 _siaHkAltProp = AccessTools.Property(settingsHotkeyType, "Alt");
                 _siaHkShiftProp = AccessTools.Property(settingsHotkeyType, "Shift");
+            }
+
+            if (modelType != null && settingsBindingType != null && settingsHotkeyType != null)
+            {
+                _siaOpenSetter = AccessTools.PropertySetter(modelType, "Open");
+                _siaBoundProp = AccessTools.Property(settingsHotkeyType, "Bound");
+
+                MethodInfo? trySet = AccessTools.Method(modelType, "TrySet", new Type[] { settingsBindingType, settingsHotkeyType, typeof(string).MakeByRefType() });
+                if (trySet != null)
+                {
+                    MethodInfo prefix = AccessTools.Method(typeof(WorkshopModPatcher), nameof(SmartInventoryArrange_TrySet_Prefix));
+                    harmony.Patch(trySet, prefix: new HarmonyMethod(prefix));
+                    log?.Log("Patched SmartInventoryArrange.SettingsHotkeys.TrySet (allows unbinding Open shortcut to None)");
+                }
             }
 
             if (guiType != null)
@@ -785,6 +843,42 @@ namespace ProbablyUnifiedHotkeys
                     log?.Log("Patched SmartInventoryArrange.FixedPlacementDrop.Prefix (alt placement key redirection)");
                 }
             }
+        }
+
+        public static bool SmartInventoryArrange_TrySet_Prefix(object __instance, object binding, object key, ref string? error, ref bool __result)
+        {
+            try
+            {
+                if (binding != null && string.Equals(binding.ToString(), "Open", StringComparison.OrdinalIgnoreCase))
+                {
+                    bool isBound = true;
+                    if (_siaBoundProp != null)
+                    {
+                        isBound = (bool)(_siaBoundProp.GetValue(key) ?? true);
+                    }
+                    else if (_siaHkKeyProp != null)
+                    {
+                        KeyCode k = (KeyCode)(_siaHkKeyProp.GetValue(key) ?? KeyCode.None);
+                        isBound = (k != KeyCode.None);
+                    }
+
+                    if (!isBound)
+                    {
+                        if (_siaOpenSetter != null)
+                        {
+                            _siaOpenSetter.Invoke(__instance, new object[] { key });
+                            error = null;
+                            __result = true;
+                            return false;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[WorkshopModPatcher] SmartInventoryArrange TrySet prefix warning: {ex.Message}");
+            }
+            return true;
         }
 
         public static bool SmartInventoryArrange_Down_Prefix(object hk, ref bool __result)

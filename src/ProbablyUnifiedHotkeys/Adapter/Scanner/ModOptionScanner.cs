@@ -683,6 +683,11 @@ namespace ProbablyUnifiedHotkeys
             }
 
             // 已知已由专属适配器或官方渠道接管的私有宿主热键字段不再重复展示
+            if (string.Equals(modId, "conflict_scanner", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(rec.PlayerPrefsKey, "conflict_scanner.report_key", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
             if (string.Equals(modId, "probablystolen.trainer", StringComparison.OrdinalIgnoreCase) &&
                 rec.SourceDetail.IndexOf("_toggleKey", StringComparison.OrdinalIgnoreCase) >= 0)
             {

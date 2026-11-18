@@ -33,8 +33,9 @@ namespace ProbablyUnifiedHotkeys
         }
 
         /// <summary>
-        /// 在游戏退出前幂等执行：安全通知各模组 OnDisable 后清空 ModLoader 持有的一次性 HarmonyInstance 引用，
-        /// 避免 ModLoader.OnApplicationQuit 在进程即将销毁前逐个触发 40+ 次同步 Harmony.UnpatchAll（IL/Detour 重编译）。
+        /// 在游戏退出前幂等执行：安全刷新落盘配置并将各模组的 HarmonyInstance 置空，
+        /// 从而使官方 ModLoader.OnApplicationQuit 自动跳过耗时数秒的数十次 UnpatchAll 重编译，
+        /// 同时避免手动调用各模组 OnDisable 触发模组内部的 UnpatchAll，达成真正的极速秒退。
         /// </summary>
         internal static void PrepareFastQuit()
         {
@@ -51,35 +52,31 @@ namespace ProbablyUnifiedHotkeys
 
             try
             {
+                PrefsStorage.Save();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[PerformancePatches] PlayerPrefs.Save failed: {ex.Message}");
+            }
+
+            try
+            {
                 List<LoadedMod>? mods = ModLoader.Mods;
-                if (mods == null)
+                if (mods != null)
                 {
-                    return;
-                }
-
-                for (int i = 0; i < mods.Count; i++)
-                {
-                    LoadedMod mod = mods[i];
-                    if (mod == null || mod.HarmonyInstance == null)
+                    for (int i = 0; i < mods.Count; i++)
                     {
-                        continue;
+                        LoadedMod mod = mods[i];
+                        if (mod != null)
+                        {
+                            mod.HarmonyInstance = null;
+                        }
                     }
-
-                    try
-                    {
-                        mod.Instance?.OnDisable();
-                    }
-                    catch (Exception ex)
-                    {
-                        ModLogger.Warn($"[PerformancePatches] Mod OnDisable warning during quit ({mod.Manifest?.ID}): {ex.Message}");
-                    }
-
-                    mod.HarmonyInstance = null;
                 }
             }
             catch (Exception ex)
             {
-                ModLogger.Warn($"[PerformancePatches] FastQuit preparation warning: {ex.Message}");
+                ModLogger.Warn($"[PerformancePatches] FastQuit clear HarmonyInstance warning: {ex.Message}");
             }
         }
     }
@@ -91,10 +88,12 @@ namespace ProbablyUnifiedHotkeys
     [HarmonyPatch(typeof(MainMenuUIController), nameof(MainMenuUIController.OnExitClick))]
     public static class Patch_MainMenuUIController_OnExitClick
     {
-        public static void Prefix()
+        public static bool Prefix()
         {
-            if (!ModFeatureConfig.EnableFastQuit) return;
+            if (!ModFeatureConfig.EnableFastQuit) return true;
             PerformancePatches.PrepareFastQuit();
+            Application.Quit();
+            return false;
         }
     }
 
@@ -120,27 +119,12 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
 
-            // 保持与原版一致的选项读取
-            if (EmporiumOption.Instance != null)
-            {
-                _ = EmporiumOption.Instance.hasWishlistRecommended;
-            }
-
             PerformancePatches.PrepareFastQuit();
 
-            // 原版在 EmporiumAnalytics.OVERWRITE_DISABLE_ANALYTICS == true 时仍会对已开启遥测的玩家空等 1 秒
-            bool analyticsDisabled = EmporiumAnalytics.OVERWRITE_DISABLE_ANALYTICS
-                                     || EmporiumOption.Instance == null
-                                     || !EmporiumOption.Instance.consentAnalytics;
-            if (analyticsDisabled)
-            {
-                IsPendingTransitionField?.SetValue(__instance, true);
-                __instance.OnAnyClick();
-                Application.Quit();
-                return false;
-            }
-
-            return true;
+            IsPendingTransitionField?.SetValue(__instance, true);
+            __instance.OnAnyClick();
+            Application.Quit();
+            return false;
         }
     }
 
@@ -532,12 +516,8 @@ namespace ProbablyUnifiedHotkeys
             return true;
         }
 
-        /// <summary>
-        /// 在主菜单闲置帧预先构造 ModUIManager UI 骨架与模组行对象池，不触发 OpenPanel 也不会错误触发第三方模组界面扫描钩子。
-        /// </summary>
-        internal static void PrewarmPanel()
+        internal static void PrewarmPanelInstance(ModUIManager? manager)
         {
-            ModUIManager? manager = ModUIManager.Instance;
             if (manager == null || manager.panel == null || manager.panel.activeSelf || manager.content == null || CustomUIManager.Instance == null)
             {
                 return;
@@ -551,6 +531,14 @@ namespace ProbablyUnifiedHotkeys
 
             EnsureBuiltFn?.Invoke(manager);
             PopulateLayoutRowsPooled(manager, invokeFollowups: false);
+        }
+
+        /// <summary>
+        /// 在主菜单闲置帧预先构造 ModUIManager UI 骨架与模组行对象池，不触发 OpenPanel 也不会错误触发第三方模组界面扫描钩子。
+        /// </summary>
+        internal static void PrewarmPanel()
+        {
+            PrewarmPanelInstance(ModUIManager.Instance);
         }
 
         internal static bool PopulateLayoutRowsPooled(ModUIManager manager, bool invokeFollowups = true)
@@ -913,6 +901,23 @@ namespace ProbablyUnifiedHotkeys
             if (_suspendedLayoutsStack.Count > startIndex)
             {
                 _suspendedLayoutsStack.RemoveRange(startIndex, _suspendedLayoutsStack.Count - startIndex);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(ModUIManager), "Awake")]
+    public static class Patch_ModUIManager_Awake
+    {
+        public static void Postfix(ModUIManager __instance)
+        {
+            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            try
+            {
+                ModUIManagerPerfHelper.PrewarmPanelInstance(__instance);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[Patch_ModUIManager_Awake] Prewarm on Awake warning: {ex.Message}");
             }
         }
     }

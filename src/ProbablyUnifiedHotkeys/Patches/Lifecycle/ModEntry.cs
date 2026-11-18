@@ -53,9 +53,16 @@ namespace ProbablyUnifiedHotkeys
             WorkshopModPatcher.Apply(workshopHarmony, log);
         }
 
+        internal static bool IsApplicationQuitting => _isApplicationQuitting;
+
         internal static void MarkApplicationQuitting()
         {
             _isApplicationQuitting = true;
+        }
+
+        internal static void ResetApplicationQuittingForTest()
+        {
+            _isApplicationQuitting = false;
         }
 
         private static bool OnApplicationWantsToQuit()

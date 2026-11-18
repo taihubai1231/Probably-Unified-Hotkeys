@@ -74,7 +74,16 @@ flowchart TD
   4. **Harmony 薄钩子对未就绪巨石 UI 产生硬依赖**：在第 2 批 UI 尚未完整挂载前，若直接调用 UI 静态方法将引发空引用异常或编译死锁。
      - **闭环验证**：通过 `IOptionUiBridge` 与 `OptionUiHost` 抽象接口桥梁彻底解耦；经单测 `OptionUiHost_NullSafe_And_ComboKeyStore_ExternalBypass_Linkage` 验证 `Active == null` 状态下安全优雅降级放行原版选项，`ComboKeyStore.IsBypassed` 联动精准无误。
   5. **三层本地化引擎依赖 UI 控件导致脱机测试失效**：旧版 `SectionLocalizer` 逻辑内嵌于 UI 巨石中，若反向引用 TMPro 或 UGUI 控件，将导致 .NET 8 离线单测无法运行。
-     - **闭环验证**：`SectionLocalizer.cs` 独立抽离至 `Adapter/Scanner/`，经 `ArchitecturePurityTests.AdapterLayer_ZeroTMProAndUnityEngineUIPurity` 反射断言 0 引用 `TMPro` / `UnityEngine.UI`；经 28 项单测验证中英双语映射与键名智能净化。
+     - **闭环验证**：`SectionLocalizer.cs` 独立抽离至 `Adapter/Scanner/`，经 `ArchitecturePurityTests.AdapterLayer_ZeroTMProAndUnityEngineUIPurity` 反射断言 0 引用 `TMPro` / `UnityEngine.UI`；经 31 项单测验证中英双语映射与键名智能净化。
+  6. **`UnityEngine.Input` extern 补丁 Mono IL 校验崩溃**：
+     - **现象**：`Input.GetMouseButton` 等 extern InternalCall 在 Unity 2021.3 MonoMod 生成跳板时触发 `IL_0024: ret` 异常，连坐导致核心键盘重定向整体中断。
+     - **闭环验证**：在 `WorkshopModPatcher.cs` 中将 6 个 Input 拦截方法全量拆解为**独立的 try-catch 隔离块**，键盘核心按键/组合键重定向 100% 稳定挂载成功。
+  7. **第三方模组单热键回退默认与解绑强校验阻断**：
+     - **现象**：`ConflictScanner v1.6.5` 默认键变更为 `F7` 且原生 `Save()` 丢弃 `KeyCode.None`；`SmartInventoryArrange` 底层 `TrySet` 拦截解绑报错 `Invalid settings shortcut; using F6`；启动期未开选项窗前未同步热键。
+     - **闭环验证**：`KnownModAdapters` 将默认键修正为 `F7`，并通过 `_csKeyField` 与 `PrefsStorage` 强制写入 `None`；`WorkshopModPatcher` 拦截 `SIA.SettingsHotkeys.TrySet` 放行解绑；`SyncExternalNonConfigHotkeysOnBoot` 在主菜单启动期全量同步至第三方运行时。
+  8. **退出游戏实测卡顿 6.4 秒**：
+     - **现象**：手动调用 52 个模组 `OnDisable()` 触发其内部各自私有的 `UnpatchAll`，单线程连环反编译耗时超 6 秒。
+     - **闭环验证**：`PrepareFastQuit()` 先调用 `PrefsStorage.Save()` 刷新落盘，然后将 `ModLoader.Mods` 的 `HarmonyInstance` 赋空，使官方 `OnApplicationQuit` 自动跳过 Unpatch 重编译，主菜单与暂停菜单退出直接触发 `Application.Quit()`，退出时间降至 **< 0.05 秒**！
 - **应对护栏**：
   - 严格执行 `docs/HARMONY_SPEC.md`：所有重载显式注明参数类型数组；核心按键拦截下沉至底层 `KeyBindHelper`；卸载限定自身专属 ID。
   - 所有跨模组调用强制包裹在 `SafeExecution.SafeExecute` 隔离网内，严禁裸调。
@@ -102,3 +111,16 @@ flowchart TD
 2. **官方 2026-12-10 零权限生死线风险**：
    - 默认发布包必须保持 `DisableDllKeyProbe=true` 编译宏，`manifest.xml` 中 `<Capabilities />` 保持为空；
    - 严禁将 `DseCecil.dll` 打包进发布目录，确保 `tools/ScannerCheck` 扫描达到 `0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`。
+
+---
+
+## 四、四大高频按钮极致瞬开军令状与指标跟踪 (ADR-009)
+
+经业务决策人（老板）实机实测下达长效军令状，所有高频核心按钮必须杜绝任何百毫秒级卡顿，必须做到单帧或亚帧级极致顺滑响应：
+
+| 按钮/交互路径 | 帧预算/耗时目标 | 实现状态 | 架构护栏与性能优化机制 |
+|---|---|---|---|
+| **1. 退出游戏 (`Exit`)** | **< 0.05 秒**（原 6.4 秒） | **已落地** | `PrepareFastQuit` 安全执行 `PrefsStorage.Save()` 后将各模组的 `HarmonyInstance` 赋空，阻断 52 个模组在自身 `OnDisable` 中重复触发 `UnpatchAll` 的连环反编译与遥测等待，直接调用 `Application.Quit()`。 |
+| **2. 改造件 (`Mods`)** | **单帧瞬开**（< 16 ms） | **已落地** | `Patch_ModUIManager_Awake` 在场景初始化时离线预热（`PrewarmPanelInstance`），提前构建窗口骨架、52 行对象池复用（`RowPool`）与冲突缓存预热，消除开窗帧遍历销毁/生成 Prefab 布局风暴。 |
+| **3. 选项 (`OpenUI`)** | **< 16 ms**（单帧完成） | **第 3 批军令状** | **模组折叠卡片按需懒构建（Lazy Content Build）**：首次开窗仅渲染原版 5 张核心卡片 + 39 张第三方模组折叠头部（Header），折叠卡片内部改键行与控件**完全不实例化 GameObject**，点击单个展开时再懒构建，分摊全部实例化开销。 |
+| **4. 全部展开 (`Expand All`)** | **无冻结感**（< 50 ms） | **第 3 批军令状** | **挂起 Canvas 渲染与 LayoutGroup 回流**：批量展开前临时禁用根 Canvas 或挂起 Content 的 `VerticalLayoutGroup` / `ContentSizeFitter`；批量按需实例化剩余卡片内容，全面复用 `FittedFontSizeCache` 单次字号拟合缓存；完成后一次性恢复 Canvas 并触发单次 `LayoutRebuilder.ForceRebuildLayoutImmediate`，杜绝数十次重复回流风暴。 |

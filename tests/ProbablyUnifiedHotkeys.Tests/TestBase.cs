@@ -27,6 +27,7 @@ namespace ProbablyUnifiedHotkeys.Tests
             ModFeatureConfig.OverridePinyinSearchForTests = null;
             ModFeatureConfig.OverrideKeySuppressionForTests = null;
             HotkeyProfileManager.ActiveSlotIndex = 0;
+            ModEntry.ResetApplicationQuittingForTest();
         }
     }
 }
