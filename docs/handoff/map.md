@@ -58,3 +58,61 @@
 ```
 
 - **铁律校验**：在任何阶段的代码审查中，若在 `src/ProbablyUnifiedHotkeys/Core/` 目录下出现 `using UnityEngine.UI;` 或 `using TMPro;`，直接判定为架构违规并回滚。
+
+---
+
+## 4. 阶段 3 第 1 批 (Batch 1) 已落地资产与单测覆盖图谱
+
+> **状态**：阶段 3 第 1 批（基础底座、纯领域模型、检索引擎、持久化核心与单测套件）已全部落地完成并通过 22 项 xUnit 离线单元测试与 ModScanner 官方门禁。
+
+### 4.1 落地源码清单
+- `src/ProbablyUnifiedHotkeys/Diagnostics/`：
+  - `AssemblyAttributes.cs`：声明 `InternalsVisibleTo("ProbablyUnifiedHotkeys.Tests")`。
+  - `ModLogger.cs`：四级结构化日志输出，测试模式无头拦截（`SuppressUnityLogForTests` / `TestLogSink`）。
+  - `SafeExecution.cs`：统一异常隔离保护网（`SafeExecute` / `SafeFunc`）。
+- `src/ProbablyUnifiedHotkeys/Config/`：
+  - `BilingualText.cs`：纯文本中英双语内核（`UiLanguageMode`、`IsChinese`、`Get`、`Format`）。
+  - `ModFeatureConfig.cs`：官方配置选项管理、单向事件管道与测试注入开关。
+- `src/ProbablyUnifiedHotkeys/Core/`：
+  - `Model/KeyCombo.cs`：纯值类型组合键模型，强制空键零修饰位契约（`KeyModifierMask`、`KeyCombo`）。
+  - `Model/ModModel.cs`：纯领域模型聚合（`ModOptionGroup`、`ModHotkeyEntry`、`ModGeneralEntry`、`ConflictGroup` 等，零 UI 依赖）。
+  - `Conflict/ConflictDetector.cs`：按键冲突检测引擎，支持空键排除、修饰键精确比对、只读探测免误报与双语提示。
+  - `Search/TradSimpTable.cs`：2,473 组常用汉字繁简规范化映射表。
+  - `Search/PinyinEngine.cs`：嵌入式 `pinyin.bin` 20,902 字 CJK 全量拼音与首字母检索。
+  - `Search/KeySearchMatcher.cs`：高性能按键与功能检索匹配器，锁死词元边界防误中。
+- `src/ProbablyUnifiedHotkeys/Persistence/`：
+  - `PrefsStorage.cs`：底层 `PlayerPrefs` 读写门面与测试纯内存字典（`UseInMemoryPrefsForTests`）。
+  - `ComboKeyStore.cs`：组合键与侧键持久化、运行时重映射分发、防误触抑制与无头测试桩。
+  - `HotkeyProfileManager.cs`：3 槽位方案快照管理、紧凑 JSON 导出/导入（兼容 `1.4.x` 旧快照）。
+
+### 4.2 单元测试套件清单 (`tests/ProbablyUnifiedHotkeys.Tests/`)
+- `SequentialStateTestsCollection.cs`：声明 `[CollectionDefinition("SequentialStateTests", DisableParallelization = true)]` 确保状态隔离。
+- `TestBase.cs`：测试基类，统一初始化 `ModLogger`、`PrefsStorage`、`ComboKeyStore` 与双语模式覆盖。
+- `KeyComboAndStoreTests.cs`（5 项用例）：
+  - `KeyCombo_WithNoneKey_ClearsModifiers_EnforcesInvariant`：空键强制清空修饰位不变式。
+  - `ComboKeyStore_SaveCtrlE_ThenSetNone_ClearsModifiers_LockingFakeDirtyFlagRootCause`：锁死 `v1.4.7` 假脏标记根因。
+  - `MouseSideButtons_FormattingAndBilingualSupport`：Mouse3~6 侧键中英双语与组合键格式化。
+  - `ForcedAndIgnoredCandidateIds_PersistenceAndSetOperations`：强制纳管与忽略集合持久化。
+  - `ModifierKeySuppression_AndInputRemapEvaluation`：按键重映射与防误触单键抑制仲裁。
+- `ConflictDetectorTests.cs`（4 项用例）：
+  - `MultipleNoneEntries_NeverDeemedConflict`：空键条目绝不判定为冲突。
+  - `DifferentModifiers_DoNotConflict_SameModifiers_DoConflict`：不同修饰键互不冲突，同修饰键精准报警。
+  - `ReadOnlyProbedEntries_PureProbedDoNotConflict_WithEditableEntryConflicts`：全只读探测豁免，含可编辑项时正常提示。
+  - `ConflictTooltip_Bilingual_AndSortedConflictGroups`：中英双语悬浮提示与按冲突量稳定排序。
+- `PinyinAndKeySearchTests.cs`（4 项用例）：
+  - `EmbeddedPinyinResource_LoadedSuccessfully_FullCJKCoverage`：断言 `pinyin.bin` 20,902 字真装载。
+  - `TraditionalAndSimplified_MutualSearch`：繁简双向互搜与拼音缩写检索。
+  - `TokenBoundary_NoFalsePositives_LockingPitfallsRedline`：锁死 `"yp"`/`Keypad6`、`"ow"`/`UpArrow`、`"on"`/`None` 词元边界防误中红线。
+  - `FormattedKeyTextAndHotkeyBinding_Matching`：组合键文本与条目多维度检索匹配。
+- `HotkeyProfileManagerTests.cs`（3 项用例）：
+  - `SlotCycleSwitching_AndOutOfRangeReset`：3 槽位循环切换与越界安全归零。
+  - `SaveToSlot_ExportToJson_Clear_Import_Apply_RoundTrip`：全类型项无损保存导出与恢复应用全链路。
+  - `BackwardCompatibility_V147_ProfileImport`：`v1.4.7` 旧版 `puh_profile_v1` JSON 100% 兼容导入。
+- `ArchitecturePurityTests.cs`（1 项用例）：
+  - `CoreDomainModels_ZeroUIAndHarmonyReferences`：反射审计 Core 领域类型零 UI/TMP/Harmony 依赖。
+- `FoundationAndConfigTests.cs`（5 项用例）：
+  - `ModLogger_AndSafeExecution_HandleExceptionsGracefully`：日志各级别输出与 SafeExecution 异常保护。
+  - `BilingualText_ModesAndLanguageSwitching`：语言模式切换、解析与事件派发。
+  - `ModFeatureConfig_SwitchesAndTestOverrides`：特性开关与单测覆盖注入。
+  - `TradSimpTable_Exact2473MappingsIntegrity`：2,473 组繁简字符映射完整度。
+  - `ModGeneralEntry_ApplyPendingAndResetToSnapshot`：各配置类型待定应用与快照复位。
