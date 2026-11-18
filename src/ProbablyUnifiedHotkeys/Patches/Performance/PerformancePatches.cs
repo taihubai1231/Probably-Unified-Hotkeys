@@ -137,6 +137,15 @@ namespace ProbablyUnifiedHotkeys
     {
         public static void Postfix()
         {
+            try
+            {
+                KnownModAdapters.SyncExternalNonConfigHotkeysOnBoot();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[Patch_MainMenuUIController_Start] Failed to sync external hotkeys on boot: {ex.Message}");
+            }
+
             if (!ModFeatureConfig.EnablePerformancePatches) return;
             IdleWarmupRunner.Schedule();
         }

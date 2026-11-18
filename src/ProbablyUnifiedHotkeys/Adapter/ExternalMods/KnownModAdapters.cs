@@ -1312,6 +1312,8 @@ namespace ProbablyUnifiedHotkeys
 
         private static bool _externalHotkeysBootSynced = false;
 
+        internal static void ResetBootSyncForTest() => _externalHotkeysBootSynced = false;
+
         /// <summary>
         /// 在主菜单空闲预热或首扫时补同步“清空(None) / 鼠标侧键(Mouse3~6)”等原版 LoadHotkey 会跳过的持久键位，
         /// 同时对齐 SmartInventoryArrange, ConflictScanner, ShowItemNames 等未通过 ModConfig 初始化的已知模组运行时键位。
@@ -1339,7 +1341,27 @@ namespace ProbablyUnifiedHotkeys
                 FieldInfo? loadedField = AccessTools.Field(keybindType, "_loaded");
                 MethodInfo? saveMethod = AccessTools.Method(keybindType, "Save", new Type[] { typeof(KeyCode) });
 
-                var effective = ComboKeyStore.GetEffectiveCustomHotkey("conflict_scanner.ReportKey", KeyModifierMask.None, KeyCode.F7);
+                // 优先从 PrefsStorage / 原生存储解析已有键位，杜绝将旧版原生保存的配置强行重置为 F7
+                KeyCode fallbackKey = KeyCode.F7;
+                string rawSaved = PrefsStorage.GetString("conflict_scanner.report_key", string.Empty);
+                if (string.Equals(rawSaved, "None", StringComparison.OrdinalIgnoreCase))
+                {
+                    fallbackKey = KeyCode.None;
+                }
+                else if (!string.IsNullOrWhiteSpace(rawSaved) && Enum.TryParse<KeyCode>(rawSaved.Trim(), true, out KeyCode parsed))
+                {
+                    fallbackKey = parsed;
+                }
+                else if (keyProp != null)
+                {
+                    fallbackKey = (KeyCode)(keyProp.GetValue(null) ?? KeyCode.F7);
+                }
+                else if (keyField != null)
+                {
+                    fallbackKey = (KeyCode)(keyField.GetValue(null) ?? KeyCode.F7);
+                }
+
+                var effective = ComboKeyStore.GetEffectiveCustomHotkey("conflict_scanner.ReportKey", KeyModifierMask.None, fallbackKey);
                 KeyCode targetKey = effective.Key;
 
                 keyField?.SetValue(null, targetKey);
@@ -1383,7 +1405,22 @@ namespace ProbablyUnifiedHotkeys
                 MethodInfo? setHotkey = AccessTools.Method(settingsType, "SetHotkey", new Type[] { typeof(KeyCode) });
                 MethodInfo? commit = AccessTools.Method(settingsType, "Commit");
 
-                var effective = ComboKeyStore.GetEffectiveCustomHotkey("ShowItemNames.Hotkey", KeyModifierMask.None, KeyCode.LeftAlt);
+                // 优先从 PrefsStorage ("snd.hotkey") 或当前属性读取已有键位，杜绝误覆盖用户在独立界面配置的单键
+                KeyCode fallbackKey = KeyCode.LeftAlt;
+                if (PrefsStorage.HasKey("snd.hotkey"))
+                {
+                    int v = PrefsStorage.GetInt("snd.hotkey", (int)KeyCode.LeftAlt);
+                    if (Enum.IsDefined(typeof(KeyCode), v))
+                    {
+                        fallbackKey = (KeyCode)v;
+                    }
+                }
+                else if (hotkeyProp != null)
+                {
+                    fallbackKey = (KeyCode)(hotkeyProp.GetValue(null) ?? KeyCode.LeftAlt);
+                }
+
+                var effective = ComboKeyStore.GetEffectiveCustomHotkey("ShowItemNames.Hotkey", KeyModifierMask.None, fallbackKey);
                 KeyCode targetKey = effective.Key;
 
                 if (setHotkey != null)

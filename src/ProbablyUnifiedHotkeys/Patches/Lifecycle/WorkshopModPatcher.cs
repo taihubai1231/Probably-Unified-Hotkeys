@@ -623,6 +623,15 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool ConflictScanner_Save_Prefix(KeyCode key)
         {
+            try
+            {
+                ComboKeyStore.SetSavedCustomHotkey("conflict_scanner.ReportKey", KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.F7);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[WorkshopModPatcher] Failed to sync ConflictScanner key to store: {ex.Message}");
+            }
+
             if (key == KeyCode.None)
             {
                 _csKeybindKeyField?.SetValue(null, KeyCode.None);

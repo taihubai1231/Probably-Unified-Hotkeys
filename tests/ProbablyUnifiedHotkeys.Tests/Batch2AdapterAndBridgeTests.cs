@@ -179,6 +179,29 @@ namespace ProbablyUnifiedHotkeys.Tests
             Assert.True(runOrig);
         }
 
+        [Fact]
+        public void ConflictScanner_LegacyPrefsFallback_DoesNotOverwriteToF7()
+        {
+            // Case 1: Legacy PlayerPrefs has "F10", custom_hotkeys.v1 is completely empty
+            KnownModAdapters.ResetBootSyncForTest();
+            PrefsStorage.SetString("conflict_scanner.report_key", "F10");
+
+            KnownModAdapters.SyncExternalNonConfigHotkeysOnBoot();
+
+            // Must NOT have been overwritten to F7
+            string afterSync1 = PrefsStorage.GetString("conflict_scanner.report_key", string.Empty);
+            Assert.Equal("F10", afterSync1);
+
+            // Case 2: Legacy PlayerPrefs has "None" (user unbound in ConflictScanner UI), custom_hotkeys.v1 is empty
+            KnownModAdapters.ResetBootSyncForTest();
+            PrefsStorage.SetString("conflict_scanner.report_key", "None");
+
+            KnownModAdapters.SyncExternalNonConfigHotkeysOnBoot();
+
+            string afterSync2 = PrefsStorage.GetString("conflict_scanner.report_key", string.Empty);
+            Assert.Equal("None", afterSync2);
+        }
+
         private sealed class MockOptionUiBridge : IOptionUiBridge
         {
             public bool IsEnhancedWindowOpen { get; set; }

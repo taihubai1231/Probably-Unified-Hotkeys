@@ -144,7 +144,7 @@
   - `PerformancePatches.cs`：退出游戏极速秒退、主菜单闲置分帧预热 `IdleWarmupRunner`、改造件 `RowPool` 行对象池与缺失元素静默钩子。
 
 ### 5.2 补充单元测试套件 (`Batch2AdapterAndBridgeTests.cs`)
-- `tests/ProbablyUnifiedHotkeys.Tests/Batch2AdapterAndBridgeTests.cs`（8 项新增用例）：
+- `tests/ProbablyUnifiedHotkeys.Tests/Batch2AdapterAndBridgeTests.cs`（9 项新增用例）：
   - `SectionLocalizer_KnownDictionary_BilingualMapping_Chinese`：验证已知分类词典（General, Hotkeys, Inventory, Tooltips）中文模式精准转换。
   - `SectionLocalizer_KnownDictionary_BilingualMapping_English`：验证已知分类词典英文模式精准对齐。
   - `SectionLocalizer_StructuredKey_IntelligentHumanization`：验证 `speed.config.dialogue` 词典命中、`some_mod.settings_section_combat` 净化为 `Combat`、前缀剥离与空安全。
@@ -153,4 +153,5 @@
   - `KnownModAdapters_ConflictScanner_And_ShowItemNames_UnbindToNone_Persistence`：验证 `ConflictScanner` v1.6.5 默认键为 `F7`、解绑为 `None` 时强制写入与持久化、`ShowItemNames` 解绑放行及启动期同步门面。
   - `FastQuit_And_ModEntryQuittingState_Safety`：验证 `PrepareFastQuit` 幂等安全执行、`ModEntry.IsApplicationQuitting` 状态跃迁与退出保护。
   - `WorkshopModPatcher_SiaTrySet_NullSafe`：验证 `SmartInventoryArrange.SettingsHotkeys.TrySet` 拦截解绑前置补丁的空安全与非空放行。
-- **全套单测当前状态**：31/31 项测试 100% 绿灯通过，0 错误 0 警告。
+  - `ConflictScanner_LegacyPrefsFallback_DoesNotOverwriteToF7`：验证旧版原生单键（如 `F10` 或 `None`）在 `custom_hotkeys.v1` 为空时绝不误覆盖回 `F7`。
+- **全套单测当前状态**：32/32 项测试 100% 绿灯通过，0 错误 0 警告。
