@@ -4,43 +4,35 @@
   <Name>可能是按键统一优化 / Probably Unified Hotkeys</Name>
   <Author>太湖白1231</Author>
   <ModVersion>1.5.0</ModVersion>
-  <Description>将原版与所有模组的快捷键与常规设置统一整合进官方 ESC「选项」页，全面重构「选项 / 全部展开 / 改造件 / 退出游戏」核心流畅度，并提供场景预设快照与剪贴板导入/导出。
+  <Description>将《深空当铺》原版与工坊模组的快捷键、常规设置合并至官方 ESC「选项」页。
 
-【能做什么】
-• 统一整理：上方原版官方分区与下方模组卡片均支持折叠、拼音检索、原生排版与一键「恢复默认」
-• 按键增强：支持 Shift / Ctrl / Alt 组合键、鼠标侧键/组合，按 Esc 即可清空解绑为「无」
-• 方案快照：内置 3 套本地场景预设槽位与剪贴板 JSON 一键导出/导入，秒级备份恢复快捷键、模组配置及强转表
-• 搜索排重：支持简繁中文、英文与拼音搜索定位，自带 [!] 仅看冲突集中排查与防误触隔离
-• 丝滑响应：闲置单线程分帧预热、离线窗口装配、单帧无过渡瞬切、改造件行池化复用及全模组极速秒退
-• 智能本地化：三层根治式模组分区标题本地化引擎，彻底告别 speed.config.* 等原始代码键与未翻译英文段落
-• 全自动黑盒探测 &amp; 模组排查：基于只读 DseCecil 静态 IL 与 ModData 配置自动探测未接入官方界面的模组隐藏热键并纳入撞键预警；支持疑难项一键强转或标记「忽略(非按键)」
-• 双语切换：支持简体中文 / English 实时切换（默认跟随游戏语言），可在改造件齿轮设置或本模组卡片中调整
+【操作说明】
+• 按 ESC 打开「选项」；点击按键录入，按 Esc 设为「无」，左/右键取消。
+• 修改后点击底部「应用」保存；支持 3 套本地预设与剪贴板导入导出。
 
-【权限说明】
-仅声明 files 只读用途：用于扫描本地已启用模组目录的 DLL 字节码（提取固定按键）并持久化读取缓存，不访问网络、不修改存档或其它模组文件。
-
-【怎么使用】
-按 ESC 打开「选项」→ 顶部搜索或展开/收起任意分区卡片 → 点击按键直接录入（按 Esc 清空，左/右键取消）→ 点击底部「应用」或「保存方案 / 导出剪贴板」保存生效。
+【主要功能】
+• 统一视图：按分区折叠卡片，支持原版样式与一键「恢复默认」。
+• 按键增强：支持 Shift / Ctrl / Alt 组合键与鼠标侧键（Mouse3~6）。
+• 快速检索：支持简繁中英与拼音搜索，自带 [!] 冲突集中筛选。
+• 方案快照：提供 3 套本地预设槽位与剪贴板 JSON 秒级备份恢复。
+• 智能整理：模组标题中文化显示，支持疑难配置项排查。
+• 流畅响应：选项开窗、改造件列表与退出游戏防卡顿优化。
 
 ---
 
-Unifies vanilla and mod hotkeys &amp; settings into the official ESC "Options" menu, overhauls responsiveness across Options, Expand All, Mods, and Quit Game, and introduces multi-scene profile snapshots with 1-click clipboard export/import.
+Merges vanilla and workshop mod hotkeys and settings into the official ESC "Options" menu.
+
+[Usage]
+• Press ESC to open "Options"; click any key to rebind, press Esc to clear ("None"), left/right click to cancel.
+• Click "Apply" at the bottom to save; supports 3 local preset slots and clipboard import/export.
 
 [Features]
-• Unified View: Collapsible vanilla &amp; mod cards with CN/EN/Pinyin search, native styling, and per-card "Reset"
-• Enhanced Keybinds: Supports Shift / Ctrl / Alt combos, mouse &amp; side buttons, and Esc to unbind to "None"
-• Profile Snapshots: 3 built-in preset slots &amp; 1-click Clipboard JSON Export/Import for hotkeys, mod settings, and forced tables
-• Conflict Check &amp; Filter: Supports CN (Simp/Trad), EN &amp; Pinyin search, "[!] Conflicts" view, and anti-leak combo guard
-• Smooth Performance: Idle frame warmup, off-screen batched assembly, pooled Mods list, and fast quit
-• Smart Localization: 3-layer universal section localization engine that permanently resolves raw keys like speed.config.*
-• Auto Hotkey Probe &amp; Diagnostics: Read-only DseCecil IL + ModData scanning automatically uncovers hidden/hardcoded keys for conflict warnings; supports promoting raw entries or dismissing false positives ("Ignore (Not Key)")
-• Bilingual UI: Supports Simplified Chinese / English live switching (defaults to Follow Game Language) via the Mods gear settings or this mod's card
-
-[Capability Note]
-Declares "files" strictly for read-only scanning of enabled mods' assemblies (detecting hardcoded keybinds) and storing probe metadata cache. Zero network calls, zero save/file tampering.
-
-[How to Use]
-Press ESC → "Options" → search or expand/collapse cards → click any keybind to capture (Esc to clear, Left/Right click to cancel) → click "Apply" or "Save Preset / Export JSON" at the bottom.</Description>
+• Unified View: Collapsible cards matching native style with per-section "Reset to Default".
+• Enhanced Keybinds: Supports Shift / Ctrl / Alt combos and mouse side buttons (Mouse3~6).
+• Fast Search: Search via Chinese (Simp/Trad), Pinyin, or English with [!] conflict filter.
+• Profile Snapshots: 3 local preset slots and 1-click clipboard JSON backup/restore.
+• Smart Organizing: Localized mod section titles and unresolved keybind diagnostics.
+• Smooth Performance: Anti-stutter optimizations across Options menu, Mods list, and quitting.</Description>
   <GameVersions>
     <Version>0.46</Version>
     <Version>0.46D</Version>
