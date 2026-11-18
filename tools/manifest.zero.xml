@@ -12,7 +12,7 @@
 
 【主要功能】
 • 统一视图：按分区折叠卡片，支持原版样式与一键「恢复默认」。
-• 按键增强：支持 Shift / Ctrl / Alt 组合键与鼠标侧键（Mouse3~6）。
+• 按键增强：支持 Shift / Ctrl / Alt 组合键、鼠标侧键（Mouse3~6）与空键解绑。
 • 快速检索：支持简繁中英与拼音搜索，自带 [!] 冲突集中筛选。
 • 方案快照：提供 3 套本地预设槽位与剪贴板 JSON 秒级备份恢复。
 • 智能整理：模组标题中文化显示，支持疑难配置项排查。
@@ -28,7 +28,7 @@ Merges vanilla and workshop mod hotkeys and settings into the official ESC "Opti
 
 [Features]
 • Unified View: Collapsible cards matching native style with per-section "Reset to Default".
-• Enhanced Keybinds: Supports Shift / Ctrl / Alt combos and mouse side buttons (Mouse3~6).
+• Enhanced Keybinds: Supports Shift / Ctrl / Alt combos, mouse side buttons (Mouse3~6), and unbinding to "None".
 • Fast Search: Search via Chinese (Simp/Trad), Pinyin, or English with [!] conflict filter.
 • Profile Snapshots: 3 local preset slots and 1-click clipboard JSON backup/restore.
 • Smart Organizing: Localized mod section titles and unresolved keybind diagnostics.
