@@ -159,3 +159,27 @@ flowchart TD
    - **解法**：实现强转与忽略持久化集合互斥转移，变更时自增 `_forcedHotkeysRevision` 驱动 `ModCatalogCache` 自动就地重扫。
 7. **预设槽位读写与非法剪贴板防崩保护（针对 #12, #13, #14）**：
    - **解法**：槽位支持 100% 完整快照保存、读取与清空；向剪贴板导入传入空串、乱码、残缺或非本模组 JSON 时 100% 安全返回 `false` 并在 UI 显示彩色错误提示，零异常外溢，零会话状态污染。
+
+---
+
+## 六、 7 项核心交互打磨与触类旁通防退化护栏 (Post-v1.5.0 Polish)
+
+1. **原版「按键绑定」标题栏防污染护栏**：
+   - 彻底切断除按键捕获状态提示外所有逻辑（尤其是预设方案反馈）对 `UiSessionState.SetKeyBindStatusDelegate` 的调用，预设卡片反馈独立限制在卡片内部状态栏与底栏。
+2. **组合键 / 侧键全链路保存重开与零退化护栏**：
+   - 扫描配置与开窗期间强制包裹 `using (ComboKeyStore.EnterBypass())`，杜绝 `ConfigEntry<KeyCode>.Value` 被运行时拦截器掩盖为 None；
+   - 重构 `SyncVanillaPendingFromManager` 同步算法，主键一致且无修改时保持已持久化修饰键；
+   - 显式解绑 `ExplicitUnbound` 仅对规范全量 ID 生效，消除裸键名逃逸污染；
+   - 鼠标侧键（`Mouse3~6`）及 `Ctrl/Shift/Alt + 侧键` 完整打通格式化、捕获、持久化与往返解析。
+3. **长组合键字号拟合与按钮宽度放宽**：
+   - `KeybindButtonWidth` 从 160f 放宽至 195f，结合按钮水平 padding 收缩，真实可用宽度大幅提升至 163px；
+   - 缺省 Spec 自适应拟合，动态字号安全钳制在 `[9.5f, 15f]`，绝不截断。
+4. **单帧瞬开「全部展开」脱机批量切换护栏**：
+   - 彻底废除多帧渐进展开队列 `s_progressiveExpandQueue` 与时钟调度；
+   - 切换时将外层根容器 `NormalContentRoot.SetActive(false)` 临时脱机，批量建齐并切换状态后恢复激活，仅调 1 次顶层布局重建，耗时 < 8ms 且滚动条滑块一步到位绝不变形跳动。
+5. **搜索栏 300ms 防抖、IME 识别与 Esc 聚焦释放**：
+   - 防抖延至 300ms 覆盖敲键间隔；检查 `Input.compositionString` 杜绝拼音候选态提前重排；
+   - 前缀收窄短路加速；扩展 `IOptionUiBridge.IsSearchInputFocused`，输入框聚焦时按 Esc 优先释放输入框聚焦，绝不误触窗口关闭。
+6. **改造件面板去封面与详情按钮零变形护栏**：
+   - 选中本模组时隐藏封面 `preview_panel`，释放出 345px 空间并 100% 转移给描述滚动区；
+   - 锁定承载按钮父 Row 的 `childControlHeight = false` 与高度 `LayoutElement`（`flexibleHeight = 0`），锁定按钮高度 42px（图标 42×42px），杜绝任何形变。

@@ -106,6 +106,13 @@ namespace ProbablyUnifiedHotkeys
                     return false;
                 }
 
+                if (bridge.IsEnhancedWindowOpen && bridge.IsSearchInputFocused && KeyBindHelper.GetBackDown())
+                {
+                    bridge.ReleaseSearchInputFocus();
+                    bridge.MarkEscapeConsumed();
+                    return false;
+                }
+
                 if (bridge.IsEnhancedWindowOpen && !bridge.IsExplicitWindowClosing && KeyBindHelper.GetBackDown())
                 {
                     var windowOrder = WindowOrderField?.GetValue(__instance) as List<CustomUIWindow>;

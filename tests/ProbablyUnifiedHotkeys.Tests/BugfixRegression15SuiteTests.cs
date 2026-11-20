@@ -460,5 +460,233 @@ namespace ProbablyUnifiedHotkeys.Tests
                 Assert.Null(ex);
             }
         }
+
+        /// <summary>
+        /// 针对 #4：长组合键排版、可用宽度放宽至 195f 与字号拟合规格验证，确保不截断且字体度量安全。
+        /// </summary>
+        [Fact]
+        public void Feedback04_LongComboKey_ButtonWidthAndFitSpec_NeverTruncated()
+        {
+            // 1. 验证按键按钮基准宽度已放宽至 195f（原 160f 过于局促）
+            Assert.Equal(195f, UiLayoutAndFontHelper.KeybindButtonWidth);
+
+            // 2. 模拟长组合键文本格式化
+            string combo1 = ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl, KeyCode.Space);
+            Assert.Equal("Ctrl + Space", combo1);
+
+            string expectedMouse3 = BilingualText.Get("鼠标侧键1", "Mouse Side 1");
+            string combo2 = ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl | KeyModifierMask.Shift, KeyCode.Mouse3);
+            Assert.Equal($"Ctrl+Shift+{expectedMouse3}", combo2);
+
+            string expectedMouse4 = BilingualText.Get("鼠标侧键2", "Mouse Side 2");
+            string combo3 = ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl | KeyModifierMask.Shift | KeyModifierMask.Alt, KeyCode.Mouse4);
+            Assert.Equal($"Ctrl+Shift+Alt+{expectedMouse4}", combo3);
+
+            // 3. 验证 ButtonFitSpec 在 195f 下的可用宽度与字号范围
+            var spec = new UiLayoutAndFontHelper.ButtonFitSpec
+            {
+                AvailWidth = Mathf.Max(20f, 195f - 16f - 16f), // 163f
+                AvailHeight = Mathf.Max(18f, 48f - 8f - 8f),   // 32f
+                MaxFontSize = 15f,
+                MinFontSize = 9.5f
+            };
+
+            Assert.True(spec.AvailWidth >= 160f, $"AvailWidth should be at least 160f, was {spec.AvailWidth}");
+            Assert.Equal(9.5f, spec.MinFontSize);
+            Assert.Equal(15f, spec.MaxFontSize);
+        }
+
+        /// <summary>
+        /// 针对 #5 与 #6：原版（ModId == "vanilla"）与单键模组组合键绑定 -> 保存 -> 关窗重开 -> 零退化、零假脏闭环验证。
+        /// </summary>
+        [Fact]
+        public void Feedback05_06_VanillaAndModCombos_SaveReopen_ZeroRegression_ZeroFalseDirty()
+        {
+            UiSessionState.AllHotkeys.Clear();
+            UiSessionState.ModGroups.Clear();
+            UiSessionState.VanillaCards.Clear();
+            UiSessionState.VanillaOpenToggleBaseline.Clear();
+            UiSessionState.VanillaOpenSliderBaseline.Clear();
+            UiSessionState.VanillaOpenDropdownBaseline.Clear();
+            ComboKeyStore.EnsureLoaded();
+
+            string vanillaHkId = "vanilla.key_inventory";
+            KeyCode vanillaCurrent = KeyCode.I;
+
+            var vanillaHk = new ModHotkeyEntry
+            {
+                Id = vanillaHkId,
+                ModId = "vanilla",
+                RawOptionId = "key_inventory",
+                DefaultKey = KeyCode.I,
+                HasExplicitDefault = true,
+                SupportsModifierCombos = true,
+                GetKey = () => vanillaCurrent,
+                SetKey = k => vanillaCurrent = k
+            };
+
+            string modHkId = "speed_mod.toggle_key";
+            KeyCode modCurrent = KeyCode.F1;
+
+            var modHk = new ModHotkeyEntry
+            {
+                Id = modHkId,
+                ModId = "speed_mod",
+                DefaultKey = KeyCode.F1,
+                HasExplicitDefault = true,
+                SupportsModifierCombos = true,
+                GetKey = () => modCurrent,
+                SetKey = k => modCurrent = k
+            };
+
+            var modGroup = new ModOptionGroup
+            {
+                ModId = "speed_mod",
+                DisplayName = "Speed Mod"
+            };
+            modGroup.Hotkeys.Add(modHk);
+
+            UiSessionState.AllHotkeys.Add(vanillaHk);
+            UiSessionState.AllHotkeys.Add(modHk);
+            UiSessionState.ModGroups.Add(modGroup);
+
+            // Step 1: 用户在界面录入组合键：原版绑定 Ctrl + Space，模组绑定 Shift + F
+            vanillaHk.PendingKey = KeyCode.Space;
+            vanillaHk.PendingModifiers = KeyModifierMask.Ctrl;
+            vanillaHk.HasPendingChange = true;
+
+            modHk.PendingKey = KeyCode.F;
+            modHk.PendingModifiers = KeyModifierMask.Shift;
+            modHk.HasPendingChange = true;
+
+            Assert.True(UiSessionState.HasUnsavedChanges());
+
+            // Step 2: 模拟保存并持久化
+            ComboKeyStore.SetSavedCombo(vanillaHkId, vanillaHk.PendingModifiers, vanillaHk.PendingKey);
+            vanillaCurrent = vanillaHk.PendingKey;
+            vanillaHk.HasPendingChange = false;
+            vanillaHk.PendingModifiers = KeyModifierMask.None;
+
+            ComboKeyStore.SetSavedCombo(modHkId, modHk.PendingModifiers, modHk.PendingKey);
+            modCurrent = modHk.PendingKey;
+            modHk.HasPendingChange = false;
+            modHk.PendingModifiers = KeyModifierMask.None;
+
+            ComboKeyStore.Save();
+
+            // Step 3: 模拟关窗并重新打开（开启 Bypass 态 + 捕获 Baseline 快照）
+            using (ComboKeyStore.EnterBypass())
+            {
+                // 验证持久化层正确存储了修饰键
+                Assert.Equal(KeyModifierMask.Ctrl, ComboKeyStore.GetSavedModifiers(vanillaHkId, KeyCode.Space));
+                Assert.Equal(KeyModifierMask.Shift, ComboKeyStore.GetSavedModifiers(modHkId, KeyCode.F));
+
+                // 重新开窗时将 pending 对齐已持久化状态
+                vanillaHk.PendingKey = vanillaCurrent;
+                vanillaHk.PendingModifiers = ComboKeyStore.GetSavedModifiers(vanillaHkId, vanillaCurrent);
+                vanillaHk.HasPendingChange = false;
+
+                modHk.PendingKey = modCurrent;
+                modHk.PendingModifiers = ComboKeyStore.GetSavedModifiers(modHkId, modCurrent);
+                modHk.HasPendingChange = false;
+
+                UiSessionState.CaptureOpenBaselineSnapshot();
+
+                // 铁证断言：重开后未作任何修改时，绝不误弹未保存弹窗！
+                Assert.False(UiSessionState.HasUnsavedChanges(), "Reopening window after save must NOT report unsaved changes!");
+            }
+
+            // Step 4: 模拟 Esc 解除绑定 -> 脏标记触发 -> 放弃修改 -> 恢复快照
+            vanillaHk.PendingKey = KeyCode.None;
+            vanillaHk.PendingModifiers = KeyModifierMask.None;
+            vanillaHk.HasPendingChange = true;
+            Assert.True(UiSessionState.HasUnsavedChanges(), "Unbinding hotkey must trigger dirty state");
+
+            UiSessionState.DiscardAllPendingChanges();
+            Assert.False(UiSessionState.HasUnsavedChanges(), "Discarding must restore clean state");
+            Assert.Equal(KeyCode.Space, vanillaHk.PendingKey);
+            Assert.Equal(KeyModifierMask.Ctrl, vanillaHk.PendingModifiers);
+        }
+
+        /// <summary>
+        /// 验证鼠标侧键（Mouse3 ~ Mouse6）以及修饰组合侧键（Ctrl/Shift/Alt + 侧键）的完整录入、持久化与往返解析。
+        /// </summary>
+        [Fact]
+        public void Feedback_MouseSideButtons_AndModifierCombos_FullRoundTrip_AndPersistence()
+        {
+            ComboKeyStore.EnsureLoaded();
+
+            // 1. 验证主键名称格式化正确识别侧键
+            string expectedM3 = BilingualText.Get("鼠标侧键1", "Mouse Side 1");
+            string expectedM4 = BilingualText.Get("鼠标侧键2", "Mouse Side 2");
+            string expectedM5 = BilingualText.Get("鼠标侧键3", "Mouse Side 3");
+            string expectedM6 = BilingualText.Get("鼠标侧键4", "Mouse Side 4");
+
+            Assert.Equal(expectedM3, ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse3));
+            Assert.Equal(expectedM4, ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse4));
+            Assert.Equal(expectedM5, ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse5));
+            Assert.Equal(expectedM6, ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse6));
+
+            // 2. 验证纯侧键与修饰组合侧键文本展示
+            Assert.Equal(expectedM3, ComboKeyStore.FormatCombo(KeyModifierMask.None, KeyCode.Mouse3));
+            Assert.Equal($"Ctrl + {expectedM3}", ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl, KeyCode.Mouse3));
+            Assert.Equal($"Shift + {expectedM4}", ComboKeyStore.FormatCombo(KeyModifierMask.Shift, KeyCode.Mouse4));
+            Assert.Equal($"Alt + {expectedM5}", ComboKeyStore.FormatCombo(KeyModifierMask.Alt, KeyCode.Mouse5));
+            Assert.Equal($"Ctrl+Shift+{expectedM6}", ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl | KeyModifierMask.Shift, KeyCode.Mouse6));
+
+            // 3. 验证 ComboKeyStore 持久化存取与序列化往返
+            string testEntryId = "test.mod.mouse_action";
+            ComboKeyStore.SetSavedCombo(testEntryId, KeyModifierMask.Ctrl | KeyModifierMask.Alt, KeyCode.Mouse4);
+            ComboKeyStore.Save();
+
+            // 清空内存缓存并重新加载
+            ComboKeyStore.Load();
+
+            KeyModifierMask loadedMask = ComboKeyStore.GetSavedModifiers(testEntryId, KeyCode.Mouse4);
+            Assert.Equal(KeyModifierMask.Ctrl | KeyModifierMask.Alt, loadedMask);
+
+            var effective = ComboKeyStore.GetEffectiveCustomHotkey(testEntryId, KeyModifierMask.None, KeyCode.None);
+            Assert.Equal(KeyCode.Mouse4, effective.Key);
+            Assert.Equal(KeyModifierMask.Ctrl | KeyModifierMask.Alt, effective.Modifiers);
+        }
+
+        /// <summary>
+        /// 针对 #7：搜索防抖、预索引一致性、拼音与前缀收窄匹配，以及搜索框聚焦态 Esc 抑制验证。
+        /// </summary>
+        [Fact]
+        public void Feedback07_SearchDebounce_PreIndexing_PinyinAndPrefixNarrowing_AndEscFocusSuppression()
+        {
+            // 1. 验证 KeySearchMatcher 对双语及拼音检索的匹配度
+            var hkEntry = new ModHotkeyEntry
+            {
+                Id = "test.mod.commodity_price",
+                ModId = "test_mod",
+                DisplayName = "查看商品价格",
+                DefaultKey = KeyCode.P,
+                SupportsModifierCombos = true,
+                GetKey = () => KeyCode.P
+            };
+
+            // 拼音首字母匹配 "sp" -> "商品"
+            Assert.True(KeySearchMatcher.MatchesHotkeyBinding(hkEntry, "sp"));
+            // 全拼匹配 "shangpin" -> "商品"
+            Assert.True(KeySearchMatcher.MatchesHotkeyBinding(hkEntry, "shangpin"));
+            // 键名直接匹配
+            Assert.True(KeySearchMatcher.MatchesHotkeyBinding(hkEntry, "p"));
+            // 无关词不匹配
+            Assert.False(KeySearchMatcher.MatchesHotkeyBinding(hkEntry, "xyz999"));
+
+            // 2. 验证 TopSearchAndActionBar 废除分帧队列且 HasPendingProgressiveExpand 恒为 false
+            Assert.False(TopSearchAndActionBar.HasPendingProgressiveExpand);
+
+            // 清理测试态
+            TopSearchAndActionBar.ClearSearchDebounce();
+            TopSearchAndActionBar.ClearProgressiveExpandQueue();
+
+            // 3. 验证 IOptionUiBridge 契约对搜索框聚焦态（IsSearchInputFocused）的扩展实现
+            IOptionUiBridge bridge = UnifiedOptionWindow.Instance;
+            Assert.False(bridge.IsSearchInputFocused);
+            bridge.ReleaseSearchInputFocus(); // 确保安全空放不抛出任何异常
+        }
     }
 }

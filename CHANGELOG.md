@@ -41,10 +41,22 @@
   - 新增《Harmony 补丁与 ModScanner 解耦规范》(docs/HARMONY_SPEC.md)；
   - 新增《9 阶段实机回归验收清单》(docs/REGRESSION_CHECKLIST.md)；
   - 新增《标准化发布作业程序》(docs/RELEASE_SOP.md) 与《跨阶段交接三件套》(docs/handoff/)。
+- **7 项核心交互深度打磨与排雷闭环**：
+  - **组合键 / 侧键全链路闭环与按钮宽度放宽**：按键按钮放宽至 195f，结合水平 padding 收敛使可用宽度达 163px，长组合键拟合字号钳制在 `[9.5f, 15f]`；全面打通 `Mouse3~Mouse6` 侧键与 `Ctrl/Shift/Alt + 侧键` 录入、显示、持久化与往返解析；
+  - **单帧瞬开「全部展开」脱机批量切换**：废除多帧渐进队列与时钟，根容器脱机一次性原子完成所有卡片展开与折叠箭头切换，单帧 < 8ms 瞬成且滚动条滑块一步到位绝不变形跳动；
+  - **搜索栏 300ms 防抖与智能 IME 拼音识别**：连续打字期间 0 重排，手停顿 0.3s（或按 Enter、退格清空）时一次性呈现；识别 `Input.compositionString` 杜绝拼音候选串输入中提前过滤；搜索框聚焦时按 Esc 优先释放输入框聚焦（`DeactivateInputField`），绝不误退窗口；
+  - **改造件面板隐藏封面且按钮 100% 零形变**：选中本模组隐藏封面大图，将 345px 空间 100% 转移给文字描述滚动区；父 Row 挂载 `LayoutElement` 解耦拉伸，锁定操作按钮高度 42px（正方形 42×42px，`flexibleHeight = 0`），彻底根除形变。
+- **48 项全套离线单元测试 100% 全绿覆盖**：
+  - 扩充至 48 项单元测试，新增覆盖长组合键字号拟合宽度计算、原版与单键模组组合键保存重开零退化零假脏、鼠标侧键与修饰组合侧键完整往返、搜索防抖与预索引一致性。
 
 ### Changed
 - **异常防崩网加固**：全库消灭空 `catch {}`，统一通过 `SafeExecution.SafeExecute` / `SafeFunc` 执行并记录结构化日志（`[ProbablyUnifiedHotkeys][LEVEL]`）。
-- **0 权限默认纯净契约**：默认构建注入 `DisableDllKeyProbe=true` 编译宏，`manifest.xml` 保持空 `<Capabilities />`，确保静态扫描达到 `0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`（1,343 个扫描方法全部通过），面向官方 2026-12-10 安全白名单门禁。
+- **0 权限默认纯净契约**：默认构建注入 `DisableDllKeyProbe=true` 编译宏，`manifest.xml` 保持空 `<Capabilities />`，确保静态扫描达到 `0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`（1,411 个扫描方法全部通过），面向官方 2026-12-10 安全白名单门禁。
+
+### Fixed
+- **彻底根除原版卡片标题栏被方案预设提示污染**：切断预设逻辑对 `SetKeyBindStatusDelegate` 的误调，反馈严格隔离在卡片内部状态栏与底栏。
+- **彻底根除扫描与开窗未开启 `EnterBypass` 导致的组合键退化单键与假脏弹窗**：在配置扫描与开窗最外层强制包裹 `using (ComboKeyStore.EnterBypass())`，重构 `SyncVanillaPendingFromManager` 修饰键同步算法，收窄 `ExplicitUnbound` 作用域至全量规范 ID。
+- **彻底根除搜索框打字时按 Esc 误关闭窗口与误弹未保存弹窗**：扩展 `IOptionUiBridge.IsSearchInputFocused` 独立释放聚焦。
 
 ---
 

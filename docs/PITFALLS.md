@@ -36,7 +36,10 @@
   - [22. `PropertyInfo.SetValue` 只读属性（无 setter）反射写入致命崩溃](#22-propertyinfosetvalue-只读属性无-setter反射写入致命崩溃)
   - [23. `OverriddenDropdowns` 底层残留与原生控件未修改虚假脏状态误弹窗](#23-overriddendropdowns-底层残留与原生控件未修改虚假脏状态误弹窗)
   - [24. 搜索框文本变动每字符 12 次全树重排风暴与防抖缺失](#24-搜索框文本变动每字符-12-次全树重排风暴与防抖缺失)
-  - [25. 40 模组 800 个 TMP 文本组件同帧首次激活卡死与视口优先渐进展开](#25-40-模组-800-个-tmp-文本组件同帧首次激活卡死与视口优先渐进展开)
+  - [25. 40 模组 800 个 TMP 文本组件同帧首次激活卡死与脱机批量瞬开](#25-40-模组-800-个-tmp-文本组件同帧首次激活卡死与脱机批量瞬开)
+  - [26. `ProfilePresetCardView` 误调 `SetKeyBindStatusDelegate` 污染原版卡片标题栏](#26-profilepresetcardview-误调-setkeybindstatusdelegate-污染原版卡片标题栏)
+  - [27. 扫描与开窗未开启 `EnterBypass` 导致组合键退化单键与假脏弹窗](#27-扫描与开窗未开启-enterbypass-导致组合键退化单键与假脏弹窗)
+  - [28. 改造件详情列隐藏封面后父 Row 弹性垂直拉伸导致按钮形变](#28-改造件详情列隐藏封面后父-row-弹性垂直拉伸导致按钮形变)
 
 ---
 
@@ -288,19 +291,48 @@
 - **【严禁反模式 Anti-pattern】**：严禁直接依赖原版 `overriddenDropdowns` 内部字段作为脏状态依据，严禁拿易受外部初始化的默认值直接做判脏基准。
 
 ### 24. 搜索框文本变动每字符 12 次全树重排风暴与防抖缺失
-- **【现象 Symptom】**：在搜索框中连续输入字符时（如搜 `\"sort\"`），界面严重掉帧甚至卡顿 0.5 秒，打字极度不跟手。
-- **【根因 Root Cause】**：原搜索响应代码在每个字符输入事件触发时，调用了深层滚动方法，其内部嵌套调用了 2 次 `Canvas.ForceUpdateCanvases` 与 6 次父层 `LayoutRebuilder.ForceRebuildLayoutImmediate`，打 1 个字引发 12 次全树重排风暴；且无任何输入防抖，每输一个拼音字母立即触发昂贵的全量卡片匹配与字符串重算。
+- **【现象 Symptom】**：在搜索框中连续输入字符时（如搜 `\"sort\"`），界面严重掉帧甚至卡顿 0.5 秒，打字极度不跟手；输入法候选拼音输入中提前触发过滤；按 Esc 清空时意外关闭窗口。
+- **【根因 Root Cause】**：原搜索响应代码在每个字符输入事件触发时，嵌套调用了 `Canvas.ForceUpdateCanvases` 与 `LayoutRebuilder.ForceRebuildLayoutImmediate` 引发全树重排风暴；且防抖延迟过短无法覆盖人类敲键间隔；未识别 IME 拼音输入状态；未在聚焦态接管 Esc 导致主窗口 HandleEscape 误判退出。
 - **【解法 Remedy】**：
-  1. 精简 `ScrollToTargetImmediate`，彻底剥除多层强制重排，仅在顶层 Content 节点保留最多单次安全布局刷新。
-  2. 为搜索输入加入 100ms 轻量防抖机制（按回车或清空时 0 延迟即刻生效）；优化失焦防竞态判断，确保防抖期间点击下方按钮（如绑定或展开）绝不吞点击。
-  3. 当模组组名（Group Name）已命中搜索词时，直接放行整张卡片，杜绝每字符重复对卡片内数十个热键执行 `FormatCombo` 与字符串拼接。
-- **【严禁反模式 Anti-pattern】**：严禁在 `onValueChanged` 频繁触发的输入事件中直接同步调用多层 `ForceUpdateCanvases` 与 `ForceRebuildLayoutImmediate`。
+  1. 升级为 300ms 轻量输入防抖（按回车或清空文本时 0 延迟即刻生效）；失焦防竞态避免吞掉下方按钮点击。
+  2. 智能识别输入法合成态：通过 `Input.compositionString` 检测拼音候选串输入，合成期间自动推迟防抖计时器，绝不提前触发全量过滤。
+  3. 建立会话级轻量预索引（小写文本 + 拼音首字母 + 全拼），引入前缀收窄短路优化（如 `"sp"` 追加为 `"spe"` 时直接复用上轮不可见标记）。
+  4. 扩展 `IOptionUiBridge.IsSearchInputFocused`：当搜索框正处于输入聚焦态时，按 Esc 优先释放输入框聚焦（`DeactivateInputField`），严禁误触窗口关闭或弹出未保存弹窗。
+- **【严禁反模式 Anti-pattern】**：严禁在 `onValueChanged` 频繁触发的输入事件中直接同步调用多层 `ForceUpdateCanvases` 与 `ForceRebuildLayoutImmediate`；严禁在文本框聚焦时不加拦截任由 Esc 关闭窗口。
 
-### 25. 40 模组 800 个 TMP 文本组件同帧首次激活卡死与视口优先渐进展开
-- **【现象 Symptom】**：玩家订阅 40+ 模组时，首次点击「全部展开」瞬间出现长达 200~400ms 的深度顿挫。
-- **【根因 Root Cause】**：40 个模组卡片内包含约 800 个 TextMeshPro 文本与按钮组件，若在单帧内将全部折叠卡片同时激活，Unity 底层 `CanvasUpdateRegistry` 会在同一帧内对这 800 个从未渲染过的 TMP 材质和网格执行全量初始化与顶点生成，形成巨大的主线程尖刺。
+### 25. 40 模组 800 个 TMP 文本组件同帧首次激活卡死与脱机批量瞬开
+- **【现象 Symptom】**：玩家订阅 40+ 模组时，点击「全部展开」滑块跳动或出现排队分帧延迟，无法真正一次性原子展开。
+- **【根因 Root Cause】**：旧分帧渐进展开队列跨多帧修改卡片激活态，导致右侧滚动条滑块随卡片逐帧加载而剧烈变形跳动，视觉体验割裂；且分帧时钟每帧产生调度开销。
 - **【解法 Remedy】**：
-  1. **视口优先瞬开**：首帧仅同步瞬间展开视口内可见的前 4 张模组卡与原版 5 张核心卡（肉眼可见画面 < 8ms 瞬时呈现到位，顶部按钮立即同步显示「全部收起」）。
-  2. **屏外渐进分帧展开**：将剩余 35+ 张屏外模组卡推入 `s_progressiveExpandQueue`，由 `KeyCaptureController.TickCapture()` 驱动，在后续帧中按每帧 <= 4ms 的安全预算离线平滑展开，彻底消除单帧数百毫秒顿挫。
-  3. 全部收起时，外层容器脱机批量折叠，< 3ms 瞬间收起。
-- **【严禁反模式 Anti-pattern】**：严禁在单帧内暴力将数十个大型复杂卡片（含数百个动态 TMP 文本）无节制全部激活触发同步排版。
+  1. **脱机批量切换法（Offline Batch Switch）**：切换时首先将外层根容器 `NormalContentRoot.SetActive(false)` 临时脱机，整棵子树瞬间脱离 Canvas 激活层级，杜绝任何子对象状态变更触发 `CanvasUpdateRegistry` 注册开销。
+  2. 在脱机静默状态下，一次性建齐尚未后台构建的模组卡片，并批量一次性设置所有卡片激活态与折叠箭头。
+  3. 恢复 `NormalContentRoot.SetActive(true)` 后，仅对 `ScrollRect.content` 执行 1 次 `LayoutRebuilder.ForceRebuildLayoutImmediate`（全部展开 < 8ms 瞬成，全部收起 < 2ms 秒切，右侧滚动条滑块一步到位绝不变形跳动）。
+- **【严禁反模式 Anti-pattern】**：严禁采用多帧渐进队列去展开模组列表，脱机批量一次性重排效率远高于分帧频繁激活。
+
+### 26. `ProfilePresetCardView` 误调 `SetKeyBindStatusDelegate` 污染原版卡片标题栏
+- **【现象 Symptom】**：点击方案卡片「保存/读取/清空」时，原版「按键绑定」卡片标题栏右侧的 `note_keybinds` 意外冒出预设反馈提示（如绿色「已保存」字样），挤占并污染原版标题排版。
+- **【根因 Root Cause】**：`ProfilePresetCardView` 错误调用了 `UiSessionState.SetKeyBindStatusDelegate`，该委托绑定的是原生 `GameOptionUIManager.SetKeyBindStatus`，其专职向 `note_keybinds` 写入提示。
+- **【解法 Remedy】**：彻底移除对 `SetKeyBindStatusDelegate` 的调用，预设卡片反馈严格限定于模组专属 UI 元素（`label_profile_action_status`）及窗口底栏。
+- **【严禁反模式 Anti-pattern】**：严禁模组自定义业务逻辑复用原版 `GameOptionUIManager.SetKeyBindStatus` 向原版卡片标题写字。
+
+### 27. 扫描与开窗未开启 `EnterBypass` 导致组合键退化单键与假脏弹窗
+- **【现象 Symptom】**：绑定组合键（如 `Ctrl + Space` 或 `Shift + F`）后点击应用并关窗，重新打开选项窗口时，组合键退化为单键或清空为 None，甚至开窗即弹出「存在未保存更改」假脏弹窗。
+- **【根因 Root Cause】**：
+  1. `ModOptionScanner` / `ModCatalogCache` 扫描配置项时，未开启 `ComboKeyStore.EnterBypass()`，此时运行时组合键拦截器将主键掩盖为 None；
+  2. `SyncVanillaPendingFromManager` 在 `!hk.HasPendingChange` 时暴力将 `PendingModifiers` 清零，导致原已持久化修饰键被冲刷为 None；
+  3. `ExplicitUnbound` 检查裸键名导致一个模组解绑同名键污染其它所有模组。
+- **【解法 Remedy】**：
+  1. 在扫描与开窗最外层强制包裹 `using (ComboKeyStore.EnterBypass())`；
+  2. 重构 `SyncVanillaPendingFromManager`：主键一致且无修改时保持已持久化修饰键；用户仅修改修饰键时自动回填 `pendingKeys` 驱动官方保存；
+  3. `ExplicitUnbound` 严格限定于全量规范 ID（`canonicalId`），并在恢复默认时自动释放。
+- **【严禁反模式 Anti-pattern】**：严禁在未开启 Bypass 状态下读取可能已被组合键运行时拦截的 `ConfigEntry.Value`；严禁依据裸键名处理显式解绑。
+
+### 28. 改造件详情列隐藏封面后父 Row 弹性垂直拉伸导致按钮形变
+- **【现象 Symptom】**：隐藏封面框后，「停用」「齿轮」「Steam工坊」三个按钮被垂直拉伸为几百像素高的畸变巨物。
+- **【根因 Root Cause】**：详情列父容器 `VerticalLayoutGroup` 的 `childControlHeight = true`，当 `preview_panel` 隐藏释放出 345px 空间后，承载操作按钮的父 Row 因缺少高度约束被弹性拉长分摊了垂直高度。
+- **【解法 Remedy】**：
+  1. 将承载按钮的父 Row 容器 `HorizontalLayoutGroup.childControlHeight` 与 `childForceExpandHeight` 均锁定为 `false`；
+  2. 为父 Row 挂载 `LayoutElement` 并动态锁定 `minHeight = 42f, preferredHeight = 42f, flexibleHeight = 0f`；
+  3. 对所有按钮注入硬约束：锁定高度 42px（正方形按钮锁定 42×42px，`flexibleHeight = 0f`）；
+  4. 将隐藏封面释放出来的 345px 空间通过下方 `detail_description` 所在 `ScrollRect`（`flexibleHeight = 1f`）100% 转移给文字描述滚动区。
+- **【严禁反模式 Anti-pattern】**：严禁只隐藏上方大控件而不对其下方可能被拉伸的 `VerticalLayoutGroup` 子 Row 进行高度约束锁定。

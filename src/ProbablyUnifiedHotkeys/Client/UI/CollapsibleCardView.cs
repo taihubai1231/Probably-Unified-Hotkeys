@@ -438,9 +438,9 @@ namespace ProbablyUnifiedHotkeys
                     parts.ProbedHeader = probedHeaderObj;
                     parts.ProbedSep = probedSepObj;
 
-                    if (UiSessionState.NormalDisplayMode != NormalDisplayMode.All || !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery))
+                    if (!TopSearchAndActionBar.IsApplyingSearchFilter && (UiSessionState.NormalDisplayMode != NormalDisplayMode.All || !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery)))
                     {
-                        TopSearchAndActionBar.ApplySearchFilter();
+                        TopSearchAndActionBar.ApplySingleGroupVisibility(group);
                     }
                 }
             }

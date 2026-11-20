@@ -18,10 +18,10 @@ namespace ProbablyUnifiedHotkeys
         private static float s_searchDebounceTime;
         private static bool s_hasPendingSearchDebounce;
 
-        private static readonly List<ModOptionGroup> s_progressiveExpandQueue = new List<ModOptionGroup>();
-        private static readonly Stopwatch s_progressiveStopwatch = new Stopwatch();
-
-        internal static bool HasPendingProgressiveExpand => s_progressiveExpandQueue.Count > 0;
+        /// <summary>
+        /// 兼容旧版调用；新版已彻底废除分帧展开队列，单帧瞬开无排队。
+        /// </summary>
+        internal static bool HasPendingProgressiveExpand => false;
 
         internal static void ClearSearchDebounce()
         {
@@ -31,12 +31,18 @@ namespace ProbablyUnifiedHotkeys
 
         internal static void ClearProgressiveExpandQueue()
         {
-            s_progressiveExpandQueue.Clear();
         }
 
         internal static void TickSearchDebounce()
         {
             if (!s_hasPendingSearchDebounce) return;
+
+            // 智能识别输入法合成态（IME Composition）：当正在输入法拼音候选串合成中时，推迟防抖计时器，绝不提前触发重度全量过滤
+            if (!string.IsNullOrEmpty(Input.compositionString))
+            {
+                s_searchDebounceTime = Time.unscaledTime + 0.30f;
+                return;
+            }
 
             if (Time.unscaledTime >= s_searchDebounceTime)
             {
@@ -47,32 +53,11 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        /// <summary>
+        /// 兼容旧版调用；新版已彻底废除分帧展开队列，单帧瞬开无排队。
+        /// </summary>
         internal static void TickProgressiveExpand()
         {
-            if (s_progressiveExpandQueue.Count == 0) return;
-            if (!UiSessionState.AllExpanded || UiSessionState.CurrentWindow == null || !UiSessionState.CurrentWindow.IsVisible)
-            {
-                s_progressiveExpandQueue.Clear();
-                return;
-            }
-
-            s_progressiveStopwatch.Restart();
-            while (s_progressiveExpandQueue.Count > 0)
-            {
-                var group = s_progressiveExpandQueue[0];
-                s_progressiveExpandQueue.RemoveAt(0);
-
-                CollapsibleCardView.SetGroupExpanded(group, true);
-                if (UiSessionState.TryGetCardParts(group, out var p))
-                {
-                    UiLayoutAndFontHelper.SyncCompactActionButton(p.ResetButtonElement);
-                }
-
-                if (s_progressiveStopwatch.Elapsed.TotalMilliseconds >= 4.0)
-                {
-                    break;
-                }
-            }
         }
 
         /// <summary>
@@ -80,6 +65,8 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static void BuildTopBars(CustomUIBuilder builder, string layer, GameObject? windowRoot, bool hasThemeForLayer)
         {
+            ClearSearchIndex();
+            ClearSearchDebounce();
             builder.AddSpace(4f);
 
             // 第一行：搜索范围下拉框 + 宽幅搜索框
@@ -303,9 +290,9 @@ namespace ProbablyUnifiedHotkeys
                 return;
             }
 
-            // 100ms 轻量输入防抖
+            // 300ms 轻量输入防抖（人类正常敲两个字母间隔约 150~250ms，300ms 保证连续逐字敲击期间 0 界面重排）
             s_pendingSearchText = text;
-            s_searchDebounceTime = Time.unscaledTime + 0.10f;
+            s_searchDebounceTime = Time.unscaledTime + 0.30f;
             s_hasPendingSearchDebounce = true;
         }
 
@@ -341,7 +328,7 @@ namespace ProbablyUnifiedHotkeys
 
             // 若失焦时文本发生变更（如外部粘贴但未触发回车），确保防抖队列记录最新文本并在到期时驱动
             s_pendingSearchText = safeText;
-            s_searchDebounceTime = Mathf.Max(s_searchDebounceTime, Time.unscaledTime + 0.05f);
+            s_searchDebounceTime = Mathf.Max(s_searchDebounceTime, Time.unscaledTime + 0.15f);
             s_hasPendingSearchDebounce = true;
         }
 
@@ -363,16 +350,355 @@ namespace ProbablyUnifiedHotkeys
             ApplySearchFilter();
         }
 
+        #region 搜索预索引与零分配极速匹配缓存
+
+        private static string StripSeparators(string text)
+        {
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (char.IsWhiteSpace(text[i]) || char.IsPunctuation(text[i]))
+                {
+                    var sb = new System.Text.StringBuilder(text.Length);
+                    sb.Append(text, 0, i);
+                    for (int j = i + 1; j < text.Length; j++)
+                    {
+                        char c = text[j];
+                        if (!char.IsWhiteSpace(c) && !char.IsPunctuation(c))
+                        {
+                            sb.Append(c);
+                        }
+                    }
+                    return sb.ToString();
+                }
+            }
+            return text;
+        }
+
+        private static void IndexString(string? text, out string lower, out string initials, out string fullPy)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                lower = string.Empty;
+                initials = string.Empty;
+                fullPy = string.Empty;
+                return;
+            }
+
+            string simp = PinyinEngine.ToSimplified(text!);
+            lower = simp.ToLowerInvariant();
+            initials = PinyinEngine.ToInitials(simp);
+            fullPy = PinyinEngine.ToFullPinyin(simp);
+        }
+
+        private sealed class GroupSearchData
+        {
+            public string DisplayNameLower = string.Empty;
+            public string DisplayNameInitials = string.Empty;
+            public string DisplayNameFullPy = string.Empty;
+            public string ModIdLower = string.Empty;
+            public string ModIdInitials = string.Empty;
+            public string ModIdFullPy = string.Empty;
+
+            public bool Matches(string normQuery, string compactQuery)
+            {
+                if (DisplayNameLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0 ||
+                    ModIdLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0)
+                {
+                    return true;
+                }
+                if (compactQuery.Length > 0 &&
+                    (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                     DisplayNameFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                     ModIdInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                     ModIdFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                {
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        private sealed class GeneralSearchData
+        {
+            public string DisplayNameLower = string.Empty;
+            public string DisplayNameInitials = string.Empty;
+            public string DisplayNameFullPy = string.Empty;
+            public string SectionLabelLower = string.Empty;
+            public string SectionLabelInitials = string.Empty;
+            public string SectionLabelFullPy = string.Empty;
+            public string SectionLower = string.Empty;
+            public string SectionInitials = string.Empty;
+            public string SectionFullPy = string.Empty;
+
+            public bool Matches(string normQuery, string compactQuery)
+            {
+                if (DisplayNameLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0 ||
+                    (!string.IsNullOrEmpty(SectionLabelLower) && SectionLabelLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0) ||
+                    (!string.IsNullOrEmpty(SectionLower) && SectionLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0))
+                {
+                    return true;
+                }
+                if (compactQuery.Length > 0)
+                {
+                    if (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                        DisplayNameFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0)
+                    {
+                        return true;
+                    }
+                    if (!string.IsNullOrEmpty(SectionLabelInitials) &&
+                        (SectionLabelInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                         SectionLabelFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                    {
+                        return true;
+                    }
+                    if (!string.IsNullOrEmpty(SectionInitials) &&
+                        (SectionInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                         SectionFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        private sealed class HotkeySearchData
+        {
+            public string DisplayNameLower = string.Empty;
+            public string DisplayNameInitials = string.Empty;
+            public string DisplayNameFullPy = string.Empty;
+            public string SectionLabelLower = string.Empty;
+            public string SectionLabelInitials = string.Empty;
+            public string SectionLabelFullPy = string.Empty;
+            public string SectionLower = string.Empty;
+            public string SectionInitials = string.Empty;
+            public string SectionFullPy = string.Empty;
+            public string ProbedLower = string.Empty;
+            public string ProbedInitials = string.Empty;
+            public string ProbedFullPy = string.Empty;
+
+            public KeyCombo CachedCombo;
+            public string CachedComboText = string.Empty;
+            public string CachedPrimaryKeyText = string.Empty;
+
+            public bool Matches(ModHotkeyEntry hotkey, string query, string normQuery, string compactQuery)
+            {
+                if (DisplayNameLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0 ||
+                    (!string.IsNullOrEmpty(SectionLabelLower) && SectionLabelLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0) ||
+                    (!string.IsNullOrEmpty(SectionLower) && SectionLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0) ||
+                    (!string.IsNullOrEmpty(ProbedLower) && ProbedLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0))
+                {
+                    return true;
+                }
+
+                if (compactQuery.Length > 0)
+                {
+                    if (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                        DisplayNameFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0)
+                    {
+                        return true;
+                    }
+                    if (!string.IsNullOrEmpty(SectionLabelInitials) &&
+                        (SectionLabelInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                         SectionLabelFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                    {
+                        return true;
+                    }
+                    if (!string.IsNullOrEmpty(SectionInitials) &&
+                        (SectionInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                         SectionFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                    {
+                        return true;
+                    }
+                    if (!string.IsNullOrEmpty(ProbedInitials) &&
+                        (ProbedInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                         ProbedFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                    {
+                        return true;
+                    }
+                }
+
+                KeyCombo effCombo = hotkey.EffectiveCombo;
+                if (effCombo != CachedCombo || string.IsNullOrEmpty(CachedComboText))
+                {
+                    CachedCombo = effCombo;
+                    if (effCombo.Key == KeyCode.None)
+                    {
+                        CachedComboText = ComboKeyStore.FormatCombo(effCombo.Modifiers, effCombo.Key);
+                        CachedPrimaryKeyText = string.Empty;
+                    }
+                    else
+                    {
+                        CachedComboText = ComboKeyStore.FormatCombo(effCombo.Modifiers, effCombo.Key);
+                        CachedPrimaryKeyText = effCombo.Modifiers != KeyModifierMask.None
+                            ? ComboKeyStore.FormatPrimaryKeyName(effCombo.Key)
+                            : string.Empty;
+                    }
+                }
+
+                KeyCode effKey = effCombo.Key;
+                if (effKey == KeyCode.None)
+                {
+                    return KeySearchMatcher.MatchesFormattedKeyText(CachedComboText, query);
+                }
+
+                if (KeySearchMatcher.MatchesKeyCodeSearchToken(effKey, query))
+                {
+                    return true;
+                }
+
+                if (KeySearchMatcher.MatchesFormattedKeyText(CachedComboText, query))
+                {
+                    return true;
+                }
+
+                if (!string.IsNullOrEmpty(CachedPrimaryKeyText) && KeySearchMatcher.MatchesFormattedKeyText(CachedPrimaryKeyText, query))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        private sealed class VanillaItemSearchData
+        {
+            public string DisplayNameLower = string.Empty;
+            public string DisplayNameInitials = string.Empty;
+            public string DisplayNameFullPy = string.Empty;
+
+            public bool Matches(VanillaOptionItem item, string query, string normQuery, string compactQuery)
+            {
+                if (item.IsKeyBind && item.LinkedHotkey != null)
+                {
+                    if (MatchesHotkey(item.LinkedHotkey, query, normQuery, compactQuery))
+                    {
+                        return true;
+                    }
+                }
+
+                if (DisplayNameLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0)
+                {
+                    return true;
+                }
+
+                if (compactQuery.Length > 0 &&
+                    (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                     DisplayNameFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        private static readonly Dictionary<ModOptionGroup, GroupSearchData> s_groupSearchIndex = new Dictionary<ModOptionGroup, GroupSearchData>();
+        private static readonly Dictionary<ModGeneralEntry, GeneralSearchData> s_generalSearchIndex = new Dictionary<ModGeneralEntry, GeneralSearchData>();
+        private static readonly Dictionary<ModHotkeyEntry, HotkeySearchData> s_hotkeySearchIndex = new Dictionary<ModHotkeyEntry, HotkeySearchData>();
+        private static readonly Dictionary<VanillaOptionItem, VanillaItemSearchData> s_vanillaItemSearchIndex = new Dictionary<VanillaOptionItem, VanillaItemSearchData>();
+        private static readonly Dictionary<VanillaSectionCard, (string lower, string initials, string fullPy)> s_vanillaCardSearchIndex = new Dictionary<VanillaSectionCard, (string, string, string)>();
+
+        private static GroupSearchData GetOrCreateGroupIndex(ModOptionGroup group)
+        {
+            if (s_groupSearchIndex.TryGetValue(group, out var data)) return data;
+            data = new GroupSearchData();
+            IndexString(group.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy);
+            IndexString(group.ModId, out data.ModIdLower, out data.ModIdInitials, out data.ModIdFullPy);
+            s_groupSearchIndex[group] = data;
+            return data;
+        }
+
+        private static GeneralSearchData GetOrCreateGeneralIndex(ModGeneralEntry gen)
+        {
+            if (s_generalSearchIndex.TryGetValue(gen, out var data)) return data;
+            data = new GeneralSearchData();
+            IndexString(gen.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy);
+            IndexString(gen.SectionLabel, out data.SectionLabelLower, out data.SectionLabelInitials, out data.SectionLabelFullPy);
+            IndexString(gen.Section, out data.SectionLower, out data.SectionInitials, out data.SectionFullPy);
+            s_generalSearchIndex[gen] = data;
+            return data;
+        }
+
+        private static HotkeySearchData GetOrCreateHotkeyIndex(ModHotkeyEntry hotkey)
+        {
+            if (s_hotkeySearchIndex.TryGetValue(hotkey, out var data)) return data;
+            data = new HotkeySearchData();
+            IndexString(hotkey.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy);
+            IndexString(hotkey.SectionLabel, out data.SectionLabelLower, out data.SectionLabelInitials, out data.SectionLabelFullPy);
+            IndexString(hotkey.Section, out data.SectionLower, out data.SectionInitials, out data.SectionFullPy);
+            if (hotkey.IsReadOnlyProbed)
+            {
+                IndexString(hotkey.ProbedSourceDetail, out data.ProbedLower, out data.ProbedInitials, out data.ProbedFullPy);
+            }
+            s_hotkeySearchIndex[hotkey] = data;
+            return data;
+        }
+
+        private static VanillaItemSearchData GetOrCreateVanillaItemIndex(VanillaOptionItem item)
+        {
+            if (s_vanillaItemSearchIndex.TryGetValue(item, out var data)) return data;
+            data = new VanillaItemSearchData();
+            IndexString(item.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy);
+            s_vanillaItemSearchIndex[item] = data;
+            return data;
+        }
+
+        private static (string lower, string initials, string fullPy) GetOrCreateVanillaCardIndex(VanillaSectionCard card)
+        {
+            if (s_vanillaCardSearchIndex.TryGetValue(card, out var data)) return data;
+            IndexString(card.DisplayName + " " + card.SectionId, out data.lower, out data.initials, out data.fullPy);
+            s_vanillaCardSearchIndex[card] = data;
+            return data;
+        }
+
+        internal static void ClearSearchIndex()
+        {
+            s_groupSearchIndex.Clear();
+            s_generalSearchIndex.Clear();
+            s_hotkeySearchIndex.Clear();
+            s_vanillaItemSearchIndex.Clear();
+            s_vanillaCardSearchIndex.Clear();
+            s_lastMatchedCards.Clear();
+            s_lastSearchQuery = string.Empty;
+        }
+
+        internal static bool MatchesHotkey(ModHotkeyEntry hotkey, string query, string normQuery, string compactQuery)
+        {
+            var idx = GetOrCreateHotkeyIndex(hotkey);
+            return idx.Matches(hotkey, query, normQuery, compactQuery);
+        }
+
+        internal static bool MatchesGeneral(ModGeneralEntry gen, string normQuery, string compactQuery)
+        {
+            var idx = GetOrCreateGeneralIndex(gen);
+            return idx.Matches(normQuery, compactQuery);
+        }
+
+        private static bool IsVanillaSectionMatch(VanillaSectionCard card, string normQuery, string compactQuery)
+        {
+            var data = GetOrCreateVanillaCardIndex(card);
+            if (data.lower.IndexOf(normQuery, StringComparison.Ordinal) >= 0) return true;
+            if (compactQuery.Length > 0 &&
+                (data.initials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                 data.fullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        #endregion
+
         /// <summary>
-        /// 检查热键是否匹配当前查询关键词（复用纯内核 KeySearchMatcher 算法）。
+        /// 检查热键是否匹配当前查询关键词（复用纯内核 KeySearchMatcher 算法与预索引加速）。
         /// </summary>
         internal static bool IsHotkeyMatchQuery(ModHotkeyEntry hotkey, string query)
         {
-            return KeySearchMatcher.MatchesHotkeyBinding(
-                hotkey,
-                query,
-                ComboKeyStore.FormatCombo,
-                ComboKeyStore.FormatPrimaryKeyName);
+            if (string.IsNullOrWhiteSpace(query)) return true;
+            string normQuery = PinyinEngine.ToSimplified(query.Trim()).ToLowerInvariant();
+            string compactQuery = StripSeparators(normQuery);
+            return MatchesHotkey(hotkey, query, normQuery, compactQuery);
         }
 
         /// <summary>
@@ -380,19 +706,10 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static bool IsGeneralMatchQuery(ModGeneralEntry gen, string query)
         {
-            if (PinyinEngine.Matches(gen.DisplayName, query))
-            {
-                return true;
-            }
-            if (!string.IsNullOrEmpty(gen.SectionLabel) && PinyinEngine.Matches(gen.SectionLabel, query))
-            {
-                return true;
-            }
-            if (!string.IsNullOrEmpty(gen.Section) && PinyinEngine.Matches(gen.Section, query))
-            {
-                return true;
-            }
-            return false;
+            if (string.IsNullOrWhiteSpace(query)) return true;
+            string normQuery = PinyinEngine.ToSimplified(query.Trim()).ToLowerInvariant();
+            string compactQuery = StripSeparators(normQuery);
+            return MatchesGeneral(gen, normQuery, compactQuery);
         }
 
         /// <summary>
@@ -400,19 +717,18 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static bool IsVanillaItemMatchQuery(VanillaOptionItem item, string query)
         {
-            if (item.IsKeyBind && item.LinkedHotkey != null)
-            {
-                return IsHotkeyMatchQuery(item.LinkedHotkey, query) ||
-                       PinyinEngine.Matches(item.DisplayName, query);
-            }
-            return PinyinEngine.Matches(item.DisplayName, query);
+            if (string.IsNullOrWhiteSpace(query)) return true;
+            string normQuery = PinyinEngine.ToSimplified(query.Trim()).ToLowerInvariant();
+            string compactQuery = StripSeparators(normQuery);
+            return GetOrCreateVanillaItemIndex(item).Matches(item, query, normQuery, compactQuery);
         }
 
         private static bool IsModGroupNameMatch(ModOptionGroup group, string query, bool allowGroupName)
         {
-            return allowGroupName &&
-                (PinyinEngine.Matches(group.DisplayName, query) ||
-                 PinyinEngine.Matches(group.ModId, query));
+            if (!allowGroupName) return false;
+            string normQuery = PinyinEngine.ToSimplified(query.Trim()).ToLowerInvariant();
+            string compactQuery = StripSeparators(normQuery);
+            return GetOrCreateGroupIndex(group).Matches(normQuery, compactQuery);
         }
 
         private static void SetObjectActive(GameObject? obj, bool active)
@@ -504,240 +820,305 @@ namespace ProbablyUnifiedHotkeys
                    (modeAllowsGeneral && group.GeneralSettings.Count > 0);
         }
 
+        internal static bool IsApplyingSearchFilter { get; private set; }
+
+        private static string s_lastSearchQuery = string.Empty;
+        private static SearchScope s_lastSearchScope = (SearchScope)(-1);
+        private static NormalDisplayMode s_lastDisplayMode = (NormalDisplayMode)(-1);
+        private static readonly HashSet<object> s_lastMatchedCards = new HashSet<object>();
+
         /// <summary>
-        /// 全局执行搜索与模式过滤，联动更新各卡片与行显隐。
+        /// 全局执行搜索与模式过滤，联动更新各卡片与行显隐（零分配预索引 + 前缀收窄极速匹配）。
         /// </summary>
         internal static void ApplySearchFilter()
         {
-            string query = (UiSessionState.SearchQuery ?? string.Empty).Trim();
-            bool hasQuery = query.Length > 0;
-            bool hasDisplayFilter = UiSessionState.NormalDisplayMode != NormalDisplayMode.All;
-            GetActiveDisplayPermissions(
-                hasQuery,
-                out bool allowGroupName,
-                out bool allowHotkeys,
-                out bool allowGeneral,
-                out bool modeAllowsHotkeys,
-                out bool modeAllowsGeneral);
+            if (IsApplyingSearchFilter) return;
+            IsApplyingSearchFilter = true;
 
-            GameObject? firstMatchedHeader = null;
-            int visibleVanillaCount = 0;
-            int visibleModCount = 0;
-
-            UiLayoutAndFontHelper.WithSuspendedRootLayout(() =>
+            try
             {
-                using (ComboKeyStore.EnterBypass())
-                {
-                    // 1. 过滤原版官方设置区块（支持显示模式 + 四作用域搜索 + 繁简/拼音/按键名匹配）
-                    foreach (var card in UiSessionState.VanillaCards)
-                    {
-                        if (!hasQuery && !hasDisplayFilter)
-                        {
-                            foreach (var item in card.Entries)
-                            {
-                                foreach (var row in item.RowObjects) SetObjectActive(row, true);
-                            }
-                            SetObjectActive(card.HeaderRowObject, true);
-                            SetObjectActive(card.OuterSeparatorObject, true);
-                            bool savedExpanded = UiSessionState.VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : false;
-                            card.SetExpanded(savedExpanded);
-                            visibleVanillaCount++;
-                            continue;
-                        }
+                string query = (UiSessionState.SearchQuery ?? string.Empty).Trim();
+                bool hasQuery = query.Length > 0;
+                bool hasDisplayFilter = UiSessionState.NormalDisplayMode != NormalDisplayMode.All;
+                GetActiveDisplayPermissions(
+                    hasQuery,
+                    out bool allowGroupName,
+                    out bool allowHotkeys,
+                    out bool allowGeneral,
+                    out bool modeAllowsHotkeys,
+                    out bool modeAllowsGeneral);
 
-                        if (!hasQuery && hasDisplayFilter)
+                string normQuery = hasQuery ? PinyinEngine.ToSimplified(query).ToLowerInvariant() : string.Empty;
+                string compactQuery = hasQuery ? StripSeparators(normQuery) : string.Empty;
+
+                bool isNarrowing = hasQuery &&
+                    s_lastSearchQuery.Length > 0 &&
+                    query.Length > s_lastSearchQuery.Length &&
+                    query.StartsWith(s_lastSearchQuery, StringComparison.OrdinalIgnoreCase) &&
+                    s_lastSearchScope == UiSessionState.SearchScope &&
+                    s_lastDisplayMode == UiSessionState.NormalDisplayMode;
+
+                var nextMatchedCards = new HashSet<object>();
+                GameObject? firstMatchedHeader = null;
+                int visibleVanillaCount = 0;
+                int visibleModCount = 0;
+
+                UiLayoutAndFontHelper.WithSuspendedRootLayout(() =>
+                {
+                    using (ComboKeyStore.EnterBypass())
+                    {
+                        // 1. 过滤原版官方设置区块（支持显示模式 + 四作用域搜索 + 繁简/拼音/按键名匹配）
+                        for (int cIdx = 0; cIdx < UiSessionState.VanillaCards.Count; cIdx++)
                         {
-                            int visibleRows = 0;
-                            foreach (var item in card.Entries)
+                            var card = UiSessionState.VanillaCards[cIdx];
+
+                            if (!hasQuery && !hasDisplayFilter)
                             {
-                                bool showRow = item.IsKeyBind ? modeAllowsHotkeys : modeAllowsGeneral;
-                                foreach (var row in item.RowObjects) SetObjectActive(row, showRow);
-                                if (showRow) visibleRows++;
+                                for (int i = 0; i < card.Entries.Count; i++)
+                                {
+                                    var item = card.Entries[i];
+                                    for (int r = 0; r < item.RowObjects.Count; r++) SetObjectActive(item.RowObjects[r], true);
+                                }
+                                SetObjectActive(card.HeaderRowObject, true);
+                                SetObjectActive(card.OuterSeparatorObject, true);
+                                bool savedExpanded = UiSessionState.VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : false;
+                                card.SetExpanded(savedExpanded);
+                                visibleVanillaCount++;
+                                continue;
                             }
-                            if (visibleRows == 0)
+
+                            if (!hasQuery && hasDisplayFilter)
+                            {
+                                int visibleRows = 0;
+                                for (int i = 0; i < card.Entries.Count; i++)
+                                {
+                                    var item = card.Entries[i];
+                                    bool showRow = item.IsKeyBind ? modeAllowsHotkeys : modeAllowsGeneral;
+                                    for (int r = 0; r < item.RowObjects.Count; r++) SetObjectActive(item.RowObjects[r], showRow);
+                                    if (showRow) visibleRows++;
+                                }
+                                if (visibleRows == 0)
+                                {
+                                    SetCardHiddenForSearch(card);
+                                    continue;
+                                }
+                                SetObjectActive(card.HeaderRowObject, true);
+                                SetObjectActive(card.OuterSeparatorObject, true);
+                                bool savedExpanded = UiSessionState.VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : false;
+                                card.SetExpanded(savedExpanded);
+                                visibleVanillaCount++;
+                                continue;
+                            }
+
+                            // hasQuery == true: 前缀收窄优化（上轮就不匹配且作用域未变时，该卡片必不匹配，保持隐藏）
+                            if (isNarrowing && !s_lastMatchedCards.Contains(card))
+                            {
+                                continue;
+                            }
+
+                            bool sectionNameMatch = allowGroupName && IsVanillaSectionMatch(card, normQuery, compactQuery);
+
+                            bool anyItemMatch = false;
+                            for (int i = 0; i < card.Entries.Count; i++)
+                            {
+                                var item = card.Entries[i];
+                                bool modeAllowed = item.IsKeyBind ? modeAllowsHotkeys : modeAllowsGeneral;
+                                bool scopeAllowed = item.IsKeyBind ? allowHotkeys : allowGeneral;
+                                bool itemMatch = modeAllowed && (sectionNameMatch || (scopeAllowed && GetOrCreateVanillaItemIndex(item).Matches(item, query, normQuery, compactQuery)));
+                                for (int r = 0; r < item.RowObjects.Count; r++) SetObjectActive(item.RowObjects[r], itemMatch);
+                                if (itemMatch) anyItemMatch = true;
+                            }
+
+                            if (!anyItemMatch)
                             {
                                 SetCardHiddenForSearch(card);
                                 continue;
                             }
+
                             SetObjectActive(card.HeaderRowObject, true);
                             SetObjectActive(card.OuterSeparatorObject, true);
-                            bool savedExpanded = UiSessionState.VanillaExpandedStates.TryGetValue(card.SectionId, out bool saved) ? saved : false;
-                            card.SetExpanded(savedExpanded);
+                            ShowCardExpandedVisualOnly(card);
                             visibleVanillaCount++;
-                            continue;
-                        }
+                            nextMatchedCards.Add(card);
 
-                        bool sectionNameMatch = allowGroupName &&
-                            (PinyinEngine.Matches(card.DisplayName, query) ||
-                             PinyinEngine.Matches(card.SectionId, query));
-
-                        bool anyItemMatch = false;
-                        foreach (var item in card.Entries)
-                        {
-                            bool modeAllowed = item.IsKeyBind ? modeAllowsHotkeys : modeAllowsGeneral;
-                            bool scopeAllowed = item.IsKeyBind ? allowHotkeys : allowGeneral;
-                            bool itemMatch = modeAllowed && (sectionNameMatch || (scopeAllowed && IsVanillaItemMatchQuery(item, query)));
-                            foreach (var row in item.RowObjects) SetObjectActive(row, itemMatch);
-                            if (itemMatch) anyItemMatch = true;
-                        }
-
-                        if (!anyItemMatch)
-                        {
-                            SetCardHiddenForSearch(card);
-                            continue;
-                        }
-
-                        SetObjectActive(card.HeaderRowObject, true);
-                        SetObjectActive(card.OuterSeparatorObject, true);
-                        ShowCardExpandedVisualOnly(card);
-                        visibleVanillaCount++;
-
-                        if (firstMatchedHeader == null && card.HeaderRowObject != null)
-                        {
-                            firstMatchedHeader = card.HeaderRowObject;
-                        }
-                    }
-
-                    // 2. 过滤创意工坊模组设置卡片（挂起根布局下同步完成，绝不产生多帧依次展开过渡动画）
-                    foreach (var group in UiSessionState.ModGroups)
-                    {
-                        UiSessionState.TryGetCardParts(group, out var parts);
-
-                        if (!hasQuery && !hasDisplayFilter)
-                        {
-                            if (parts != null && parts.IsContentBuilt)
+                            if (firstMatchedHeader == null && card.HeaderRowObject != null)
                             {
-                                ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: true, allowGeneral: true, query: query);
+                                firstMatchedHeader = card.HeaderRowObject;
                             }
-
-                            if (parts != null)
-                            {
-                                SetObjectActive(parts.HeaderRowObject, true);
-                                SetObjectActive(parts.OuterSeparatorObject, true);
-                            }
-                            CollapsibleCardView.SetGroupExpanded(group, group.IsExpanded);
-                            visibleModCount++;
-                            continue;
                         }
 
-                        bool hasKindInMode = GroupHasVisibleItemsInCurrentMode(group, modeAllowsHotkeys, modeAllowsGeneral);
-                        if (!hasQuery && hasDisplayFilter)
+                        // 2. 过滤创意工坊模组设置卡片（挂起根布局下同步完成，绝不产生多帧依次展开过渡动画）
+                        for (int gIdx = 0; gIdx < UiSessionState.ModGroups.Count; gIdx++)
                         {
-                            if (!hasKindInMode)
+                            var group = UiSessionState.ModGroups[gIdx];
+                            UiSessionState.TryGetCardParts(group, out var parts);
+
+                            if (!hasQuery && !hasDisplayFilter)
                             {
-                                SetCardHiddenForSearch(group);
+                                if (parts != null && parts.IsContentBuilt)
+                                {
+                                    ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: true, allowGeneral: true, query: query, normQuery: normQuery, compactQuery: compactQuery);
+                                }
+
+                                if (parts != null)
+                                {
+                                    SetObjectActive(parts.HeaderRowObject, true);
+                                    SetObjectActive(parts.OuterSeparatorObject, true);
+                                }
+                                CollapsibleCardView.SetGroupExpanded(group, group.IsExpanded);
+                                visibleModCount++;
                                 continue;
                             }
-                            if (parts != null)
-                            {
-                                SetObjectActive(parts.HeaderRowObject, true);
-                                SetObjectActive(parts.OuterSeparatorObject, true);
-                            }
-                            if (parts != null && parts.IsContentBuilt)
-                            {
-                                ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: modeAllowsHotkeys, allowGeneral: modeAllowsGeneral, query: query);
-                            }
-                            CollapsibleCardView.SetGroupExpanded(group, group.IsExpanded);
-                            visibleModCount++;
-                            continue;
-                        }
 
-                        bool groupNameMatch = hasKindInMode && IsModGroupNameMatch(group, query, allowGroupName);
-                        bool anyHotkeyMatch = false;
-                        bool anyGeneralMatch = false;
-                        if (!groupNameMatch)
-                        {
-                            if (allowHotkeys)
+                            bool hasKindInMode = GroupHasVisibleItemsInCurrentMode(group, modeAllowsHotkeys, modeAllowsGeneral);
+                            if (!hasQuery && hasDisplayFilter)
                             {
-                                for (int i = 0; i < group.Hotkeys.Count; i++)
+                                if (!hasKindInMode)
                                 {
-                                    if (IsHotkeyMatchQuery(group.Hotkeys[i], query))
-                                    {
-                                        anyHotkeyMatch = true;
-                                        break;
-                                    }
+                                    SetCardHiddenForSearch(group);
+                                    continue;
                                 }
-                                if (!anyHotkeyMatch)
+                                if (parts != null)
                                 {
-                                    for (int i = 0; i < group.ReadOnlyProbedHotkeys.Count; i++)
+                                    SetObjectActive(parts.HeaderRowObject, true);
+                                    SetObjectActive(parts.OuterSeparatorObject, true);
+                                }
+                                if (parts != null && parts.IsContentBuilt)
+                                {
+                                    ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: modeAllowsHotkeys, allowGeneral: modeAllowsGeneral, query: query, normQuery: normQuery, compactQuery: compactQuery);
+                                }
+                                CollapsibleCardView.SetGroupExpanded(group, group.IsExpanded);
+                                visibleModCount++;
+                                continue;
+                            }
+
+                            // hasQuery == true: 前缀收窄优化（上轮就不匹配且作用域未变时，该模组卡片必不匹配，保持隐藏）
+                            if (isNarrowing && !s_lastMatchedCards.Contains(group))
+                            {
+                                continue;
+                            }
+
+                            bool groupNameMatch = hasKindInMode && allowGroupName && GetOrCreateGroupIndex(group).Matches(normQuery, compactQuery);
+                            bool anyHotkeyMatch = false;
+                            bool anyGeneralMatch = false;
+
+                            if (!groupNameMatch)
+                            {
+                                if (allowHotkeys)
+                                {
+                                    for (int i = 0; i < group.Hotkeys.Count; i++)
                                     {
-                                        if (IsHotkeyMatchQuery(group.ReadOnlyProbedHotkeys[i], query))
+                                        if (MatchesHotkey(group.Hotkeys[i], query, normQuery, compactQuery))
                                         {
                                             anyHotkeyMatch = true;
                                             break;
                                         }
                                     }
-                                }
-                            }
-                            if (allowGeneral)
-                            {
-                                for (int i = 0; i < group.GeneralSettings.Count; i++)
-                                {
-                                    if (IsGeneralMatchQuery(group.GeneralSettings[i], query))
+                                    if (!anyHotkeyMatch)
                                     {
-                                        anyGeneralMatch = true;
-                                        break;
+                                        for (int i = 0; i < group.ReadOnlyProbedHotkeys.Count; i++)
+                                        {
+                                            if (MatchesHotkey(group.ReadOnlyProbedHotkeys[i], query, normQuery, compactQuery))
+                                            {
+                                                anyHotkeyMatch = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (allowGeneral)
+                                {
+                                    for (int i = 0; i < group.GeneralSettings.Count; i++)
+                                    {
+                                        if (MatchesGeneral(group.GeneralSettings[i], normQuery, compactQuery))
+                                        {
+                                            anyGeneralMatch = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        bool anyProfileMatch = string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
-                            (allowGeneral || allowHotkeys) &&
-                            ProfilePresetCardView.IsProfileSectionMatchQuery(query);
 
-                        if (!groupNameMatch && !anyHotkeyMatch && !anyGeneralMatch && !anyProfileMatch)
-                        {
-                            SetCardHiddenForSearch(group);
-                            continue;
-                        }
+                            bool anyProfileMatch = string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
+                                (allowGeneral || allowHotkeys) &&
+                                ProfilePresetCardView.IsProfileSectionMatchQuery(query);
 
-                        visibleModCount++;
-                        if (parts != null)
-                        {
-                            SetObjectActive(parts.HeaderRowObject, true);
-                            SetObjectActive(parts.OuterSeparatorObject, true);
-                            if (firstMatchedHeader == null && parts.HeaderRowObject != null)
+                            if (!groupNameMatch && !anyHotkeyMatch && !anyGeneralMatch && !anyProfileMatch)
                             {
-                                firstMatchedHeader = parts.HeaderRowObject;
+                                SetCardHiddenForSearch(group);
+                                continue;
                             }
 
-                            if (!parts.IsContentBuilt)
+                            visibleModCount++;
+                            nextMatchedCards.Add(group);
+
+                            if (parts != null)
                             {
-                                CollapsibleCardView.EnsureGroupContentBuilt(group);
+                                SetObjectActive(parts.HeaderRowObject, true);
+                                SetObjectActive(parts.OuterSeparatorObject, true);
+                                if (firstMatchedHeader == null && parts.HeaderRowObject != null)
+                                {
+                                    firstMatchedHeader = parts.HeaderRowObject;
+                                }
+
+                                if (!parts.IsContentBuilt)
+                                {
+                                    CollapsibleCardView.EnsureGroupContentBuilt(group);
+                                }
                             }
+                            ApplyMatchedModGroupRows(group, groupNameMatch, allowHotkeys, allowGeneral, query, normQuery, compactQuery);
                         }
-                        ApplyMatchedModGroupRows(group, groupNameMatch, allowHotkeys, allowGeneral, query);
                     }
-                }
 
-                // 3. 联动显隐区域标题栏与空结果提示
-                bool showVanillaBanner = (!hasQuery && !hasDisplayFilter) ? UiSessionState.VanillaCards.Count > 0 : visibleVanillaCount > 0;
-                bool showModBanner = (!hasQuery && !hasDisplayFilter) ? UiSessionState.ModGroups.Count > 0 : visibleModCount > 0;
-                SetObjectActive(UiSessionState.VanillaHeaderRow, showVanillaBanner);
-                SetObjectActive(UiSessionState.VanillaHeaderSep, showVanillaBanner);
-                SetObjectActive(UiSessionState.ModHeaderSpace, showVanillaBanner && showModBanner);
-                SetObjectActive(UiSessionState.ModHeaderSep, showModBanner);
-                SetObjectActive(UiSessionState.ModHeaderRow, showModBanner);
-                SetObjectActive(UiSessionState.ModHeaderBottomSep, showModBanner);
-                SetObjectActive(UiSessionState.EmptySearchLabelRow, (hasQuery || hasDisplayFilter) && visibleVanillaCount == 0 && visibleModCount == 0);
+                    // 3. 联动显隐区域标题栏与空结果提示
+                    bool showVanillaBanner = (!hasQuery && !hasDisplayFilter) ? UiSessionState.VanillaCards.Count > 0 : visibleVanillaCount > 0;
+                    bool showModBanner = (!hasQuery && !hasDisplayFilter) ? UiSessionState.ModGroups.Count > 0 : visibleModCount > 0;
+                    SetObjectActive(UiSessionState.VanillaHeaderRow, showVanillaBanner);
+                    SetObjectActive(UiSessionState.VanillaHeaderSep, showVanillaBanner);
+                    SetObjectActive(UiSessionState.ModHeaderSpace, showVanillaBanner && showModBanner);
+                    SetObjectActive(UiSessionState.ModHeaderSep, showModBanner);
+                    SetObjectActive(UiSessionState.ModHeaderRow, showModBanner);
+                    SetObjectActive(UiSessionState.ModHeaderBottomSep, showModBanner);
+                    SetObjectActive(UiSessionState.EmptySearchLabelRow, (hasQuery || hasDisplayFilter) && visibleVanillaCount == 0 && visibleModCount == 0);
 
-                if (!hasQuery)
+                    if (!hasQuery)
+                    {
+                        RefreshExpandAllButtonState();
+                    }
+                });
+
+                if (hasQuery)
                 {
-                    RefreshExpandAllButtonState();
+                    s_lastMatchedCards.Clear();
+                    s_lastMatchedCards.UnionWith(nextMatchedCards);
+                    s_lastSearchQuery = query;
+                    s_lastSearchScope = UiSessionState.SearchScope;
+                    s_lastDisplayMode = UiSessionState.NormalDisplayMode;
                 }
-            });
+                else
+                {
+                    s_lastMatchedCards.Clear();
+                    s_lastSearchQuery = string.Empty;
+                    s_lastSearchScope = UiSessionState.SearchScope;
+                    s_lastDisplayMode = UiSessionState.NormalDisplayMode;
+                }
 
-            if (hasQuery && firstMatchedHeader != null)
-            {
-                UiSessionState.WasSearchNonEmpty = true;
-                UiLayoutAndFontHelper.ScrollToTargetImmediate(firstMatchedHeader);
-                UiLayoutAndFontHelper.ClearPendingScroll();
+                if (hasQuery && firstMatchedHeader != null)
+                {
+                    UiSessionState.WasSearchNonEmpty = true;
+                    UiLayoutAndFontHelper.ScrollToTargetImmediate(firstMatchedHeader);
+                    UiLayoutAndFontHelper.ClearPendingScroll();
+                }
+                else if (!hasQuery && UiSessionState.WasSearchNonEmpty)
+                {
+                    UiSessionState.WasSearchNonEmpty = false;
+                    UiLayoutAndFontHelper.ClearPendingScroll();
+                    UiLayoutAndFontHelper.ResetScrollToTop();
+                }
             }
-            else if (!hasQuery && UiSessionState.WasSearchNonEmpty)
+            finally
             {
-                UiSessionState.WasSearchNonEmpty = false;
-                UiLayoutAndFontHelper.ClearPendingScroll();
-                UiLayoutAndFontHelper.ResetScrollToTop();
+                IsApplyingSearchFilter = false;
             }
         }
 
@@ -752,24 +1133,46 @@ namespace ProbablyUnifiedHotkeys
                 out bool allowGeneral,
                 out bool modeAllowsHotkeys,
                 out bool modeAllowsGeneral);
-            bool groupNameMatch = !hasQuery || (GroupHasVisibleItemsInCurrentMode(group, modeAllowsHotkeys, modeAllowsGeneral) && IsModGroupNameMatch(group, query, allowGroupName));
-            ApplyGroupRowVisibility(group, hasQuery, groupNameMatch, allowHotkeys, allowGeneral, query);
+
+            string normQuery = hasQuery ? PinyinEngine.ToSimplified(query).ToLowerInvariant() : string.Empty;
+            string compactQuery = hasQuery ? StripSeparators(normQuery) : string.Empty;
+
+            bool groupNameMatch = !hasQuery || (GroupHasVisibleItemsInCurrentMode(group, modeAllowsHotkeys, modeAllowsGeneral) && allowGroupName && GetOrCreateGroupIndex(group).Matches(normQuery, compactQuery));
+            ApplyGroupRowVisibility(group, hasQuery, groupNameMatch, allowHotkeys, allowGeneral, query, normQuery, compactQuery);
         }
 
-        private static void ApplyMatchedModGroupRows(ModOptionGroup group, bool groupNameMatch, bool allowHotkeys, bool allowGeneral, string query)
+        private static void ApplyMatchedModGroupRows(
+            ModOptionGroup group,
+            bool groupNameMatch,
+            bool allowHotkeys,
+            bool allowGeneral,
+            string query,
+            string normQuery,
+            string compactQuery)
         {
-            ApplyGroupRowVisibility(group, hasQuery: true, groupNameMatch, allowHotkeys, allowGeneral, query);
+            ApplyGroupRowVisibility(group, hasQuery: true, groupNameMatch, allowHotkeys, allowGeneral, query, normQuery, compactQuery);
             ShowCardExpandedVisualOnly(group);
         }
 
-        internal static void ApplyGroupRowVisibility(ModOptionGroup group, bool hasQuery, bool groupNameMatch, bool allowHotkeys, bool allowGeneral, string? query = null)
+        internal static void ApplyGroupRowVisibility(
+            ModOptionGroup group,
+            bool hasQuery,
+            bool groupNameMatch,
+            bool allowHotkeys,
+            bool allowGeneral,
+            string? query = null,
+            string? normQuery = null,
+            string? compactQuery = null)
         {
             string actualQuery = query ?? (UiSessionState.SearchQuery ?? string.Empty).Trim();
+            string nq = normQuery ?? (hasQuery ? PinyinEngine.ToSimplified(actualQuery).ToLowerInvariant() : string.Empty);
+            string cq = compactQuery ?? (hasQuery ? StripSeparators(nq) : string.Empty);
+
             int visibleHotkeys = 0;
             for (int i = 0; i < group.Hotkeys.Count; i++)
             {
                 var hotkey = group.Hotkeys[i];
-                bool match = allowHotkeys && (!hasQuery || groupNameMatch || IsHotkeyMatchQuery(hotkey, actualQuery));
+                bool match = allowHotkeys && (!hasQuery || groupNameMatch || MatchesHotkey(hotkey, actualQuery, nq, cq));
                 if (UiSessionState.TryGetHotkeyUi(hotkey, out var hkUi))
                 {
                     SetObjectActive(hkUi.RowObject, match);
@@ -781,7 +1184,7 @@ namespace ProbablyUnifiedHotkeys
             for (int i = 0; i < group.GeneralSettings.Count; i++)
             {
                 var gen = group.GeneralSettings[i];
-                bool match = allowGeneral && (!hasQuery || groupNameMatch || IsGeneralMatchQuery(gen, actualQuery));
+                bool match = allowGeneral && (!hasQuery || groupNameMatch || MatchesGeneral(gen, nq, cq));
                 if (UiSessionState.TryGetGeneralUi(gen, out var genUi))
                 {
                     SetObjectActive(genUi.RowObject, match);
@@ -793,7 +1196,7 @@ namespace ProbablyUnifiedHotkeys
             for (int i = 0; i < group.ReadOnlyProbedHotkeys.Count; i++)
             {
                 var probed = group.ReadOnlyProbedHotkeys[i];
-                bool match = allowHotkeys && (!hasQuery || groupNameMatch || IsHotkeyMatchQuery(probed, actualQuery));
+                bool match = allowHotkeys && (!hasQuery || groupNameMatch || MatchesHotkey(probed, actualQuery, nq, cq));
                 if (UiSessionState.TryGetHotkeyUi(probed, out var probedUi))
                 {
                     SetObjectActive(probedUi.RowObject, match);
@@ -838,11 +1241,6 @@ namespace ProbablyUnifiedHotkeys
 
         private static bool AllVisibleCardsExpanded()
         {
-            if (s_progressiveExpandQueue.Count > 0)
-            {
-                return true;
-            }
-
             bool hasQuery = !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery);
             bool isFiltered = hasQuery || UiSessionState.NormalDisplayMode != NormalDisplayMode.All;
             int counted = 0;
@@ -885,7 +1283,7 @@ namespace ProbablyUnifiedHotkeys
         }
 
         /// <summary>
-        /// 切换全部展开 / 全部收起（视口优先瞬开 + 屏外分帧渐进展开，彻底根治 40+ 模组卡顿）。
+        /// 切换全部展开 / 全部收起（脱机批量极速切换法，彻底消除分帧与滚动条跳动，实现单帧无动画瞬开/瞬收）。
         /// </summary>
         internal static void ToggleExpandAll()
         {
@@ -929,90 +1327,110 @@ namespace ProbablyUnifiedHotkeys
             }
 
             UiSessionState.AllExpanded = !UiSessionState.AllExpanded;
-            UiLayoutAndFontHelper.SetButtonTextFast(UiSessionState.ExpandToggleBtn, UiSessionState.AllExpanded ? I18n.Get("全部收起", "Collapse All") : I18n.Get("全部展开", "Expand All"));
+            bool targetExpanded = UiSessionState.AllExpanded;
+            UiLayoutAndFontHelper.SetButtonTextFast(UiSessionState.ExpandToggleBtn, targetExpanded ? I18n.Get("全部收起", "Collapse All") : I18n.Get("全部展开", "Expand All"));
 
             bool isFiltered = !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery) || UiSessionState.NormalDisplayMode != NormalDisplayMode.All;
 
-            // 1. 全部收起：脱机极速折叠（< 3ms 瞬间完成）
-            if (!UiSessionState.AllExpanded)
+            // 脱机批量切换法（Offline Batch Switch）：
+            // 1. 先将外层根容器 NormalContentRoot 临时设为 false（整棵子树瞬间脱离 Canvas 激活层级，消除全部子对象 SetActive 触发的 Canvas 注册与脏标记！）
+            GameObject? rootToDeactivate = UiSessionState.NormalContentRoot ?? UiSessionState.ModCardsContainer;
+            bool rootWasActive = rootToDeactivate != null && rootToDeactivate.activeSelf;
+            if (rootWasActive)
             {
-                ClearProgressiveExpandQueue();
-
-                foreach (var c in UiSessionState.VanillaCards)
-                {
-                    if (isFiltered && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
-                    c.SetExpanded(false);
-                    UiSessionState.VanillaExpandedStates[c.SectionId] = false;
-                }
-
-                bool containerWasActive = UiSessionState.ModCardsContainer != null && UiSessionState.ModCardsContainer.activeSelf;
-                if (containerWasActive)
-                {
-                    UiSessionState.ModCardsContainer!.SetActive(false);
-                }
-                foreach (var g in UiSessionState.ModGroups)
-                {
-                    if (isFiltered && UiSessionState.TryGetCardParts(g, out var parts) && (parts.HeaderRowObject == null || !parts.HeaderRowObject.activeSelf))
-                    {
-                        continue;
-                    }
-                    CollapsibleCardView.SetGroupExpanded(g, false);
-                }
-                if (containerWasActive)
-                {
-                    UiSessionState.ModCardsContainer!.SetActive(true);
-                }
-
-                if (UiSessionState.ScrollRect != null && UiSessionState.ScrollRect.content != null)
-                {
-                    LayoutRebuilder.ForceRebuildLayoutImmediate(UiSessionState.ScrollRect.content);
-                }
-                return;
+                rootToDeactivate!.SetActive(false);
             }
 
-            // 2. 全部展开：视口优先瞬开 + 屏外分帧渐进展开（Viewport-First Progressive Expand）
-            ClearProgressiveExpandQueue();
-
-            UiLayoutAndFontHelper.WithSuspendedRootLayout(() =>
+            try
             {
                 using (ComboKeyStore.EnterBypass())
                 {
-                    // 原版 5 张卡同步秒开
-                    foreach (var c in UiSessionState.VanillaCards)
+                    // 2. 在脱机状态下批量处理原版卡片
+                    for (int i = 0; i < UiSessionState.VanillaCards.Count; i++)
                     {
+                        var c = UiSessionState.VanillaCards[i];
                         if (isFiltered && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
-                        c.SetExpanded(true);
-                        UiSessionState.VanillaExpandedStates[c.SectionId] = true;
-                        UiLayoutAndFontHelper.SyncCompactActionButton(c.ResetButtonElement);
+
+                        c.IsExpanded = targetExpanded;
+                        UiSessionState.VanillaExpandedStates[c.SectionId] = targetExpanded;
+                        if (c.ContentContainerObject != null && c.ContentContainerObject.activeSelf != targetExpanded)
+                        {
+                            c.ContentContainerObject.SetActive(targetExpanded);
+                        }
+                        if (c.FoldArrowElement != null)
+                        {
+                            c.FoldArrowElement.SetText(targetExpanded ? "▼" : "▶");
+                        }
+                        if (c.ResetButtonElement != null)
+                        {
+                            bool showReset = targetExpanded && c.ResetToDefaultsAction != null;
+                            if (c.ResetButtonElement.root != null && c.ResetButtonElement.root.activeSelf != showReset)
+                            {
+                                c.ResetButtonElement.SetVisible(showReset);
+                            }
+                        }
                     }
 
-                    // 视口前 4 张可见模组卡首帧同步瞬开（肉眼所见 < 8ms 展开到位）
-                    int immediateModCount = 0;
+                    // 3. 在脱机状态下，若为展开，先一次性建齐任何未建卡片（此时子树脱机，零 Canvas 注册开销！）
+                    if (targetExpanded)
+                    {
+                        for (int i = 0; i < UiSessionState.ModGroups.Count; i++)
+                        {
+                            var g = UiSessionState.ModGroups[i];
+                            if (isFiltered && UiSessionState.TryGetCardParts(g, out var parts) && (parts.HeaderRowObject == null || !parts.HeaderRowObject.activeSelf))
+                            {
+                                continue;
+                            }
+                            CollapsibleCardView.EnsureGroupContentBuilt(g);
+                        }
+                    }
+
+                    // 4. 在脱机状态下批量切换所有模组卡片的折叠状态、箭头文本与重置按钮
                     for (int i = 0; i < UiSessionState.ModGroups.Count; i++)
                     {
                         var g = UiSessionState.ModGroups[i];
-                        if (UiSessionState.TryGetCardParts(g, out var parts))
+                        if (isFiltered && UiSessionState.TryGetCardParts(g, out var parts) && (parts.HeaderRowObject == null || !parts.HeaderRowObject.activeSelf))
                         {
-                            if (isFiltered && (parts.HeaderRowObject == null || !parts.HeaderRowObject.activeSelf)) continue;
+                            continue;
                         }
 
-                        if (immediateModCount < 4)
+                        g.IsExpanded = targetExpanded;
+                        if (UiSessionState.TryGetCardParts(g, out var p))
                         {
-                            CollapsibleCardView.SetGroupExpanded(g, true);
-                            if (UiSessionState.TryGetCardParts(g, out var p))
+                            if (p.ContentContainerObject != null && p.ContentContainerObject.activeSelf != targetExpanded)
                             {
-                                UiLayoutAndFontHelper.SyncCompactActionButton(p.ResetButtonElement);
+                                p.ContentContainerObject.SetActive(targetExpanded);
                             }
-                            immediateModCount++;
-                        }
-                        else
-                        {
-                            // 屏外卡片排入分帧渐进队列，TickCapture 每帧按 <= 4ms 预算平滑展开，不阻塞主线程
-                            s_progressiveExpandQueue.Add(g);
+                            if (p.FoldArrowElement != null)
+                            {
+                                p.FoldArrowElement.SetText(targetExpanded ? "▼" : "▶");
+                            }
+                            if (p.ResetButtonElement != null)
+                            {
+                                bool showReset = targetExpanded && g.ResetToDefaultsAction != null;
+                                if (p.ResetButtonElement.root != null && p.ResetButtonElement.root.activeSelf != showReset)
+                                {
+                                    p.ResetButtonElement.SetVisible(showReset);
+                                }
+                            }
                         }
                     }
                 }
-            });
+            }
+            finally
+            {
+                // 5. 单次恢复外层根容器激活态
+                if (rootWasActive && rootToDeactivate != null)
+                {
+                    rootToDeactivate.SetActive(true);
+                }
+            }
+
+            // 6. 仅对 ScrollRect.content 触发 1 次单帧集中排布计算，右侧滑块一步到位，绝无多帧跳动或渐变动画！
+            if (UiSessionState.ScrollRect != null && UiSessionState.ScrollRect.content != null)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(UiSessionState.ScrollRect.content);
+            }
         }
     }
 }

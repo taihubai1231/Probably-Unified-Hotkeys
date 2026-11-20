@@ -376,6 +376,11 @@ namespace ProbablyUnifiedHotkeys
                 entry.HasPendingChange = (newKey != currentKey || entry.PendingModifiers != savedMods);
             }
 
+            if (entry.HasPendingChange)
+            {
+                UiSessionState.HasUserInteractedInSession = true;
+            }
+
             // 若捕获的是原版官方按键，立即同步主键到原版挂起字典
             if (entry.ModId == "vanilla" && UiSessionState.CurrentManager != null && !string.IsNullOrEmpty(entry.RawOptionId))
             {

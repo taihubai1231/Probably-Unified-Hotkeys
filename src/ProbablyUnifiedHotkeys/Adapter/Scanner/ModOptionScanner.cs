@@ -522,6 +522,7 @@ namespace ProbablyUnifiedHotkeys
                         hk.HasPendingChange = false;
                         hk.PendingModifiers = hk.ResetTargetModifiers;
                         hk.PendingKey = hk.ResetTargetKey;
+                        ComboKeyStore.SetExplicitlyUnbound(hk.Id, hk.ResetTargetKey == KeyCode.None);
                         if (hk.SetCombo != null)
                         {
                             hk.SetCombo(hk.ResetTargetModifiers, hk.ResetTargetKey);
@@ -1264,6 +1265,22 @@ namespace ProbablyUnifiedHotkeys
                         var rawGetKey = entry.getKey ?? (() => KeyCode.None);
                         var rawSetKey = entry.setKey;
 
+                        string bindingId = rawOptId.StartsWith("key_", StringComparison.OrdinalIgnoreCase) ? rawOptId.Substring(4) : rawOptId;
+                        KeyCode defKey = KeyCode.None;
+                        try
+                        {
+                            if (KeyBindHelper.Find(bindingId) != null)
+                            {
+                                defKey = KeyBindHelper.GetDefault(bindingId);
+                            }
+                        }
+                        catch { }
+
+                        KeyCode currentRawKey = rawGetKey();
+                        KeyModifierMask currentSavedMods = (currentRawKey == KeyCode.None)
+                            ? KeyModifierMask.None
+                            : ComboKeyStore.GetSavedModifiers(canonicalHkId, currentRawKey);
+
                         list.Add(new ModHotkeyEntry
                         {
                             Id = canonicalHkId,
@@ -1272,6 +1289,11 @@ namespace ProbablyUnifiedHotkeys
                             ModDisplayName = BilingualText.Get("原版官方", "Vanilla"),
                             DisplayName = label,
                             Tooltip = tooltip,
+                            DefaultKey = defKey != KeyCode.None ? defKey : currentRawKey,
+                            DefaultModifiers = KeyModifierMask.None,
+                            HasExplicitDefault = defKey != KeyCode.None,
+                            SnapshotKey = currentRawKey,
+                            SnapshotModifiers = currentSavedMods,
                             GetKey = () =>
                             {
                                 if (ComboKeyStore.IsExplicitlyUnbound(canonicalHkId) || ComboKeyStore.IsExplicitlyUnbound(rawOptId))
@@ -1690,7 +1712,7 @@ namespace ProbablyUnifiedHotkeys
                 HasExplicitDefault = entry.BoxedDefault != null,
                 GetKey = () =>
                 {
-                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId) || ComboKeyStore.IsExplicitlyUnbound(entry.Key))
+                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId))
                     {
                         return KeyCode.None;
                     }
@@ -1703,12 +1725,10 @@ namespace ProbablyUnifiedHotkeys
                         if (newKey == KeyCode.None)
                         {
                             ComboKeyStore.SetExplicitlyUnbound(canonicalId, true);
-                            ComboKeyStore.SetExplicitlyUnbound(entry.Key, true);
                         }
                         else
                         {
                             ComboKeyStore.SetExplicitlyUnbound(canonicalId, false);
-                            ComboKeyStore.SetExplicitlyUnbound(entry.Key, false);
                         }
 
                         if (entry.ValueType == typeof(KeyCode))
@@ -1735,7 +1755,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 hk.GetExternalModifiers = () =>
                 {
-                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId) || ComboKeyStore.IsExplicitlyUnbound(entry.Key))
+                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId))
                     {
                         return KeyModifierMask.None;
                     }
@@ -1748,12 +1768,10 @@ namespace ProbablyUnifiedHotkeys
                         if (newKey == KeyCode.None)
                         {
                             ComboKeyStore.SetExplicitlyUnbound(canonicalId, true);
-                            ComboKeyStore.SetExplicitlyUnbound(entry.Key, true);
                         }
                         else
                         {
                             ComboKeyStore.SetExplicitlyUnbound(canonicalId, false);
-                            ComboKeyStore.SetExplicitlyUnbound(entry.Key, false);
                         }
                         SetEntryBoxed(entry, FormatComboString(newMods, newKey));
                     }

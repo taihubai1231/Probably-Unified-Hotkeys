@@ -16,6 +16,8 @@ namespace ProbablyUnifiedHotkeys
         bool IsCapturingModHotkey { get; }
         bool IsSuppressingEscapeAfterCapture { get; }
         bool IsExplicitWindowClosing { get; }
+        bool IsSearchInputFocused { get; }
+        void ReleaseSearchInputFocus();
         bool IsInEnhancedRefreshRules { get; set; }
         CustomUIWindow? CurrentWindow { get; }
         CustomUIWindow? UnsavedConfirmWindow { get; }

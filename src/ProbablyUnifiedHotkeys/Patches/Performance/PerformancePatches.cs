@@ -349,14 +349,17 @@ namespace ProbablyUnifiedHotkeys
         {
             if (manager == null) return;
             CustomUIWindow? handle = GetHandle(manager);
-            if (handle == null) return;
+            if (handle == null || !handle.IsAlive) return;
 
             CustomUIElement? activate = handle.Get("activate");
-            CustomUIElement? options = handle.Get("options") ?? handle.Get("settings");
+            CustomUIElement? options = handle.Get("settings") ?? handle.Get("options");
             CustomUIElement? steam = handle.Get("workshop_page");
+            CustomUIElement? review = handle.Get("review");
 
+            // 1. 锁定按钮自身控件尺寸（preferredHeight 42px、Square 图标 42x42px、flexibleHeight = 0f），杜绝自身被拉伸
             if (activate?.Rect != null)
             {
+                activate.Rect.sizeDelta = new Vector2(activate.Rect.sizeDelta.x, 42f);
                 LayoutElement le = activate.Rect.GetComponent<LayoutElement>() ?? activate.Rect.gameObject.AddComponent<LayoutElement>();
                 le.minHeight = 42f;
                 le.preferredHeight = 42f;
@@ -364,6 +367,7 @@ namespace ProbablyUnifiedHotkeys
             }
             if (options?.Rect != null)
             {
+                options.Rect.sizeDelta = new Vector2(42f, 42f);
                 LayoutElement le = options.Rect.GetComponent<LayoutElement>() ?? options.Rect.gameObject.AddComponent<LayoutElement>();
                 le.minWidth = 42f;
                 le.preferredWidth = 42f;
@@ -374,6 +378,7 @@ namespace ProbablyUnifiedHotkeys
             }
             if (steam?.Rect != null)
             {
+                steam.Rect.sizeDelta = new Vector2(42f, 42f);
                 LayoutElement le = steam.Rect.GetComponent<LayoutElement>() ?? steam.Rect.gameObject.AddComponent<LayoutElement>();
                 le.minWidth = 42f;
                 le.preferredWidth = 42f;
@@ -381,6 +386,64 @@ namespace ProbablyUnifiedHotkeys
                 le.preferredHeight = 42f;
                 le.flexibleWidth = 0f;
                 le.flexibleHeight = 0f;
+            }
+            if (review?.Rect != null)
+            {
+                review.Rect.sizeDelta = new Vector2(review.Rect.sizeDelta.x, 42f);
+                LayoutElement le = review.Rect.GetComponent<LayoutElement>() ?? review.Rect.gameObject.AddComponent<LayoutElement>();
+                le.minHeight = 42f;
+                le.preferredHeight = 42f;
+                le.flexibleHeight = 0f;
+            }
+
+            // 2. 锁定承载三颗按钮的父 Row 容器及其 HorizontalLayoutGroup，杜绝父容器将缺失封面释放出的垂直高度分摊给按钮
+            RectTransform? rowRt = (activate?.Rect?.parent ?? options?.Rect?.parent ?? steam?.Rect?.parent) as RectTransform;
+            if (rowRt != null)
+            {
+                HorizontalLayoutGroup? hlg = rowRt.GetComponent<HorizontalLayoutGroup>();
+                if (hlg != null)
+                {
+                    hlg.childControlHeight = false;
+                    hlg.childForceExpandHeight = false;
+                    hlg.childAlignment = TextAnchor.MiddleLeft;
+                }
+
+                Transform? metaColTf = rowRt.childCount > 0 ? rowRt.GetChild(0) : null;
+                float metaHeight = 0f;
+                if (metaColTf is RectTransform metaRt)
+                {
+                    ContentSizeFitter csf = metaRt.GetComponent<ContentSizeFitter>() ?? metaRt.gameObject.AddComponent<ContentSizeFitter>();
+                    csf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+                    metaHeight = LayoutUtility.GetPreferredHeight(metaRt);
+                }
+
+                float targetRowHeight = Mathf.Max(42f, metaHeight);
+
+                LayoutElement rowLe = rowRt.GetComponent<LayoutElement>() ?? rowRt.gameObject.AddComponent<LayoutElement>();
+                rowLe.minHeight = 42f;
+                rowLe.preferredHeight = targetRowHeight;
+                rowLe.flexibleHeight = 0f;
+
+                rowRt.sizeDelta = new Vector2(rowRt.sizeDelta.x, targetRowHeight);
+                LayoutRebuilder.MarkLayoutForRebuild(rowRt);
+
+                if (rowRt.parent is RectTransform detailColRt)
+                {
+                    LayoutRebuilder.MarkLayoutForRebuild(detailColRt);
+                }
+            }
+
+            // 3. 锁定下方描述滚动区 ScrollRect 的 flexibleHeight = 1f，让其完整吸收隐藏封面释放出来的 345px 空间
+            CustomUIElement? desc = handle.Get("detail_description");
+            if (desc?.Rect != null)
+            {
+                ScrollRect? scrollRect = desc.Rect.GetComponentInParent<ScrollRect>();
+                if (scrollRect != null)
+                {
+                    LayoutElement scrollLe = scrollRect.GetComponent<LayoutElement>() ?? scrollRect.gameObject.AddComponent<LayoutElement>();
+                    scrollLe.flexibleHeight = 1f;
+                    scrollLe.flexibleWidth = 1f;
+                }
             }
         }
 
@@ -1189,6 +1252,23 @@ namespace ProbablyUnifiedHotkeys
                 ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
             }
 
+            // 本模组专属去封面优化（老板诉求 #3）：隐藏封面预览面板 preview_panel，玩家无需滚动即可直接清晰通读顶部文字介绍
+            if (mod?.Manifest != null && string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))
+            {
+                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
+                CustomUIElement? previewPanel = handle?.Get("preview_panel");
+                if (previewPanel != null)
+                {
+                    previewPanel.SetVisible(false);
+                    if (previewPanel.Rect?.parent is RectTransform parentRt)
+                    {
+                        LayoutRebuilder.MarkLayoutForRebuild(parentRt);
+                    }
+                }
+                ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
+                return false; // 跳过原版 ApplyPreview，保持 preview_panel 隐藏且按钮零变形
+            }
+
             return true;
         }
 
@@ -1212,8 +1292,23 @@ namespace ProbablyUnifiedHotkeys
 
         public static void Postfix(ModUIManager __instance, LoadedMod? mod)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            if (!ModFeatureConfig.EnablePerformancePatches && (mod?.Manifest == null || !string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))) return;
             ModUIManagerPerfHelper.RecordEmptyShowMod(__instance, mod);
+
+            if (mod?.Manifest != null && string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))
+            {
+                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
+                CustomUIElement? previewPanel = handle?.Get("preview_panel");
+                if (previewPanel != null && previewPanel.Rect != null && previewPanel.Rect.gameObject.activeSelf)
+                {
+                    previewPanel.SetVisible(false);
+                    if (previewPanel.Rect.parent is RectTransform parentRt)
+                    {
+                        LayoutRebuilder.MarkLayoutForRebuild(parentRt);
+                    }
+                }
+            }
+
             ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
         }
     }

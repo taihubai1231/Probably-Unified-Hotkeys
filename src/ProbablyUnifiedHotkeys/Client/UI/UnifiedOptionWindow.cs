@@ -61,6 +61,16 @@ namespace ProbablyUnifiedHotkeys
         public bool IsCapturingModHotkey => UiSessionState.IsCapturingModHotkey;
         public bool IsSuppressingEscapeAfterCapture => UiSessionState.IsSuppressingEscapeAfterCapture;
         public bool IsExplicitWindowClosing => UiSessionState.IsExplicitWindowClosing;
+        public bool IsSearchInputFocused => UiSessionState.SearchInputField != null && UiSessionState.SearchInputField.isFocused;
+
+        public void ReleaseSearchInputFocus()
+        {
+            if (UiSessionState.SearchInputField != null && UiSessionState.SearchInputField.isFocused)
+            {
+                UiSessionState.SearchInputField.DeactivateInputField();
+                UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
+            }
+        }
 
         public bool IsInEnhancedRefreshRules
         {
@@ -120,17 +130,17 @@ namespace ProbablyUnifiedHotkeys
             UiSessionState.SetKeyBindStatusDelegate?.Invoke(manager, string.Empty);
 
             // 2. 加载全量模组配置并分析按键冲突
-            UiSessionState.ModGroups = ModCatalogCache.GetOrScanGroups(out var scannedHotkeys, out UiSessionState.ScanReport);
-            UiSessionState.AllHotkeys = scannedHotkeys;
-            foreach (var hk in UiSessionState.AllHotkeys)
-            {
-                if (hk.ModId == "vanilla" && !string.IsNullOrEmpty(hk.RawOptionId))
-                {
-                    UiSessionState.VanillaHotkeyByRawId[hk.RawOptionId] = hk;
-                }
-            }
             using (ComboKeyStore.EnterBypass())
             {
+                UiSessionState.ModGroups = ModCatalogCache.GetOrScanGroups(out var scannedHotkeys, out UiSessionState.ScanReport);
+                UiSessionState.AllHotkeys = scannedHotkeys;
+                foreach (var hk in UiSessionState.AllHotkeys)
+                {
+                    if (hk.ModId == "vanilla" && !string.IsNullOrEmpty(hk.RawOptionId))
+                    {
+                        UiSessionState.VanillaHotkeyByRawId[hk.RawOptionId] = hk;
+                    }
+                }
                 UiSessionState.Conflicts = ConflictDetector.Analyze(UiSessionState.AllHotkeys);
             }
 
@@ -359,33 +369,63 @@ namespace ProbablyUnifiedHotkeys
             foreach (var hk in UiSessionState.AllHotkeys)
             {
                 if (hk.ModId != "vanilla" || string.IsNullOrEmpty(hk.RawOptionId)) continue;
+                KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
+                KeyModifierMask savedMods = (currentKey == KeyCode.None)
+                    ? KeyModifierMask.None
+                    : (hk.GetExternalModifiers != null
+                        ? hk.GetExternalModifiers.Invoke()
+                        : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
+
                 if (pendingKeys.TryGetValue(hk.RawOptionId, out KeyCode pk))
                 {
-                    KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
-                    KeyModifierMask savedMods = (currentKey == KeyCode.None)
-                        ? KeyModifierMask.None
-                        : (hk.GetExternalModifiers != null
-                            ? hk.GetExternalModifiers.Invoke()
-                            : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
-                    if (!hk.HasPendingChange || hk.PendingKey != pk)
+                    if (hk.HasPendingChange)
                     {
-                        hk.PendingModifiers = KeyModifierMask.None;
+                        // 若用户在此前已由我们增强录键赋予了 PendingModifiers，且 pendingKeys 主键一致，保留已选修饰键
+                        if (hk.PendingKey != pk)
+                        {
+                            hk.PendingKey = pk;
+                            hk.PendingModifiers = KeyModifierMask.None;
+                        }
                     }
-                    hk.PendingKey = pk;
-                    if (pk == KeyCode.None && currentKey == KeyCode.None)
+                    else
+                    {
+                        // 原版外部修改或默认同步
+                        if (pk != currentKey)
+                        {
+                            hk.PendingKey = pk;
+                            hk.PendingModifiers = KeyModifierMask.None;
+                        }
+                        else
+                        {
+                            // pk 与当前生效键一致且无待保存修改：对齐到当前已持久化修饰键，严禁误刷为 None！
+                            hk.PendingKey = pk;
+                            hk.PendingModifiers = savedMods;
+                        }
+                    }
+
+                    if (hk.PendingKey == KeyCode.None && currentKey == KeyCode.None)
                     {
                         hk.HasPendingChange = false;
                         hk.PendingModifiers = KeyModifierMask.None;
                     }
                     else
                     {
-                        hk.HasPendingChange = (pk != currentKey || hk.PendingModifiers != savedMods);
+                        hk.HasPendingChange = (hk.PendingKey != currentKey || hk.PendingModifiers != savedMods);
                     }
                 }
                 else
                 {
-                    hk.HasPendingChange = false;
-                    hk.PendingModifiers = KeyModifierMask.None;
+                    // pendingKeys 中无此项：若用户仅修改了修饰键（如 C -> Ctrl+C），主键未变，此时应回填 pendingKeys 确保原版触发保存
+                    if (hk.HasPendingChange && hk.PendingKey == currentKey && hk.PendingModifiers != savedMods)
+                    {
+                        pendingKeys[hk.RawOptionId] = currentKey;
+                    }
+                    else
+                    {
+                        hk.HasPendingChange = false;
+                        hk.PendingModifiers = KeyModifierMask.None;
+                        hk.PendingKey = KeyCode.None;
+                    }
                 }
             }
         }
@@ -644,6 +684,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 ModLogger.Warn($"Failed to refresh conflicts after apply: {ex.Message}");
             }
+            UiSessionState.HasUserInteractedInSession = false;
         }
 
         private static void NotifyModConfigApplied(string modId)

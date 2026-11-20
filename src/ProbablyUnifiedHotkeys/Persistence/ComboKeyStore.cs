@@ -417,7 +417,7 @@ namespace ProbablyUnifiedHotkeys
                     if (ExplicitUnboundHotkeys.Contains(prefixed) || ExplicitUnboundHotkeys.Contains("vanilla." + prefixed)) return true;
                 }
             }
-            else
+            else if (!entryId.Contains(".") || entryId.StartsWith("vanilla.", StringComparison.OrdinalIgnoreCase))
             {
                 if (ExplicitUnboundHotkeys.Contains("vanilla." + entryId)) return true;
                 if (entryId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))

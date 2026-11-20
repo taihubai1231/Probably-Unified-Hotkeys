@@ -233,6 +233,8 @@ namespace ProbablyUnifiedHotkeys.Tests
             public bool IsCapturingModHotkey { get; set; }
             public bool IsSuppressingEscapeAfterCapture { get; set; }
             public bool IsExplicitWindowClosing { get; set; }
+            public bool IsSearchInputFocused { get; set; }
+            public void ReleaseSearchInputFocus() { }
             public bool IsInEnhancedRefreshRules { get; set; }
             public CustomUIWindow? CurrentWindow => null;
             public CustomUIWindow? UnsavedConfirmWindow => null;

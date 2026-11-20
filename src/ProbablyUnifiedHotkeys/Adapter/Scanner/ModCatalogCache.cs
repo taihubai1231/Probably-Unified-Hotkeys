@@ -67,28 +67,31 @@ namespace ProbablyUnifiedHotkeys
         public static List<ModOptionGroup> GetOrScanGroups(out List<ModHotkeyEntry> allHotkeys, out ModScanReport scanReport)
         {
             EnsureEventSubscriptions();
-            lock (_lock)
+            using (ComboKeyStore.EnterBypass())
             {
-                string currentFingerprint = ComputeCurrentFingerprint();
-
-                if (_cachedGroups != null && _cachedAllHotkeys != null && _cachedScanReport != null &&
-                    string.Equals(_lastFingerprint, currentFingerprint, StringComparison.Ordinal))
+                lock (_lock)
                 {
-                    // 指纹完全匹配，重置旧会话未应用的待定状态后直接复用缓存
+                    string currentFingerprint = ComputeCurrentFingerprint();
+
+                    if (_cachedGroups != null && _cachedAllHotkeys != null && _cachedScanReport != null &&
+                        string.Equals(_lastFingerprint, currentFingerprint, StringComparison.Ordinal))
+                    {
+                        // 指纹完全匹配，重置旧会话未应用的待定状态后直接复用缓存
+                        ResetPendingSessionState(_cachedGroups, _cachedAllHotkeys);
+                        allHotkeys = _cachedAllHotkeys;
+                        scanReport = _cachedScanReport;
+                        return _cachedGroups;
+                    }
+
+                    // 首次运行或检测到模组变动，执行一次轻量化扫描
+                    _cachedGroups = ModOptionScanner.ScanAll(out _cachedAllHotkeys, out _cachedScanReport);
+                    _lastFingerprint = currentFingerprint;
                     ResetPendingSessionState(_cachedGroups, _cachedAllHotkeys);
                     allHotkeys = _cachedAllHotkeys;
                     scanReport = _cachedScanReport;
+
                     return _cachedGroups;
                 }
-
-                // 首次运行或检测到模组变动，执行一次轻量化扫描
-                _cachedGroups = ModOptionScanner.ScanAll(out _cachedAllHotkeys, out _cachedScanReport);
-                _lastFingerprint = currentFingerprint;
-                ResetPendingSessionState(_cachedGroups, _cachedAllHotkeys);
-                allHotkeys = _cachedAllHotkeys;
-                scanReport = _cachedScanReport;
-
-                return _cachedGroups;
             }
         }
 

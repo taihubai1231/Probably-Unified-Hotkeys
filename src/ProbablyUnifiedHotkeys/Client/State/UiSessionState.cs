@@ -245,6 +245,7 @@ namespace ProbablyUnifiedHotkeys
         {
             ModCatalogCache.SessionResetRequested += ClearModelUiBindings;
             ModFeatureConfig.FeatureConfigChanged += OnFeatureConfigChanged;
+            ComboKeyStore.ExternalBypassPredicate = () => IsEnhancedWindowOpen || IsCapturingAnyKey;
         }
 
         private static void OnFeatureConfigChanged()
@@ -359,6 +360,7 @@ namespace ProbablyUnifiedHotkeys
         internal static int SuppressEscapeUntilFrame = -1;
         internal static bool IsExplicitWindowClosing = false;
         internal static bool InEnhancedRefreshRules = false;
+        internal static bool HasUserInteractedInSession = false;
 
         public static bool IsCapturingModHotkey => CapturingEntry != null;
         public static bool IsEnhancedWindowOpen => CurrentWindow != null;
@@ -607,6 +609,8 @@ namespace ProbablyUnifiedHotkeys
             CurrentManager = manager;
             CurrentWindow = null;
             CurrentWindowElements = null;
+            HasUserInteractedInSession = false;
+            ComboKeyStore.ExternalBypassPredicate = () => IsEnhancedWindowOpen || IsCapturingAnyKey;
             IsConflictViewActive = false;
             IsDiagnosticViewActive = false;
             ConflictViewDirty = true;
@@ -691,6 +695,7 @@ namespace ProbablyUnifiedHotkeys
             VanillaHotkeyByRawId.Clear();
             OpenedFrameCount = -1;
             PrebuildModIndex = 0;
+            HasUserInteractedInSession = false;
             ClearSessionUiCaches();
         }
 
@@ -741,165 +746,171 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
+        internal static bool HasAnyPendingGeneralChanged()
+        {
+            if (ModGroups == null) return false;
+            for (int g = 0; g < ModGroups.Count; g++)
+            {
+                var group = ModGroups[g];
+                if (group == null) continue;
+                for (int i = 0; i < group.GeneralSettings.Count; i++)
+                {
+                    var gen = group.GeneralSettings[i];
+                    if (gen == null) continue;
+
+                    if (gen.PendingBool.HasValue && gen.PendingBool.Value != (gen.GetBool?.Invoke() ?? false))
+                    {
+                        return true;
+                    }
+                    if (gen.PendingFloat.HasValue && Mathf.Abs(gen.PendingFloat.Value - (gen.GetFloat?.Invoke() ?? gen.Min)) > 0.0001f)
+                    {
+                        return true;
+                    }
+                    if (gen.PendingIndex.HasValue && gen.PendingIndex.Value != (gen.GetIndex?.Invoke() ?? 0))
+                    {
+                        return true;
+                    }
+                    if (gen.PendingString != null && !string.Equals(gen.PendingString, gen.GetString?.Invoke() ?? string.Empty, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        internal static bool HasAnyVanillaBaselineChanged()
+        {
+            if (VanillaCards == null || CurrentWindow == null || !CurrentWindow.IsAlive) return false;
+            for (int c = 0; c < VanillaCards.Count; c++)
+            {
+                var card = VanillaCards[c];
+                if (card == null || card.Entries == null) continue;
+                for (int i = 0; i < card.Entries.Count; i++)
+                {
+                    var item = card.Entries[i];
+                    var entry = item?.Entry;
+                    if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+
+                    var el = CurrentWindow.Get(entry.id);
+                    if (el == null || !el.IsAlive) continue;
+
+                    switch (entry.kind)
+                    {
+                        case GameOptionRegistry.Kind.Toggle:
+                            if (entry.getBool != null)
+                            {
+                                bool curVal = el.GetBool();
+                                bool origVal = entry.getBool();
+                                bool hasBase = VanillaOpenToggleBaseline.TryGetValue(entry.id, out bool baseVal);
+                                if (curVal != origVal && (!hasBase || curVal != baseVal))
+                                {
+                                    return true;
+                                }
+                            }
+                            break;
+                        case GameOptionRegistry.Kind.Slider:
+                            if (entry.getFloat != null)
+                            {
+                                float curVal = el.GetFloat();
+                                float origVal = entry.getFloat();
+                                bool hasBase = VanillaOpenSliderBaseline.TryGetValue(entry.id, out float baseVal);
+                                if (Mathf.Abs(curVal - origVal) > 0.001f && (!hasBase || Mathf.Abs(curVal - baseVal) > 0.001f))
+                                {
+                                    return true;
+                                }
+                            }
+                            break;
+                        case GameOptionRegistry.Kind.Dropdown:
+                            if (entry.getIndex != null)
+                            {
+                                int curVal = el.GetIndex();
+                                int origVal = entry.getIndex();
+                                bool hasBase = VanillaOpenDropdownBaseline.TryGetValue(entry.id, out int baseVal);
+                                if (curVal != origVal && (!hasBase || curVal != baseVal))
+                                {
+                                    return true;
+                                }
+                            }
+                            break;
+                    }
+                }
+            }
+            return false;
+        }
+
+        internal static bool HasAnyHotkeyChanged()
+        {
+            if (AllHotkeys == null) return false;
+            Dictionary<string, KeyCode>? pkDict = null;
+            if (CurrentManager != null && PendingKeysField != null)
+            {
+                pkDict = PendingKeysField.GetValue(CurrentManager) as Dictionary<string, KeyCode>;
+            }
+
+            for (int i = 0; i < AllHotkeys.Count; i++)
+            {
+                var hk = AllHotkeys[i];
+                if (hk == null || hk.IsReadOnlyProbed) continue;
+
+                KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
+                KeyModifierMask currentMods = currentKey == KeyCode.None
+                    ? KeyModifierMask.None
+                    : (hk.GetExternalModifiers != null
+                        ? hk.GetExternalModifiers.Invoke()
+                        : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
+
+                if (hk.ModId == "vanilla")
+                {
+                    bool inPendingDict = false;
+                    KeyCode pkValue = KeyCode.None;
+                    if (pkDict != null && !string.IsNullOrEmpty(hk.RawOptionId))
+                    {
+                        inPendingDict = pkDict.TryGetValue(hk.RawOptionId, out pkValue);
+                    }
+
+                    if (hk.HasPendingChange || inPendingDict)
+                    {
+                        KeyCode targetKey = hk.HasPendingChange ? hk.PendingKey : pkValue;
+                        KeyModifierMask targetMods = hk.HasPendingChange ? hk.PendingModifiers : currentMods;
+
+                        if (targetKey == KeyCode.None && currentKey == KeyCode.None)
+                        {
+                            continue;
+                        }
+                        if (targetKey != currentKey || targetMods != currentMods)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                else
+                {
+                    if (hk.HasPendingChange)
+                    {
+                        if (hk.PendingKey == KeyCode.None && currentKey == KeyCode.None)
+                        {
+                            continue;
+                        }
+                        if (hk.PendingKey != currentKey || hk.PendingModifiers != currentMods)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
         public static bool HasUnsavedChanges()
         {
-            if (AllHotkeys != null)
-            {
-                Dictionary<string, KeyCode>? pkDict = null;
-                if (CurrentManager != null && PendingKeysField != null)
-                {
-                    pkDict = PendingKeysField.GetValue(CurrentManager) as Dictionary<string, KeyCode>;
-                }
-
-                for (int i = 0; i < AllHotkeys.Count; i++)
-                {
-                    var hk = AllHotkeys[i];
-                    if (hk == null || hk.IsReadOnlyProbed) continue;
-
-                    KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
-                    KeyModifierMask currentMods = currentKey == KeyCode.None
-                        ? KeyModifierMask.None
-                        : (hk.GetExternalModifiers != null
-                            ? hk.GetExternalModifiers.Invoke()
-                            : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
-
-                    if (hk.ModId == "vanilla")
-                    {
-                        bool inPendingDict = false;
-                        KeyCode pkValue = KeyCode.None;
-                        if (pkDict != null && !string.IsNullOrEmpty(hk.RawOptionId))
-                        {
-                            inPendingDict = pkDict.TryGetValue(hk.RawOptionId, out pkValue);
-                        }
-
-                        if (hk.HasPendingChange || inPendingDict)
-                        {
-                            KeyCode targetKey = hk.HasPendingChange ? hk.PendingKey : pkValue;
-                            KeyModifierMask targetMods = hk.HasPendingChange ? hk.PendingModifiers : currentMods;
-
-                            if (targetKey == KeyCode.None && currentKey == KeyCode.None)
-                            {
-                                continue;
-                            }
-                            if (targetKey != currentKey || targetMods != currentMods)
-                            {
-                                return true;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        if (hk.HasPendingChange)
-                        {
-                            if (hk.EffectiveKey == KeyCode.None && currentKey == KeyCode.None)
-                            {
-                                continue;
-                            }
-                            if (hk.EffectiveKey != currentKey || hk.EffectiveModifiers != currentMods)
-                            {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (ModGroups != null)
-            {
-                for (int g = 0; g < ModGroups.Count; g++)
-                {
-                    var group = ModGroups[g];
-                    if (group == null) continue;
-                    for (int i = 0; i < group.GeneralSettings.Count; i++)
-                    {
-                        var gen = group.GeneralSettings[i];
-                        if (gen == null) continue;
-
-                        if (gen.PendingBool.HasValue && gen.PendingBool.Value != (gen.GetBool?.Invoke() ?? false))
-                        {
-                            return true;
-                        }
-                        if (gen.PendingFloat.HasValue && Mathf.Abs(gen.PendingFloat.Value - (gen.GetFloat?.Invoke() ?? gen.Min)) > 0.0001f)
-                        {
-                            return true;
-                        }
-                        if (gen.PendingIndex.HasValue && gen.PendingIndex.Value != (gen.GetIndex?.Invoke() ?? 0))
-                        {
-                            return true;
-                        }
-                        if (gen.PendingString != null && !string.Equals(gen.PendingString, gen.GetString?.Invoke() ?? string.Empty, StringComparison.Ordinal))
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
-
-            // 检查原版常规配置项（开关、滑块、下拉）是否有未保存修改
-            if (VanillaCards != null && CurrentWindow != null && CurrentWindow.IsAlive)
-            {
-                for (int c = 0; c < VanillaCards.Count; c++)
-                {
-                    var card = VanillaCards[c];
-                    if (card == null || card.Entries == null) continue;
-                    for (int i = 0; i < card.Entries.Count; i++)
-                    {
-                        var item = card.Entries[i];
-                        var entry = item?.Entry;
-                        if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
-
-                        var el = CurrentWindow.Get(entry.id);
-                        if (el == null || !el.IsAlive) continue;
-
-                        switch (entry.kind)
-                        {
-                            case GameOptionRegistry.Kind.Toggle:
-                                if (entry.getBool != null)
-                                {
-                                    bool curVal = el.GetBool();
-                                    bool origVal = entry.getBool();
-                                    bool hasBase = VanillaOpenToggleBaseline.TryGetValue(entry.id, out bool baseVal);
-                                    if (curVal != origVal && (!hasBase || curVal != baseVal))
-                                    {
-                                        return true;
-                                    }
-                                }
-                                break;
-                            case GameOptionRegistry.Kind.Slider:
-                                if (entry.getFloat != null)
-                                {
-                                    float curVal = el.GetFloat();
-                                    float origVal = entry.getFloat();
-                                    bool hasBase = VanillaOpenSliderBaseline.TryGetValue(entry.id, out float baseVal);
-                                    if (Mathf.Abs(curVal - origVal) > 0.001f && (!hasBase || Mathf.Abs(curVal - baseVal) > 0.001f))
-                                    {
-                                        return true;
-                                    }
-                                }
-                                break;
-                            case GameOptionRegistry.Kind.Dropdown:
-                                if (entry.getIndex != null)
-                                {
-                                    int curVal = el.GetIndex();
-                                    int origVal = entry.getIndex();
-                                    bool hasBase = VanillaOpenDropdownBaseline.TryGetValue(entry.id, out int baseVal);
-                                    if (curVal != origVal && (!hasBase || curVal != baseVal))
-                                    {
-                                        return true;
-                                    }
-                                }
-                                break;
-                        }
-                    }
-                }
-            }
-
-            return false;
+            return HasAnyHotkeyChanged() || HasAnyPendingGeneralChanged() || HasAnyVanillaBaselineChanged();
         }
 
         public static void DiscardAllPendingChanges(Action? onRefreshConflicts = null, Action? onRebuildConflictView = null)
         {
             CancelCapture();
+            HasUserInteractedInSession = false;
 
             // 1. 原版待提交键位清空，恢复至当前生效键位
             var pendingKeys = CurrentManager != null ? PendingKeysField?.GetValue(CurrentManager) as Dictionary<string, KeyCode> : null;

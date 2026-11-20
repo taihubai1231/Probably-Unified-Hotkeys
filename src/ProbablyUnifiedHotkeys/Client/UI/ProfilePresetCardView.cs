@@ -167,11 +167,6 @@ namespace ProbablyUnifiedHotkeys
                 UiLayoutAndFontHelper.SetTextIfChanged(UiSessionState.ProfileActionStatusLabel, statusRichText);
                 I18n.ApplyFontIfRuntime(UiSessionState.ProfileActionStatusLabel.text, statusRichText);
             }
-            if (UiSessionState.CurrentManager != null)
-            {
-                string plain = System.Text.RegularExpressions.Regex.Replace(statusRichText, "<.*?>", string.Empty).Trim();
-                UiSessionState.SetKeyBindStatusDelegate?.Invoke(UiSessionState.CurrentManager, plain);
-            }
         }
 
         internal static void OnSaveProfileSlotClicked(int slotIndex)
@@ -238,6 +233,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 ApplyProfileSnapshotToCurrentSession(snapshot, out int hkCount, out int genCount);
                 RefreshProfileSlotButtonAppearance();
+                UiSessionState.HasUserInteractedInSession = true;
 
                 string successMsg = I18n.Format(
                     "<color=#86efac>✓ 已读取并应用【{0}】（恢复 {1} 项按键 / {2} 项设置）</color>",
@@ -353,6 +349,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 ApplyProfileSnapshotToCurrentSession(snapshot, out int hkCount, out int genCount);
                 RefreshProfileSlotButtonAppearance();
+                UiSessionState.HasUserInteractedInSession = true;
 
                 string successMsg = I18n.Format(
                     "<color=#86efac>✓ 已从剪贴板成功导入并立即生效（恢复 {0} 项按键 / {1} 项设置）！</color>",
