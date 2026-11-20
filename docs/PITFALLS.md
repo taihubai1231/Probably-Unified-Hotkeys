@@ -21,11 +21,14 @@
   - [10. Esc 改键录制缓冲三重拦截与主菜单禁设 `closeOnEscape=false`](#10-esc-改键录制缓冲三重拦截与主菜单禁设-closeonescapefalse)
   - [11. `KeyCode.None` 解绑清空残留修饰位与 `BaselineSnapshot` 刷新](#11-keycodenone-解绑清空残留修饰位与-baselinesnapshot-刷新)
   - [12. 键码词元边界前缀匹配（防止无边界子串误命中）](#12-键码词元边界前缀匹配防止无边界子串误命中)
+  - [19. 录键状态机右键误当取消键与无修饰左键取消契约 (ADR-010)](#19-录键状态机右键误当取消键与无修饰左键取消契约-adr-010)
 - [四、 Harmony 注入与底层执行流陷阱 (Harmony 2.4.2 / Mono JIT)](#四-harmony-注入与底层执行流陷阱-harmony-242--mono-jit)
   - [13. Harmony 重载方法匹配失败与显式 `Type[]` 签名声明](#13-harmony-重载方法匹配失败与显式-type-签名声明)
   - [14. Mono JIT 编译器方法内联优化导致钩子静默失效](#14-mono-jit-编译器方法内联优化导致钩子静默失效)
   - [15. 热路径反射性能损耗与强类型委托缓存（`assemblyEpoch`）](#15-热路径反射性能损耗与强类型委托缓存assemblyepoch)
   - [16. Harmony 全量卸载污染与退出极速秒退链路](#16-harmony-全量卸载污染与退出极速秒退链路)
+  - [20. Unity Mono extern internalcall 动态生成跳板 IL 校验崩溃 (`IL_0024: ret`)](#20-unity-mono-extern-internalcall-动态生成跳板-il-校验崩溃-il_0024-ret)
+  - [21. 模组冲突检测器 53-DLL 连环重扫与环境签名缓存](#21-模组冲突检测器-53-dll-连环重扫与环境签名缓存)
 - [五、 构建工具链与分发平台陷阱 (PowerShell / Steamworks)](#五-构建工具链与分发平台陷阱-powershell--steamworks)
   - [17. Windows PowerShell 5.1 加载 Mono `mscorlib.dll` 死递归崩栈](#17-windows-powershell-51-加载-mono-mscorlibdll-死递归崩栈)
   - [18. Steamworks 创意工坊 `schinese` 语言槽位不可注销与覆盖陷阱](#18-steamworks-创意工坊-schinese-语言槽位不可注销与覆盖陷阱)
@@ -160,6 +163,15 @@
   2. 严格区分显示文本边界与纯键码标识符。
 - **【严禁反模式 Anti-pattern】**：严禁直接对 `KeyCode.ToString()` 执行无前缀/无词元边界约束的纯子串 `Contains()` 判定。
 
+### 19. 录键状态机右键误当取消键与无修饰左键取消契约 (ADR-010)
+- **【现象 Symptom】**：玩家在选项界面点击某按键想要录入鼠标右键（`Mouse1`）作为快捷键时，按下鼠标右键界面直接退出录键状态并恢复为原键位，导致右键无法绑定。
+- **【根因 Root Cause】**：旧版录键状态机将鼠标左键与右键均当作“取消录制”，未能区分有意识绑定与取消意图；而《深空当铺》游戏官方原生支持右键改键绑定。
+- **【解法 Remedy】**：严格执行 ADR-010 录键契约：
+  1. 仅将**无修饰鼠标左键（`Mouse0`）**作为唯一取消键，单击立即退出录制并还原原键位。
+  2. **无修饰鼠标右键（`Mouse1`）**直接录入绑定为 `KeyCode.Mouse1`，并置位鼠标释放等待保护（`_waitingMouseRelease = true`），防止同帧穿透。
+  3. 修饰键组合（如 `Alt + Mouse0` / `Ctrl + Mouse1`）与鼠标中键/侧键（`Mouse2~6`）均正常录入并绑定。
+- **【严禁反模式 Anti-pattern】**：严禁在 `KeyCaptureController` 或 `KeyBindHelper.PollCapture` 中将鼠标右键无条件判定为 `CaptureResult.None` 取消动作。
+
 ---
 
 ## 四、 Harmony 注入与底层执行流陷阱 (Harmony 2.4.2 / Mono JIT)
@@ -204,6 +216,23 @@
      ```
   2. 实现退出秒退旁路（`PerformancePatches.cs`）：监听 `Application.wantsToQuit` 与 `Application.quitting`，当玩家点击确认退出时，在持久化配置安全落盘后，跳过冗余的反注册与遥测等待，直接走秒退链路。
 - **【严禁反模式 Anti-pattern】**：严禁调用无参 `UnpatchAll()`；严禁在退出流程中执行阻塞式网络请求或繁重的逐个反编译卸载。
+
+### 20. Unity Mono extern internalcall 动态生成跳板 IL 校验崩溃 (`IL_0024: ret`)
+- **【现象 Symptom】**：对 `UnityEngine.Input.GetMouseButton` 等挂载 Harmony Prefix 补丁时，控制台抛出 `Invalid IL code in (wrapper dynamic-method) MonoMod.Utils.DynamicMethodDefinition:UnityEngine.Input.GetMouseButton_Patch1 (int): IL_0024: ret` 异常，连坐导致整个按键拦截方法全部中断。
+- **【根因 Root Cause】**：Unity 2021.3 Mono 下 `GetMouseButton(int)` / `Down` / `Up` 属于纯 `[MethodImpl(InternalCall)]` extern 原生方法，原方法没有托管 IL 指令体，MonoMod 生成跳板 IL 时因原方法指令为空触发 IL 校验崩溃。当多个方法置于同一个 try 块内时引发连坐。
+- **【解法 Remedy】**：
+  1. 将全部输入拦截拆解为独立的 try-catch 隔离块，保证 `GetKey`、`GetKeyDown`、`GetKeyUp` 等核心托管方法 100% 成功挂载。
+  2. 对此类 extern internalcall 异常做静默处理（Debug 日志），不影响核心功能。
+- **【严禁反模式 Anti-pattern】**：严禁将多个不同特性的 Harmony.Patch 挂载调用混在同一个 try 块中导致连坐中断。
+
+### 21. 模组冲突检测器 53-DLL 连环重扫与环境签名缓存
+- **【现象 Symptom】**：玩家订阅数十个模组时，打开「改造件」面板严重卡顿 2~3 秒，日志连续打印 5 次 `[模组冲突检测器]: Scan: 53 DLL(s) read`（高达 265 次反编译解析）。
+- **【根因 Root Cause】**：`ConflictScanner` 在 `OpenPanel`、`PopulateLayoutList`、`RefreshRowIssues` 等多处路径重复调用 `ConflictEngine.EnsureBuilt()`，且旧版依赖的缓存判据在第三方版本更新后失效。
+- **【解法 Remedy】**：
+  1. 在 `ConflictScannerPerfHelper` 中建立全量模组环境签名（包含所有已加载模组的 `IsEnabled` 状态与版本）。
+  2. 只要环境签名未改变，在 `EnsureBuilt` 与 `Invalidate` 头部统一拦截并返回 `false` 跳过清空与重扫。
+  3. 当且仅当玩家在界面勾选/取消勾选模组导致签名变化时，立即放行重扫，确保功能完好。
+- **【严禁反模式 Anti-pattern】**：严禁无条件放行第三方模组在主线程 UI 刷新循环中无节制触发昂贵的 Cecil 反编译与磁盘读取。
 
 ---
 

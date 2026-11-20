@@ -376,8 +376,21 @@ namespace ProbablyUnifiedHotkeys
             return held ? ComboKeyStore.IsKeyHeldRaw(effective) : ComboKeyStore.IsKeyDownRaw(effective);
         }
 
-        internal static bool TryPollSideMouseButton(out KeyCode pressed)
+        internal static bool TryPollMouseButtons(out KeyCode pressed)
         {
+            // Mouse1 (Right Click) -> KeyCode.Mouse1
+            if (ComboKeyStore.IsKeyDownRaw(KeyCode.Mouse1))
+            {
+                pressed = KeyCode.Mouse1;
+                return true;
+            }
+            // Mouse2 (Middle Click) -> KeyCode.Mouse2
+            if (ComboKeyStore.IsKeyDownRaw(KeyCode.Mouse2))
+            {
+                pressed = KeyCode.Mouse2;
+                return true;
+            }
+            // Mouse3 ~ Mouse6 (Side Buttons)
             for (int code = (int)KeyCode.Mouse3; code <= (int)KeyCode.Mouse6; code++)
             {
                 KeyCode candidate = (KeyCode)code;
@@ -390,10 +403,16 @@ namespace ProbablyUnifiedHotkeys
             pressed = KeyCode.None;
             return false;
         }
+
+        internal static bool TryPollSideMouseButton(out KeyCode pressed)
+        {
+            return TryPollMouseButtons(out pressed);
+        }
     }
 
     /// <summary>
-    /// 允许捕获空按键（Esc 解除绑定）并支持直接捕获鼠标侧键（Mouse3~Mouse6）及 Backspace。
+    /// 允许捕获空按键（Esc 解除绑定）并支持直接捕获鼠标右键（Mouse1）、中键（Mouse2）、侧键（Mouse3~Mouse6）及 Backspace。
+    /// 仅在无修饰键单击鼠标左键（Mouse0）时取消录入。
     /// </summary>
     [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.PollCapture))]
     public static class Patch_KeyBindHelper_PollCapture
@@ -407,11 +426,18 @@ namespace ProbablyUnifiedHotkeys
                 return true;
             }
 
-            // Unity 的 Input.anyKeyDown 有时会遗漏鼠标侧键，优先轮询 Mouse3~Mouse6
-            if (KeyBindRuntimeHelper.TryPollSideMouseButton(out KeyCode sideBtn))
+            // 优先轮询鼠标右键、中键与侧键（Mouse1 ~ Mouse6），支持直接录制绑定
+            if (KeyBindRuntimeHelper.TryPollMouseButtons(out KeyCode mouseBtn))
             {
-                key = sideBtn;
+                key = mouseBtn;
                 __result = KeyBindHelper.CaptureResult.Key;
+                return false;
+            }
+
+            // 无修饰键单击鼠标左键（Mouse0）：取消录入并保持原键位
+            if (Input.GetMouseButtonDown(0) && ComboKeyStore.GetHeldModifiersMask() == KeyModifierMask.None)
+            {
+                __result = KeyBindHelper.CaptureResult.None;
                 return false;
             }
 
@@ -440,14 +466,14 @@ namespace ProbablyUnifiedHotkeys
     }
 
     /// <summary>
-    /// 增强原版 KeyName 输出，将 Mouse3~Mouse6 友好显示为“鼠标侧键1~4”。
+    /// 增强原版 KeyName 输出，将 Mouse0~Mouse6 友好显示为“鼠标左键”、“鼠标右键”、“鼠标中键”、“鼠标侧键1~4”。
     /// </summary>
     [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.KeyName))]
     public static class Patch_KeyBindHelper_KeyName
     {
         public static void Postfix(KeyCode key, ref string __result)
         {
-            if (ComboKeyStore.IsMouseSideButton(key))
+            if (ComboKeyStore.IsMouseSideButton(key) || key == KeyCode.Mouse0 || key == KeyCode.Mouse1 || key == KeyCode.Mouse2)
             {
                 __result = ComboKeyStore.FormatPrimaryKeyName(key);
             }

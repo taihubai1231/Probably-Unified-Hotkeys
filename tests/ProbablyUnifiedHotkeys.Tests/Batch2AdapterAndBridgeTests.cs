@@ -174,9 +174,33 @@ namespace ProbablyUnifiedHotkeys.Tests
         {
             string? error = null;
             bool result = false;
-            // When instance or binding is null, prefix safely yields to original method (returns true)
+            // When instance or target is null, prefix safely yields to original method (returns true)
             bool runOrig = WorkshopModPatcher.SmartInventoryArrange_TrySet_Prefix(new object(), null!, new object(), ref error, ref result);
             Assert.True(runOrig);
+
+            // Assert parameter name is 'target' (not 'binding') to avoid Harmony binding warning
+            var method = typeof(WorkshopModPatcher).GetMethod(nameof(WorkshopModPatcher.SmartInventoryArrange_TrySet_Prefix));
+            Assert.NotNull(method);
+            var parameters = method!.GetParameters();
+            Assert.Equal("target", parameters[1].Name);
+        }
+
+        [Fact]
+        public void MouseButtons_RightAndMiddleClick_FormattingAndBilingualSupport()
+        {
+            BilingualText.ModeOverrideForTest = UiLanguageMode.SimplifiedChinese;
+            Assert.Equal("右键", ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse1));
+            Assert.Equal("中键", ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse2));
+            Assert.Equal("左键", ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse0));
+            Assert.Equal("Ctrl + 右键", ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl, KeyCode.Mouse1));
+            Assert.Equal("Alt + 中键", ComboKeyStore.FormatCombo(KeyModifierMask.Alt, KeyCode.Mouse2));
+
+            BilingualText.ModeOverrideForTest = UiLanguageMode.English;
+            Assert.Equal("Right Click", ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse1));
+            Assert.Equal("Middle Click", ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse2));
+            Assert.Equal("Left Click", ComboKeyStore.FormatPrimaryKeyName(KeyCode.Mouse0));
+            Assert.Equal("Ctrl + Right Click", ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl, KeyCode.Mouse1));
+            Assert.Equal("Alt + Middle Click", ComboKeyStore.FormatCombo(KeyModifierMask.Alt, KeyCode.Mouse2));
         }
 
         [Fact]

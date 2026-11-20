@@ -854,11 +854,11 @@ namespace ProbablyUnifiedHotkeys
             }
         }
 
-        public static bool SmartInventoryArrange_TrySet_Prefix(object __instance, object binding, object key, ref string? error, ref bool __result)
+        public static bool SmartInventoryArrange_TrySet_Prefix(object __instance, object target, object key, ref string? error, ref bool __result)
         {
             try
             {
-                if (binding != null && string.Equals(binding.ToString(), "Open", StringComparison.OrdinalIgnoreCase))
+                if (target != null && string.Equals(target.ToString(), "Open", StringComparison.OrdinalIgnoreCase))
                 {
                     bool isBound = true;
                     if (_siaBoundProp != null)
@@ -1029,6 +1029,8 @@ namespace ProbablyUnifiedHotkeys
         public static bool FactionReputation_IsBindableName_Prefix(string? name, ref bool __result)
         {
             if (string.Equals(name, "None", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Mouse1", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Mouse2", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, "Mouse3", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, "Mouse4", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, "Mouse5", StringComparison.OrdinalIgnoreCase) ||

@@ -316,6 +316,26 @@ namespace ProbablyUnifiedHotkeys
             return null;
         }
 
+        private static readonly FieldInfo? PreviewCacheField = AccessTools.Field(typeof(ModUIManager), "previewCache");
+        private static readonly Dictionary<string, Sprite> PersistentPreviewCache = new Dictionary<string, Sprite>(StringComparer.Ordinal);
+
+        internal static void EnsurePreviewCached(ModUIManager manager, LoadedMod? mod)
+        {
+            if (mod?.Manifest == null || string.IsNullOrEmpty(mod.Manifest.ID)) return;
+            string id = mod.Manifest.ID;
+            if (PreviewCacheField != null && PreviewCacheField.GetValue(manager) is Dictionary<string, Sprite> cache)
+            {
+                if (cache.TryGetValue(id, out Sprite? sprite) && sprite != null)
+                {
+                    PersistentPreviewCache[id] = sprite;
+                }
+                else if (PersistentPreviewCache.TryGetValue(id, out Sprite? saved) && saved != null)
+                {
+                    cache[id] = saved;
+                }
+            }
+        }
+
         internal static CustomUIWindow? GetHandle(ModUIManager manager)
         {
             return HandleField?.GetValue(manager) as CustomUIWindow;
@@ -992,6 +1012,12 @@ namespace ProbablyUnifiedHotkeys
                 }
                 return false;
             }
+
+            if (ModFeatureConfig.EnablePerformancePatches)
+            {
+                ModUIManagerPerfHelper.EnsurePreviewCached(__instance, mod);
+            }
+
             return true;
         }
     }
@@ -1055,14 +1081,15 @@ namespace ProbablyUnifiedHotkeys
     {
         private static int _modOpenPanelDepth = 0;
         private static bool _bound = false;
+        private static bool _hasCompletedAtLeastOneBuild = false;
         private static string? _lastBuiltModSignature = null;
         private static Action<bool>? _ensureBuiltFn;
-        private static Func<int>? _getBuildCountFn;
         private static readonly System.Text.StringBuilder SigBuilder = new System.Text.StringBuilder(1024);
 
         internal static void ResetSession()
         {
             _modOpenPanelDepth = 0;
+            _hasCompletedAtLeastOneBuild = false;
             _lastBuiltModSignature = null;
         }
 
@@ -1097,17 +1124,11 @@ namespace ProbablyUnifiedHotkeys
 
                 MethodInfo? ensureBuiltMethod = AccessTools.Method(engineType, "EnsureBuilt", new Type[] { typeof(bool) });
                 MethodInfo? invalidateMethod = AccessTools.Method(engineType, "Invalidate");
-                MethodInfo? getBuildCountMethod = AccessTools.PropertyGetter(engineType, "BuildCount");
 
                 if (ensureBuiltMethod != null)
                 {
                     try { _ensureBuiltFn = Delegate.CreateDelegate(typeof(Action<bool>), ensureBuiltMethod) as Action<bool>; }
                     catch (Exception ex) { ModLogger.Debug($"[ConflictScannerPerfHelper] Failed to bind _ensureBuiltFn: {ex.Message}"); _ensureBuiltFn = null; }
-                }
-                if (getBuildCountMethod != null)
-                {
-                    try { _getBuildCountFn = Delegate.CreateDelegate(typeof(Func<int>), getBuildCountMethod) as Func<int>; }
-                    catch (Exception ex) { ModLogger.Debug($"[ConflictScannerPerfHelper] Failed to bind _getBuildCountFn: {ex.Message}"); _getBuildCountFn = null; }
                 }
 
                 if (invalidateMethod != null)
@@ -1139,8 +1160,7 @@ namespace ProbablyUnifiedHotkeys
             }
             try
             {
-                int count = _getBuildCountFn != null ? _getBuildCountFn() : 0;
-                if (count == 0)
+                if (!_hasCompletedAtLeastOneBuild || !HasValidCachedBuildForCurrentEnv())
                 {
                     _ensureBuiltFn(false);
                 }
@@ -1192,12 +1212,7 @@ namespace ProbablyUnifiedHotkeys
 
         private static bool HasValidCachedBuildForCurrentEnv()
         {
-            if (string.IsNullOrEmpty(_lastBuiltModSignature))
-            {
-                return false;
-            }
-            int buildCount = _getBuildCountFn != null ? _getBuildCountFn() : 0;
-            if (buildCount <= 0)
+            if (!_hasCompletedAtLeastOneBuild || string.IsNullOrEmpty(_lastBuiltModSignature))
             {
                 return false;
             }
@@ -1206,19 +1221,21 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool ConflictEngine_Invalidate_Prefix()
         {
-            if (_modOpenPanelDepth > 0 && HasValidCachedBuildForCurrentEnv())
+            if (HasValidCachedBuildForCurrentEnv())
             {
-                // 同一模组环境在 ModUIManager.OpenPanel 中不再重复清空已有冲突分析结果（消除两次全量 DseCecil DLL 解析）
+                // 当前模组环境签名未变（启用状态与版本未变），直接跳过清空已有冲突分析结果，杜绝重复扫描！
                 return false;
             }
+            _hasCompletedAtLeastOneBuild = false;
             _lastBuiltModSignature = null;
             return true;
         }
 
         public static bool ConflictEngine_EnsureBuilt_Prefix()
         {
-            if (_modOpenPanelDepth > 0 && HasValidCachedBuildForCurrentEnv())
+            if (HasValidCachedBuildForCurrentEnv())
             {
+                // 当前模组环境签名未变，直接命中缓存跳过 53-DLL 耗时重扫！
                 return false;
             }
             return true;
@@ -1226,6 +1243,7 @@ namespace ProbablyUnifiedHotkeys
 
         public static void ConflictEngine_EnsureBuilt_Postfix()
         {
+            _hasCompletedAtLeastOneBuild = true;
             _lastBuiltModSignature = ComputeModScanSignature();
         }
     }
