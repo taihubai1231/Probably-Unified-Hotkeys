@@ -359,6 +359,14 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
 
+            if (ComboKeyStore.IsExplicitlyUnbound(id) ||
+                ComboKeyStore.IsExplicitlyUnbound("vanilla." + id) ||
+                ComboKeyStore.IsExplicitlyUnbound("key_" + id) ||
+                ComboKeyStore.IsExplicitlyUnbound("vanilla.key_" + id))
+            {
+                return false;
+            }
+
             KeyCode key = KeyBindHelper.Get(id);
             if (key == KeyCode.None)
             {
@@ -367,7 +375,13 @@ namespace ProbablyUnifiedHotkeys
 
             ComboKeyStore.EnsureLoaded();
             KeyCode effective = key;
-            ComboKeyStore.FilterRuntimeKey(ref effective, "vanilla." + id, id);
+            ComboKeyStore.FilterRuntimeKey(ref effective,
+                "vanilla." + id,
+                id,
+                "vanilla.key_" + id,
+                "key_" + id,
+                id.StartsWith("key_", StringComparison.OrdinalIgnoreCase) ? "vanilla." + id.Substring(4) : "",
+                id.StartsWith("key_", StringComparison.OrdinalIgnoreCase) ? id.Substring(4) : "");
             if (effective == KeyCode.None)
             {
                 return false;
@@ -531,9 +545,29 @@ namespace ProbablyUnifiedHotkeys
             try
             {
                 var bridge = OptionUiHost.Active;
-                if (bridge != null && bridge.StartCaptureVanillaOption(__instance, optionId))
+                if (bridge != null)
                 {
-                    return false;
+                    if (bridge.StartCaptureVanillaOption(__instance, optionId))
+                    {
+                        return false;
+                    }
+
+                    if (optionId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string stripped = optionId.Substring(4);
+                        if (bridge.StartCaptureVanillaOption(__instance, stripped))
+                        {
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        string prefixed = "key_" + optionId;
+                        if (bridge.StartCaptureVanillaOption(__instance, prefixed))
+                        {
+                            return false;
+                        }
+                    }
                 }
             }
             catch (Exception ex)

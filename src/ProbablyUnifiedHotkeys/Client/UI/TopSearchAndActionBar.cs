@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using TMPro;
 using UnityEngine;
@@ -13,6 +14,67 @@ namespace ProbablyUnifiedHotkeys
     /// </summary>
     internal static class TopSearchAndActionBar
     {
+        private static string? s_pendingSearchText;
+        private static float s_searchDebounceTime;
+        private static bool s_hasPendingSearchDebounce;
+
+        private static readonly List<ModOptionGroup> s_progressiveExpandQueue = new List<ModOptionGroup>();
+        private static readonly Stopwatch s_progressiveStopwatch = new Stopwatch();
+
+        internal static bool HasPendingProgressiveExpand => s_progressiveExpandQueue.Count > 0;
+
+        internal static void ClearSearchDebounce()
+        {
+            s_hasPendingSearchDebounce = false;
+            s_pendingSearchText = null;
+        }
+
+        internal static void ClearProgressiveExpandQueue()
+        {
+            s_progressiveExpandQueue.Clear();
+        }
+
+        internal static void TickSearchDebounce()
+        {
+            if (!s_hasPendingSearchDebounce) return;
+
+            if (Time.unscaledTime >= s_searchDebounceTime)
+            {
+                string textToApply = s_pendingSearchText ?? string.Empty;
+                s_hasPendingSearchDebounce = false;
+                s_pendingSearchText = null;
+                ExecuteSearchFilter(textToApply);
+            }
+        }
+
+        internal static void TickProgressiveExpand()
+        {
+            if (s_progressiveExpandQueue.Count == 0) return;
+            if (!UiSessionState.AllExpanded || UiSessionState.CurrentWindow == null || !UiSessionState.CurrentWindow.IsVisible)
+            {
+                s_progressiveExpandQueue.Clear();
+                return;
+            }
+
+            s_progressiveStopwatch.Restart();
+            while (s_progressiveExpandQueue.Count > 0)
+            {
+                var group = s_progressiveExpandQueue[0];
+                s_progressiveExpandQueue.RemoveAt(0);
+
+                CollapsibleCardView.SetGroupExpanded(group, true);
+                if (UiSessionState.TryGetCardParts(group, out var p))
+                {
+                    UiLayoutAndFontHelper.SyncCompactActionButton(p.ResetButtonElement);
+                }
+
+                if (s_progressiveStopwatch.Elapsed.TotalMilliseconds >= 4.0)
+                {
+                    break;
+                }
+            }
+        }
+
         /// <summary>
         /// 装配顶部双行搜索与快捷操作栏。
         /// </summary>
@@ -157,7 +219,7 @@ namespace ProbablyUnifiedHotkeys
             ConflictAggregationView.UpdateConflictToggleButtonAppearance();
             ModDiagnosticView.UpdateDiagnosticToggleButtonAppearance();
 
-            string topHintText = I18n.Get("组合键/右键/侧键 | Esc=无", "Combos/RClick/Side | Esc=None");
+            string topHintText = I18n.Get("Ctrl/Shift/Alt+侧键 | Esc=无", "Combos/Side | Esc=None");
             builder.AddLabel(topHintText, "label_top_hint");
             var hintEl = builder.Last;
             if (hintEl != null)
@@ -199,6 +261,8 @@ namespace ProbablyUnifiedHotkeys
         {
             if (index >= 0 && index <= (int)SearchScope.GeneralOnly)
             {
+                ClearSearchDebounce();
+                ClearProgressiveExpandQueue();
                 UiSessionState.SearchScope = (SearchScope)index;
                 if (UiSessionState.IsConflictViewActive || UiSessionState.IsDiagnosticViewActive)
                 {
@@ -214,6 +278,8 @@ namespace ProbablyUnifiedHotkeys
         {
             if (index >= 0 && index <= (int)NormalDisplayMode.GeneralOnly)
             {
+                ClearSearchDebounce();
+                ClearProgressiveExpandQueue();
                 UiSessionState.NormalDisplayMode = (NormalDisplayMode)index;
                 if (UiSessionState.IsConflictViewActive || UiSessionState.IsDiagnosticViewActive)
                 {
@@ -229,23 +295,60 @@ namespace ProbablyUnifiedHotkeys
 
         private static void OnSearchTyping(string text)
         {
-            OnSearchInputUpdated(text);
+            // 清空搜索框时 0 延迟立即生效
+            if (string.IsNullOrEmpty(text))
+            {
+                ClearSearchDebounce();
+                ExecuteSearchFilter(string.Empty);
+                return;
+            }
+
+            // 100ms 轻量输入防抖
+            s_pendingSearchText = text;
+            s_searchDebounceTime = Time.unscaledTime + 0.10f;
+            s_hasPendingSearchDebounce = true;
         }
 
         private static void OnSearchChanged(string? text)
         {
             string safeText = text ?? string.Empty;
-            // onValueChanged (OnSearchTyping) 已即时同步过 SearchQuery；失焦触发 onEndEdit 时若文本未变直接返回，防止点击按钮前被整页清空重建吞掉 onClick
-            if (string.Equals(safeText, UiSessionState.SearchQuery ?? string.Empty, StringComparison.Ordinal))
+
+            // 清空搜索框时 0 延迟立即生效
+            if (string.IsNullOrEmpty(safeText))
             {
+                ClearSearchDebounce();
+                ExecuteSearchFilter(string.Empty);
                 return;
             }
-            OnSearchInputUpdated(safeText);
+
+            // 按回车提交时 0 延迟立即生效
+            bool isEnterPressed = Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter);
+            if (isEnterPressed)
+            {
+                ClearSearchDebounce();
+                ExecuteSearchFilter(safeText);
+                return;
+            }
+
+            // 防失焦竞态：失焦点击下方按钮（如展开/收起、按键绑定等）时，
+            // 绝不同步执行整页重新过滤与布局重建，避免吞掉当前帧待分发的 onClick 事件；
+            // 保持由 TickSearchDebounce 在到期或后续帧中安全驱动。
+            if (string.Equals(safeText, UiSessionState.SearchQuery ?? string.Empty, StringComparison.Ordinal))
+            {
+                ClearSearchDebounce();
+                return;
+            }
+
+            // 若失焦时文本发生变更（如外部粘贴但未触发回车），确保防抖队列记录最新文本并在到期时驱动
+            s_pendingSearchText = safeText;
+            s_searchDebounceTime = Mathf.Max(s_searchDebounceTime, Time.unscaledTime + 0.05f);
+            s_hasPendingSearchDebounce = true;
         }
 
-        private static void OnSearchInputUpdated(string text)
+        private static void ExecuteSearchFilter(string text)
         {
             UiSessionState.SearchQuery = text;
+            ClearProgressiveExpandQueue();
             if (UiSessionState.IsDiagnosticViewActive)
             {
                 UiSessionState.DiagnosticViewDirty = true;
@@ -406,7 +509,8 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static void ApplySearchFilter()
         {
-            bool hasQuery = !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery);
+            string query = (UiSessionState.SearchQuery ?? string.Empty).Trim();
+            bool hasQuery = query.Length > 0;
             bool hasDisplayFilter = UiSessionState.NormalDisplayMode != NormalDisplayMode.All;
             GetActiveDisplayPermissions(
                 hasQuery,
@@ -464,15 +568,15 @@ namespace ProbablyUnifiedHotkeys
                         }
 
                         bool sectionNameMatch = allowGroupName &&
-                            (PinyinEngine.Matches(card.DisplayName, UiSessionState.SearchQuery) ||
-                             PinyinEngine.Matches(card.SectionId, UiSessionState.SearchQuery));
+                            (PinyinEngine.Matches(card.DisplayName, query) ||
+                             PinyinEngine.Matches(card.SectionId, query));
 
                         bool anyItemMatch = false;
                         foreach (var item in card.Entries)
                         {
                             bool modeAllowed = item.IsKeyBind ? modeAllowsHotkeys : modeAllowsGeneral;
                             bool scopeAllowed = item.IsKeyBind ? allowHotkeys : allowGeneral;
-                            bool itemMatch = modeAllowed && (sectionNameMatch || (scopeAllowed && IsVanillaItemMatchQuery(item, UiSessionState.SearchQuery)));
+                            bool itemMatch = modeAllowed && (sectionNameMatch || (scopeAllowed && IsVanillaItemMatchQuery(item, query)));
                             foreach (var row in item.RowObjects) SetObjectActive(row, itemMatch);
                             if (itemMatch) anyItemMatch = true;
                         }
@@ -503,7 +607,7 @@ namespace ProbablyUnifiedHotkeys
                         {
                             if (parts != null && parts.IsContentBuilt)
                             {
-                                ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: true, allowGeneral: true);
+                                ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: true, allowGeneral: true, query: query);
                             }
 
                             if (parts != null)
@@ -531,21 +635,55 @@ namespace ProbablyUnifiedHotkeys
                             }
                             if (parts != null && parts.IsContentBuilt)
                             {
-                                ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: modeAllowsHotkeys, allowGeneral: modeAllowsGeneral);
+                                ApplyGroupRowVisibility(group, hasQuery: false, groupNameMatch: true, allowHotkeys: modeAllowsHotkeys, allowGeneral: modeAllowsGeneral, query: query);
                             }
                             CollapsibleCardView.SetGroupExpanded(group, group.IsExpanded);
                             visibleModCount++;
                             continue;
                         }
 
-                        bool groupNameMatch = hasKindInMode && IsModGroupNameMatch(group, UiSessionState.SearchQuery, allowGroupName);
-                        bool anyHotkeyMatch = allowHotkeys &&
-                            (group.Hotkeys.Any(hk => IsHotkeyMatchQuery(hk, UiSessionState.SearchQuery)) ||
-                             group.ReadOnlyProbedHotkeys.Any(hk => IsHotkeyMatchQuery(hk, UiSessionState.SearchQuery)));
-                        bool anyGeneralMatch = allowGeneral && group.GeneralSettings.Any(gen => IsGeneralMatchQuery(gen, UiSessionState.SearchQuery));
+                        bool groupNameMatch = hasKindInMode && IsModGroupNameMatch(group, query, allowGroupName);
+                        bool anyHotkeyMatch = false;
+                        bool anyGeneralMatch = false;
+                        if (!groupNameMatch)
+                        {
+                            if (allowHotkeys)
+                            {
+                                for (int i = 0; i < group.Hotkeys.Count; i++)
+                                {
+                                    if (IsHotkeyMatchQuery(group.Hotkeys[i], query))
+                                    {
+                                        anyHotkeyMatch = true;
+                                        break;
+                                    }
+                                }
+                                if (!anyHotkeyMatch)
+                                {
+                                    for (int i = 0; i < group.ReadOnlyProbedHotkeys.Count; i++)
+                                    {
+                                        if (IsHotkeyMatchQuery(group.ReadOnlyProbedHotkeys[i], query))
+                                        {
+                                            anyHotkeyMatch = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (allowGeneral)
+                            {
+                                for (int i = 0; i < group.GeneralSettings.Count; i++)
+                                {
+                                    if (IsGeneralMatchQuery(group.GeneralSettings[i], query))
+                                    {
+                                        anyGeneralMatch = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         bool anyProfileMatch = string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
                             (allowGeneral || allowHotkeys) &&
-                            ProfilePresetCardView.IsProfileSectionMatchQuery(UiSessionState.SearchQuery);
+                            ProfilePresetCardView.IsProfileSectionMatchQuery(query);
 
                         if (!groupNameMatch && !anyHotkeyMatch && !anyGeneralMatch && !anyProfileMatch)
                         {
@@ -568,7 +706,7 @@ namespace ProbablyUnifiedHotkeys
                                 CollapsibleCardView.EnsureGroupContentBuilt(group);
                             }
                         }
-                        ApplyMatchedModGroupRows(group, groupNameMatch, allowHotkeys, allowGeneral);
+                        ApplyMatchedModGroupRows(group, groupNameMatch, allowHotkeys, allowGeneral, query);
                     }
                 }
 
@@ -593,9 +731,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 UiSessionState.WasSearchNonEmpty = true;
                 UiLayoutAndFontHelper.ScrollToTargetImmediate(firstMatchedHeader);
-                UiSessionState.PendingScrollTarget = firstMatchedHeader;
-                UiSessionState.PendingScrollMinFrame = Time.frameCount + 1;
-                UiSessionState.PendingScrollRemainingPasses = 1;
+                UiLayoutAndFontHelper.ClearPendingScroll();
             }
             else if (!hasQuery && UiSessionState.WasSearchNonEmpty)
             {
@@ -607,7 +743,8 @@ namespace ProbablyUnifiedHotkeys
 
         internal static void ApplySingleGroupVisibility(ModOptionGroup group)
         {
-            bool hasQuery = !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery);
+            string query = (UiSessionState.SearchQuery ?? string.Empty).Trim();
+            bool hasQuery = query.Length > 0;
             GetActiveDisplayPermissions(
                 hasQuery,
                 out bool allowGroupName,
@@ -615,22 +752,24 @@ namespace ProbablyUnifiedHotkeys
                 out bool allowGeneral,
                 out bool modeAllowsHotkeys,
                 out bool modeAllowsGeneral);
-            bool groupNameMatch = !hasQuery || (GroupHasVisibleItemsInCurrentMode(group, modeAllowsHotkeys, modeAllowsGeneral) && IsModGroupNameMatch(group, UiSessionState.SearchQuery, allowGroupName));
-            ApplyGroupRowVisibility(group, hasQuery, groupNameMatch, allowHotkeys, allowGeneral);
+            bool groupNameMatch = !hasQuery || (GroupHasVisibleItemsInCurrentMode(group, modeAllowsHotkeys, modeAllowsGeneral) && IsModGroupNameMatch(group, query, allowGroupName));
+            ApplyGroupRowVisibility(group, hasQuery, groupNameMatch, allowHotkeys, allowGeneral, query);
         }
 
-        private static void ApplyMatchedModGroupRows(ModOptionGroup group, bool groupNameMatch, bool allowHotkeys, bool allowGeneral)
+        private static void ApplyMatchedModGroupRows(ModOptionGroup group, bool groupNameMatch, bool allowHotkeys, bool allowGeneral, string query)
         {
-            ApplyGroupRowVisibility(group, hasQuery: true, groupNameMatch, allowHotkeys, allowGeneral);
+            ApplyGroupRowVisibility(group, hasQuery: true, groupNameMatch, allowHotkeys, allowGeneral, query);
             ShowCardExpandedVisualOnly(group);
         }
 
-        internal static void ApplyGroupRowVisibility(ModOptionGroup group, bool hasQuery, bool groupNameMatch, bool allowHotkeys, bool allowGeneral)
+        internal static void ApplyGroupRowVisibility(ModOptionGroup group, bool hasQuery, bool groupNameMatch, bool allowHotkeys, bool allowGeneral, string? query = null)
         {
+            string actualQuery = query ?? (UiSessionState.SearchQuery ?? string.Empty).Trim();
             int visibleHotkeys = 0;
-            foreach (var hotkey in group.Hotkeys)
+            for (int i = 0; i < group.Hotkeys.Count; i++)
             {
-                bool match = allowHotkeys && (!hasQuery || groupNameMatch || IsHotkeyMatchQuery(hotkey, UiSessionState.SearchQuery));
+                var hotkey = group.Hotkeys[i];
+                bool match = allowHotkeys && (!hasQuery || groupNameMatch || IsHotkeyMatchQuery(hotkey, actualQuery));
                 if (UiSessionState.TryGetHotkeyUi(hotkey, out var hkUi))
                 {
                     SetObjectActive(hkUi.RowObject, match);
@@ -639,9 +778,10 @@ namespace ProbablyUnifiedHotkeys
             }
 
             int visibleGeneral = 0;
-            foreach (var gen in group.GeneralSettings)
+            for (int i = 0; i < group.GeneralSettings.Count; i++)
             {
-                bool match = allowGeneral && (!hasQuery || groupNameMatch || IsGeneralMatchQuery(gen, UiSessionState.SearchQuery));
+                var gen = group.GeneralSettings[i];
+                bool match = allowGeneral && (!hasQuery || groupNameMatch || IsGeneralMatchQuery(gen, actualQuery));
                 if (UiSessionState.TryGetGeneralUi(gen, out var genUi))
                 {
                     SetObjectActive(genUi.RowObject, match);
@@ -650,9 +790,10 @@ namespace ProbablyUnifiedHotkeys
             }
 
             int visibleProbed = 0;
-            foreach (var probed in group.ReadOnlyProbedHotkeys)
+            for (int i = 0; i < group.ReadOnlyProbedHotkeys.Count; i++)
             {
-                bool match = allowHotkeys && (!hasQuery || groupNameMatch || IsHotkeyMatchQuery(probed, UiSessionState.SearchQuery));
+                var probed = group.ReadOnlyProbedHotkeys[i];
+                bool match = allowHotkeys && (!hasQuery || groupNameMatch || IsHotkeyMatchQuery(probed, actualQuery));
                 if (UiSessionState.TryGetHotkeyUi(probed, out var probedUi))
                 {
                     SetObjectActive(probedUi.RowObject, match);
@@ -690,13 +831,18 @@ namespace ProbablyUnifiedHotkeys
 
             if (string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) && UiSessionState.SelfProfileSectionContainer != null)
             {
-                bool showProfileSection = (allowGeneral || allowHotkeys) && (!hasQuery || groupNameMatch || ProfilePresetCardView.IsProfileSectionMatchQuery(UiSessionState.SearchQuery));
+                bool showProfileSection = (allowGeneral || allowHotkeys) && (!hasQuery || groupNameMatch || ProfilePresetCardView.IsProfileSectionMatchQuery(actualQuery));
                 SetObjectActive(UiSessionState.SelfProfileSectionContainer, showProfileSection);
             }
         }
 
         private static bool AllVisibleCardsExpanded()
         {
+            if (s_progressiveExpandQueue.Count > 0)
+            {
+                return true;
+            }
+
             bool hasQuery = !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery);
             bool isFiltered = hasQuery || UiSessionState.NormalDisplayMode != NormalDisplayMode.All;
             int counted = 0;
@@ -739,7 +885,7 @@ namespace ProbablyUnifiedHotkeys
         }
 
         /// <summary>
-        /// 切换全部展开 / 全部收起（ADR-009 批量挂起重排优化，达成单帧瞬切）。
+        /// 切换全部展开 / 全部收起（视口优先瞬开 + 屏外分帧渐进展开，彻底根治 40+ 模组卡顿）。
         /// </summary>
         internal static void ToggleExpandAll()
         {
@@ -776,11 +922,10 @@ namespace ProbablyUnifiedHotkeys
                 return;
             }
 
+            // Bug #9：在「仅看冲突」页点击「全部展开」直接返回，绝不误跳回完整设置
             if (UiSessionState.IsConflictViewActive)
             {
-                UiSessionState.IsConflictViewActive = false;
-                ModDiagnosticView.SyncViewContainersAndToggleButtons();
-                ApplySearchFilter();
+                return;
             }
 
             UiSessionState.AllExpanded = !UiSessionState.AllExpanded;
@@ -788,48 +933,82 @@ namespace ProbablyUnifiedHotkeys
 
             bool isFiltered = !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery) || UiSessionState.NormalDisplayMode != NormalDisplayMode.All;
 
-            // 展开时，先遍历未构建的可见 ModGroups，在它们的 ContentContainerObject 仍处于 SetActive(false) 离线状态下调用 CollapsibleCardView.EnsureGroupContentBuilt(g) 批量建好内部控件
-            if (UiSessionState.AllExpanded)
+            // 1. 全部收起：脱机极速折叠（< 3ms 瞬间完成）
+            if (!UiSessionState.AllExpanded)
             {
+                ClearProgressiveExpandQueue();
+
+                foreach (var c in UiSessionState.VanillaCards)
+                {
+                    if (isFiltered && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
+                    c.SetExpanded(false);
+                    UiSessionState.VanillaExpandedStates[c.SectionId] = false;
+                }
+
+                bool containerWasActive = UiSessionState.ModCardsContainer != null && UiSessionState.ModCardsContainer.activeSelf;
+                if (containerWasActive)
+                {
+                    UiSessionState.ModCardsContainer!.SetActive(false);
+                }
                 foreach (var g in UiSessionState.ModGroups)
                 {
-                    if (UiSessionState.TryGetCardParts(g, out var parts))
+                    if (isFiltered && UiSessionState.TryGetCardParts(g, out var parts) && (parts.HeaderRowObject == null || !parts.HeaderRowObject.activeSelf))
                     {
-                        if (isFiltered && (parts.HeaderRowObject == null || !parts.HeaderRowObject.activeSelf)) continue;
-                        if (!parts.IsContentBuilt)
-                        {
-                            CollapsibleCardView.EnsureGroupContentBuilt(g);
-                        }
+                        continue;
                     }
+                    CollapsibleCardView.SetGroupExpanded(g, false);
                 }
+                if (containerWasActive)
+                {
+                    UiSessionState.ModCardsContainer!.SetActive(true);
+                }
+
+                if (UiSessionState.ScrollRect != null && UiSessionState.ScrollRect.content != null)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(UiSessionState.ScrollRect.content);
+                }
+                return;
             }
 
-            // 随后在 UiLayoutAndFontHelper.WithSuspendedRootLayout(...) 保护下一次性切换全部原版卡与模组卡的展开态，仅触发 1 次顶层 ScrollRect.content 布局重建，达成丝滑瞬切！
+            // 2. 全部展开：视口优先瞬开 + 屏外分帧渐进展开（Viewport-First Progressive Expand）
+            ClearProgressiveExpandQueue();
+
             UiLayoutAndFontHelper.WithSuspendedRootLayout(() =>
             {
                 using (ComboKeyStore.EnterBypass())
                 {
+                    // 原版 5 张卡同步秒开
                     foreach (var c in UiSessionState.VanillaCards)
                     {
                         if (isFiltered && (c.HeaderRowObject == null || !c.HeaderRowObject.activeSelf)) continue;
-                        c.SetExpanded(UiSessionState.AllExpanded);
-                        UiSessionState.VanillaExpandedStates[c.SectionId] = UiSessionState.AllExpanded;
-                        if (UiSessionState.AllExpanded)
-                        {
-                            UiLayoutAndFontHelper.SyncCompactActionButton(c.ResetButtonElement);
-                        }
+                        c.SetExpanded(true);
+                        UiSessionState.VanillaExpandedStates[c.SectionId] = true;
+                        UiLayoutAndFontHelper.SyncCompactActionButton(c.ResetButtonElement);
                     }
 
-                    foreach (var g in UiSessionState.ModGroups)
+                    // 视口前 4 张可见模组卡首帧同步瞬开（肉眼所见 < 8ms 展开到位）
+                    int immediateModCount = 0;
+                    for (int i = 0; i < UiSessionState.ModGroups.Count; i++)
                     {
+                        var g = UiSessionState.ModGroups[i];
                         if (UiSessionState.TryGetCardParts(g, out var parts))
                         {
                             if (isFiltered && (parts.HeaderRowObject == null || !parts.HeaderRowObject.activeSelf)) continue;
                         }
-                        CollapsibleCardView.SetGroupExpanded(g, UiSessionState.AllExpanded);
-                        if (UiSessionState.AllExpanded && UiSessionState.TryGetCardParts(g, out var p))
+
+                        if (immediateModCount < 4)
                         {
-                            UiLayoutAndFontHelper.SyncCompactActionButton(p.ResetButtonElement);
+                            CollapsibleCardView.SetGroupExpanded(g, true);
+                            if (UiSessionState.TryGetCardParts(g, out var p))
+                            {
+                                UiLayoutAndFontHelper.SyncCompactActionButton(p.ResetButtonElement);
+                            }
+                            immediateModCount++;
+                        }
+                        else
+                        {
+                            // 屏外卡片排入分帧渐进队列，TickCapture 每帧按 <= 4ms 预算平滑展开，不阻塞主线程
+                            s_progressiveExpandQueue.Add(g);
                         }
                     }
                 }

@@ -272,38 +272,54 @@ namespace ProbablyUnifiedHotkeys
                 HasExplicitDefault = true,
                 GetKey = () =>
                 {
+                    if (ComboKeyStore.IsExplicitlyUnbound(entryId)) return KeyCode.None;
                     KeyCode raw = getHotkey != null ? getHotkey() : (KeyCode)(hotkeyProp.GetValue(null) ?? KeyCode.None);
                     return ComboKeyStore.GetEffectiveCustomHotkey(entryId, KeyModifierMask.None, raw).Key;
                 },
                 GetExternalModifiers = () =>
                 {
+                    if (ComboKeyStore.IsExplicitlyUnbound(entryId)) return KeyModifierMask.None;
                     KeyCode raw = getHotkey != null ? getHotkey() : (KeyCode)(hotkeyProp.GetValue(null) ?? KeyCode.None);
                     return ComboKeyStore.GetEffectiveCustomHotkey(entryId, KeyModifierMask.None, raw).Modifiers;
                 },
                 SetKey = (key) =>
                 {
-                    ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.LeftAlt);
-                    if (setHotkey != null) setHotkey(key);
-                    else
+                    try
                     {
-                        if (setHotkeyProp != null) setHotkeyProp(key);
-                        else hotkeyProp.SetValue(null, key);
-                        try { PrefsStorage.SetInt("snd.hotkey", (int)key); }
-                        catch (Exception ex) { ModLogger.Debug($"PrefsStorage.SetInt snd.hotkey error: {ex.Message}"); }
-                        commit?.Invoke();
+                        ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.LeftAlt);
+                        if (setHotkey != null) setHotkey(key);
+                        else
+                        {
+                            if (setHotkeyProp != null) setHotkeyProp(key);
+                            else if (hotkeyProp.CanWrite && hotkeyProp.GetSetMethod(true) != null) hotkeyProp.SetValue(null, key);
+                            try { PrefsStorage.SetInt("snd.hotkey", (int)key); }
+                            catch (Exception ex) { ModLogger.Debug($"PrefsStorage.SetInt snd.hotkey error: {ex.Message}"); }
+                            commit?.Invoke();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"ShowItemNames SetKey failed: {ex.Message}");
                     }
                 },
                 SetCombo = (mods, key) =>
                 {
-                    ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, KeyCode.LeftAlt);
-                    if (setHotkey != null) setHotkey(key);
-                    else
+                    try
                     {
-                        if (setHotkeyProp != null) setHotkeyProp(key);
-                        else hotkeyProp.SetValue(null, key);
-                        try { PrefsStorage.SetInt("snd.hotkey", (int)key); }
-                        catch (Exception ex) { ModLogger.Debug($"PrefsStorage.SetInt snd.hotkey error: {ex.Message}"); }
-                        commit?.Invoke();
+                        ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, KeyCode.LeftAlt);
+                        if (setHotkey != null) setHotkey(key);
+                        else
+                        {
+                            if (setHotkeyProp != null) setHotkeyProp(key);
+                            else if (hotkeyProp.CanWrite && hotkeyProp.GetSetMethod(true) != null) hotkeyProp.SetValue(null, key);
+                            try { PrefsStorage.SetInt("snd.hotkey", (int)key); }
+                            catch (Exception ex) { ModLogger.Debug($"PrefsStorage.SetInt snd.hotkey error: {ex.Message}"); }
+                            commit?.Invoke();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"ShowItemNames SetCombo failed: {ex.Message}");
                     }
                 }
             });
@@ -323,12 +339,12 @@ namespace ProbablyUnifiedHotkeys
                     SetBool = (val) =>
                     {
                         if (setter != null) { setter(val); commit?.Invoke(); }
-                        else if (prop.CanWrite) { prop.SetValue(null, val); commit?.Invoke(); }
+                        else if (prop.CanWrite && prop.GetSetMethod(true) != null) { prop.SetValue(null, val); commit?.Invoke(); }
                     }
                 });
             }
 
-            if (_showItemHideOtherProp != null && _showItemHideOtherProp.CanWrite)
+            if (_showItemHideOtherProp != null && _showItemHideOtherProp.CanWrite && _showItemHideOtherProp.GetSetMethod(true) != null)
             {
                 var prop = _showItemHideOtherProp;
                 group.GeneralSettings.Add(new ModGeneralEntry
@@ -339,7 +355,11 @@ namespace ProbablyUnifiedHotkeys
                     Tooltip = BilingualText.Get("开启常显时隐藏原版重复的物品名称标签", "Hide duplicate vanilla item name labels while persistent names are active"),
                     Kind = OptionKind.Toggle,
                     GetBool = () => (bool)(prop.GetValue(null) ?? true),
-                    SetBool = (val) => { prop.SetValue(null, val); commit?.Invoke(); }
+                    SetBool = (val) =>
+                    {
+                        if (prop.CanWrite && prop.GetSetMethod(true) != null) prop.SetValue(null, val);
+                        commit?.Invoke();
+                    }
                 });
             }
 
@@ -358,7 +378,7 @@ namespace ProbablyUnifiedHotkeys
                     SetBool = (val) =>
                     {
                         if (setter != null) { setter(val); commit?.Invoke(); }
-                        else if (prop.CanWrite) { prop.SetValue(null, val); commit?.Invoke(); }
+                        else if (prop.CanWrite && prop.GetSetMethod(true) != null) { prop.SetValue(null, val); commit?.Invoke(); }
                     }
                 });
             }
@@ -378,7 +398,7 @@ namespace ProbablyUnifiedHotkeys
                     SetBool = (val) =>
                     {
                         if (setter != null) { setter(val); commit?.Invoke(); }
-                        else if (prop.CanWrite) { prop.SetValue(null, val); commit?.Invoke(); }
+                        else if (prop.CanWrite && prop.GetSetMethod(true) != null) { prop.SetValue(null, val); commit?.Invoke(); }
                     }
                 });
             }
@@ -400,7 +420,7 @@ namespace ProbablyUnifiedHotkeys
                     SetFloat = (val) =>
                     {
                         if (setter != null) { setter(val); commit?.Invoke(); }
-                        else if (prop.CanWrite) { prop.SetValue(null, val); commit?.Invoke(); }
+                        else if (prop.CanWrite && prop.GetSetMethod(true) != null) { prop.SetValue(null, val); commit?.Invoke(); }
                     }
                 });
             }
@@ -422,7 +442,7 @@ namespace ProbablyUnifiedHotkeys
                     SetFloat = (val) =>
                     {
                         if (setter != null) { setter(val); commit?.Invoke(); }
-                        else if (prop.CanWrite) { prop.SetValue(null, val); commit?.Invoke(); }
+                        else if (prop.CanWrite && prop.GetSetMethod(true) != null) { prop.SetValue(null, val); commit?.Invoke(); }
                     }
                 });
             }
@@ -482,62 +502,78 @@ namespace ProbablyUnifiedHotkeys
                 SupportsModifierCombos = true,
                 GetKey = () =>
                 {
+                    if (ComboKeyStore.IsExplicitlyUnbound(csEntryId)) return KeyCode.None;
                     KeyCode raw = getKey != null ? getKey() : (KeyCode)((_csKeyProp?.GetValue(null) ?? _csKeyField?.GetValue(null)) ?? KeyCode.None);
                     return ComboKeyStore.GetEffectiveCustomHotkey(csEntryId, KeyModifierMask.None, raw).Key;
                 },
                 GetExternalModifiers = () =>
                 {
+                    if (ComboKeyStore.IsExplicitlyUnbound(csEntryId)) return KeyModifierMask.None;
                     KeyCode raw = getKey != null ? getKey() : (KeyCode)((_csKeyProp?.GetValue(null) ?? _csKeyField?.GetValue(null)) ?? KeyCode.None);
                     return ComboKeyStore.GetEffectiveCustomHotkey(csEntryId, KeyModifierMask.None, raw).Modifiers;
                 },
                 SetKey = (key) =>
                 {
-                    ComboKeyStore.SetSavedCustomHotkey(csEntryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.F7);
-                    _csKeyField?.SetValue(null, key);
-                    _csLoadedField?.SetValue(null, true);
-                    if (setKeyProp != null) setKeyProp(key);
-                    else _csKeyProp?.SetValue(null, key);
+                    try
+                    {
+                        ComboKeyStore.SetSavedCustomHotkey(csEntryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.F7);
+                        _csKeyField?.SetValue(null, key);
+                        _csLoadedField?.SetValue(null, true);
+                        if (setKeyProp != null) setKeyProp(key);
+                        else if (_csKeyProp != null && _csKeyProp.CanWrite && _csKeyProp.GetSetMethod(true) != null) _csKeyProp.SetValue(null, key);
 
-                    if (key != KeyCode.None && saveMethod != null)
-                    {
-                        saveMethod(key);
+                        if (key != KeyCode.None && saveMethod != null)
+                        {
+                            saveMethod(key);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                PrefsStorage.SetString("conflict_scanner.report_key", key == KeyCode.None ? "None" : key.ToString());
+                                PrefsStorage.Save();
+                            }
+                            catch (Exception ex)
+                            {
+                                ModLogger.Debug($"PrefsStorage.SetString conflict_scanner.report_key error: {ex.Message}");
+                            }
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        try
-                        {
-                            PrefsStorage.SetString("conflict_scanner.report_key", key == KeyCode.None ? "None" : key.ToString());
-                            PrefsStorage.Save();
-                        }
-                        catch (Exception ex)
-                        {
-                            ModLogger.Debug($"PrefsStorage.SetString conflict_scanner.report_key error: {ex.Message}");
-                        }
+                        ModLogger.Warn($"ConflictScanner SetKey failed: {ex.Message}");
                     }
                 },
                 SetCombo = (mods, key) =>
                 {
-                    ComboKeyStore.SetSavedCustomHotkey(csEntryId, mods, key, KeyModifierMask.None, KeyCode.F7);
-                    _csKeyField?.SetValue(null, key);
-                    _csLoadedField?.SetValue(null, true);
-                    if (setKeyProp != null) setKeyProp(key);
-                    else _csKeyProp?.SetValue(null, key);
+                    try
+                    {
+                        ComboKeyStore.SetSavedCustomHotkey(csEntryId, mods, key, KeyModifierMask.None, KeyCode.F7);
+                        _csKeyField?.SetValue(null, key);
+                        _csLoadedField?.SetValue(null, true);
+                        if (setKeyProp != null) setKeyProp(key);
+                        else if (_csKeyProp != null && _csKeyProp.CanWrite && _csKeyProp.GetSetMethod(true) != null) _csKeyProp.SetValue(null, key);
 
-                    if (key != KeyCode.None && saveMethod != null)
-                    {
-                        saveMethod(key);
+                        if (key != KeyCode.None && saveMethod != null)
+                        {
+                            saveMethod(key);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                PrefsStorage.SetString("conflict_scanner.report_key", key == KeyCode.None ? "None" : key.ToString());
+                                PrefsStorage.Save();
+                            }
+                            catch (Exception ex)
+                            {
+                                ModLogger.Debug($"PrefsStorage.SetString conflict_scanner.report_key error: {ex.Message}");
+                            }
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        try
-                        {
-                            PrefsStorage.SetString("conflict_scanner.report_key", key == KeyCode.None ? "None" : key.ToString());
-                            PrefsStorage.Save();
-                        }
-                        catch (Exception ex)
-                        {
-                            ModLogger.Debug($"PrefsStorage.SetString conflict_scanner.report_key error: {ex.Message}");
-                        }
+                        ModLogger.Warn($"ConflictScanner SetCombo failed: {ex.Message}");
                     }
                 }
             });
@@ -581,29 +617,73 @@ namespace ProbablyUnifiedHotkeys
                 PinyinSortKey = PinyinEngine.ToInitials(repName)
             };
 
+            const string repId = "faction_reputation.journal_key";
             group.Hotkeys.Add(new ModHotkeyEntry
             {
-                Id = "faction_reputation.journal_key",
+                Id = repId,
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
                 DisplayName = BilingualText.Get("打开势力声望手帐", "Open Faction Journal"),
                 Tooltip = BilingualText.Get("按此键在游戏中打开或关闭各势力声望详情界面", "Toggle the Faction Reputation journal in-game"),
                 DefaultKey = KeyCode.J,
                 HasExplicitDefault = true,
-                GetKey = () => getJournalKey != null ? getJournalKey() : (KeyCode)(journalProp.GetValue(null) ?? KeyCode.None),
+                SupportsModifierCombos = true,
+                GetKey = () =>
+                {
+                    if (ComboKeyStore.IsExplicitlyUnbound(repId)) return KeyCode.None;
+                    KeyCode raw = getJournalKey != null ? getJournalKey() : (KeyCode)(journalProp.GetValue(null) ?? KeyCode.None);
+                    return ComboKeyStore.GetEffectiveCustomHotkey(repId, KeyModifierMask.None, raw).Key;
+                },
+                GetExternalModifiers = () =>
+                {
+                    if (ComboKeyStore.IsExplicitlyUnbound(repId)) return KeyModifierMask.None;
+                    KeyCode raw = getJournalKey != null ? getJournalKey() : (KeyCode)(journalProp.GetValue(null) ?? KeyCode.None);
+                    return ComboKeyStore.GetEffectiveCustomHotkey(repId, KeyModifierMask.None, raw).Modifiers;
+                },
                 SetKey = (key) =>
                 {
-                    if (setJournalKey != null)
+                    try
                     {
-                        setJournalKey(key, false);
+                        ComboKeyStore.SetSavedCustomHotkey(repId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.J);
+                        if (setJournalKey != null)
+                        {
+                            setJournalKey(key, false);
+                        }
+                        else if (setJournalProp != null)
+                        {
+                            setJournalProp(key);
+                        }
+                        else if (journalProp.CanWrite && journalProp.GetSetMethod(true) != null)
+                        {
+                            journalProp.SetValue(null, key);
+                        }
                     }
-                    else if (setJournalProp != null)
+                    catch (Exception ex)
                     {
-                        setJournalProp(key);
+                        ModLogger.Warn($"FactionReputation SetKey failed: {ex.Message}");
                     }
-                    else
+                },
+                SetCombo = (mods, key) =>
+                {
+                    try
                     {
-                        journalProp.SetValue(null, key);
+                        ComboKeyStore.SetSavedCustomHotkey(repId, mods, key, KeyModifierMask.None, KeyCode.J);
+                        if (setJournalKey != null)
+                        {
+                            setJournalKey(key, false);
+                        }
+                        else if (setJournalProp != null)
+                        {
+                            setJournalProp(key);
+                        }
+                        else if (journalProp.CanWrite && journalProp.GetSetMethod(true) != null)
+                        {
+                            journalProp.SetValue(null, key);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"FactionReputation SetCombo failed: {ex.Message}");
                     }
                 }
             });
@@ -646,29 +726,73 @@ namespace ProbablyUnifiedHotkeys
                 PinyinSortKey = PinyinEngine.ToInitials(cdhName)
             };
 
+            const string cdhEntryId = "clientdemandhighlight.toggle_key";
             group.Hotkeys.Add(new ModHotkeyEntry
             {
-                Id = "clientdemandhighlight.toggle_key",
+                Id = cdhEntryId,
                 ModId = group.ModId,
                 ModDisplayName = group.DisplayName,
                 DisplayName = BilingualText.Get("切换高亮热键", "Toggle Highlight Key"),
                 Tooltip = BilingualText.Get("按此键切换是否高亮当前顾客需求的特殊物品", "Toggle highlighting items requested by the current customer"),
                 DefaultKey = KeyCode.H,
                 HasExplicitDefault = true,
-                GetKey = () => getToggle != null ? getToggle() : (KeyCode)((toggleProp?.GetValue(null) ?? toggleField?.GetValue(null)) ?? KeyCode.None),
+                SupportsModifierCombos = true,
+                GetKey = () =>
+                {
+                    if (ComboKeyStore.IsExplicitlyUnbound(cdhEntryId)) return KeyCode.None;
+                    KeyCode raw = getToggle != null ? getToggle() : (KeyCode)((toggleProp?.GetValue(null) ?? toggleField?.GetValue(null)) ?? KeyCode.None);
+                    return ComboKeyStore.GetEffectiveCustomHotkey(cdhEntryId, KeyModifierMask.None, raw).Key;
+                },
+                GetExternalModifiers = () =>
+                {
+                    if (ComboKeyStore.IsExplicitlyUnbound(cdhEntryId)) return KeyModifierMask.None;
+                    KeyCode raw = getToggle != null ? getToggle() : (KeyCode)((toggleProp?.GetValue(null) ?? toggleField?.GetValue(null)) ?? KeyCode.None);
+                    return ComboKeyStore.GetEffectiveCustomHotkey(cdhEntryId, KeyModifierMask.None, raw).Modifiers;
+                },
                 SetKey = (key) =>
                 {
-                    if (setToggle != null) setToggle(key);
-                    else if (toggleProp != null && toggleProp.CanWrite) toggleProp.SetValue(null, key);
-                    else toggleField?.SetValue(null, key);
                     try
                     {
-                        PrefsStorage.SetInt("clientdemandhighlight.key", (int)key);
-                        PrefsStorage.Save();
+                        ComboKeyStore.SetSavedCustomHotkey(cdhEntryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.H);
+                        if (setToggle != null) setToggle(key);
+                        else if (toggleProp != null && toggleProp.CanWrite && toggleProp.GetSetMethod(true) != null) toggleProp.SetValue(null, key);
+                        else toggleField?.SetValue(null, key);
+                        try
+                        {
+                            PrefsStorage.SetInt("clientdemandhighlight.key", (int)key);
+                            PrefsStorage.Save();
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"PrefsStorage.SetInt clientdemandhighlight.key error: {ex.Message}");
+                        }
                     }
                     catch (Exception ex)
                     {
-                        ModLogger.Debug($"PrefsStorage.SetInt clientdemandhighlight.key error: {ex.Message}");
+                        ModLogger.Warn($"ClientDemandHighlight SetKey failed: {ex.Message}");
+                    }
+                },
+                SetCombo = (mods, key) =>
+                {
+                    try
+                    {
+                        ComboKeyStore.SetSavedCustomHotkey(cdhEntryId, mods, key, KeyModifierMask.None, KeyCode.H);
+                        if (setToggle != null) setToggle(key);
+                        else if (toggleProp != null && toggleProp.CanWrite && toggleProp.GetSetMethod(true) != null) toggleProp.SetValue(null, key);
+                        else toggleField?.SetValue(null, key);
+                        try
+                        {
+                            PrefsStorage.SetInt("clientdemandhighlight.key", (int)key);
+                            PrefsStorage.Save();
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"PrefsStorage.SetInt clientdemandhighlight.key error: {ex.Message}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"ClientDemandHighlight SetCombo failed: {ex.Message}");
                     }
                 }
             });
@@ -723,19 +847,52 @@ namespace ProbablyUnifiedHotkeys
                 PropertyInfo? prop = PenCachedProps[i];
                 if (prop != null)
                 {
+                    string entryId = $"pen_qol.{propName.ToLowerInvariant()}";
                     group.Hotkeys.Add(new ModHotkeyEntry
                     {
-                        Id = $"pen_qol.{propName.ToLowerInvariant()}",
+                        Id = entryId,
                         ModId = group.ModId,
                         ModDisplayName = group.DisplayName,
                         DisplayName = label,
                         Tooltip = BilingualText.Format("Pen便利性优化操作快捷键：{0}", "Pen's QoL Tweaks hotkey: {0}", label),
                         DefaultKey = (KeyCode)(prop.GetValue(null) ?? KeyCode.None),
                         HasExplicitDefault = false,
-                        GetKey = () => (KeyCode)(prop.GetValue(null) ?? KeyCode.None),
+                        SupportsModifierCombos = true,
+                        GetKey = () =>
+                        {
+                            if (ComboKeyStore.IsExplicitlyUnbound(entryId)) return KeyCode.None;
+                            KeyCode raw = (KeyCode)(prop.GetValue(null) ?? KeyCode.None);
+                            return ComboKeyStore.GetEffectiveCustomHotkey(entryId, KeyModifierMask.None, raw).Key;
+                        },
+                        GetExternalModifiers = () =>
+                        {
+                            if (ComboKeyStore.IsExplicitlyUnbound(entryId)) return KeyModifierMask.None;
+                            KeyCode raw = (KeyCode)(prop.GetValue(null) ?? KeyCode.None);
+                            return ComboKeyStore.GetEffectiveCustomHotkey(entryId, KeyModifierMask.None, raw).Modifiers;
+                        },
                         SetKey = (key) =>
                         {
-                            if (prop.CanWrite) prop.SetValue(null, key);
+                            try
+                            {
+                                ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, (KeyCode)(prop.GetValue(null) ?? KeyCode.None));
+                                if (prop.CanWrite && prop.GetSetMethod(true) != null) prop.SetValue(null, key);
+                            }
+                            catch (Exception ex)
+                            {
+                                ModLogger.Warn($"PenQoL SetKey failed for {propName}: {ex.Message}");
+                            }
+                        },
+                        SetCombo = (mods, key) =>
+                        {
+                            try
+                            {
+                                ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, (KeyCode)(prop.GetValue(null) ?? KeyCode.None));
+                                if (prop.CanWrite && prop.GetSetMethod(true) != null) prop.SetValue(null, key);
+                            }
+                            catch (Exception ex)
+                            {
+                                ModLogger.Warn($"PenQoL SetCombo failed for {propName}: {ex.Message}");
+                            }
                         }
                     });
                 }
@@ -771,7 +928,7 @@ namespace ProbablyUnifiedHotkeys
                 Tooltip = BilingualText.Get("关闭后快捷键整理功能将暂停响应", "Disables quick inventory arrange hotkey when unchecked"),
                 Kind = OptionKind.Toggle,
                 GetBool = () => (bool)(enabledProp.GetValue(null) ?? true),
-                SetBool = (val) => { if (enabledProp.CanWrite) enabledProp.SetValue(null, val); }
+                SetBool = (val) => { if (enabledProp.CanWrite && enabledProp.GetSetMethod(true) != null) enabledProp.SetValue(null, val); }
             });
 
             SupplementSmartInventoryArrangeGroup(group);
@@ -886,7 +1043,10 @@ namespace ProbablyUnifiedHotkeys
                 bool shift = (normMods & KeyModifierMask.Shift) != 0;
 
                 object newHk = _smartArrangeHotkeyCtor.Invoke(new object[] { key, ctrl, alt, shift });
-                modelProp.SetValue(model, newHk);
+                if (modelProp.CanWrite && modelProp.GetSetMethod(true) != null)
+                {
+                    modelProp.SetValue(model, newHk);
+                }
                 if (saveGui)
                 {
                     _smartArrangeGuiSaveMethod?.Invoke(gui, null);
@@ -980,6 +1140,7 @@ namespace ProbablyUnifiedHotkeys
 
                     hk.GetKey = () =>
                     {
+                        if (ComboKeyStore.IsExplicitlyUnbound(entryId)) return KeyCode.None;
                         if (TryReadSmartArrangeModelHotkey(capturedProp, out var mMods, out var mKey))
                         {
                             return ComboKeyStore.GetEffectiveCustomHotkey(entryId, mMods, mKey).Key;
@@ -989,6 +1150,7 @@ namespace ProbablyUnifiedHotkeys
                     };
                     hk.GetExternalModifiers = () =>
                     {
+                        if (ComboKeyStore.IsExplicitlyUnbound(entryId)) return KeyModifierMask.None;
                         if (TryReadSmartArrangeModelHotkey(capturedProp, out var mMods, out var mKey))
                         {
                             return ComboKeyStore.GetEffectiveCustomHotkey(entryId, mMods, mKey).Modifiers;
@@ -999,23 +1161,37 @@ namespace ProbablyUnifiedHotkeys
                     };
                     hk.SetKey = (newKey) =>
                     {
-                        ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, newKey, KeyModifierMask.None, capDefaultKey);
-                        origSetKey?.Invoke(newKey);
-                        SetSmartArrangeModelHotkey(capturedProp, KeyModifierMask.None, newKey, saveGui: true);
-                        if (autoEnableBatch && newKey != KeyCode.None)
+                        try
                         {
-                            _smartArrangeSetBatchFn?.Invoke(true);
+                            ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, newKey, KeyModifierMask.None, capDefaultKey);
+                            origSetKey?.Invoke(newKey);
+                            SetSmartArrangeModelHotkey(capturedProp, KeyModifierMask.None, newKey, saveGui: true);
+                            if (autoEnableBatch && newKey != KeyCode.None)
+                            {
+                                _smartArrangeSetBatchFn?.Invoke(true);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Warn($"SmartInventoryArrange SetKey failed: {ex.Message}");
                         }
                     };
                     hk.SetCombo = (newMods, newKey) =>
                     {
-                        ComboKeyStore.SetSavedCustomHotkey(entryId, newMods, newKey, KeyModifierMask.None, capDefaultKey);
-                        if (origSetCombo != null) origSetCombo(newMods, newKey);
-                        else origSetKey?.Invoke(newKey);
-                        SetSmartArrangeModelHotkey(capturedProp, newMods, newKey, saveGui: true);
-                        if (autoEnableBatch && newKey != KeyCode.None)
+                        try
                         {
-                            _smartArrangeSetBatchFn?.Invoke(true);
+                            ComboKeyStore.SetSavedCustomHotkey(entryId, newMods, newKey, KeyModifierMask.None, capDefaultKey);
+                            if (origSetCombo != null) origSetCombo(newMods, newKey);
+                            else origSetKey?.Invoke(newKey);
+                            SetSmartArrangeModelHotkey(capturedProp, newMods, newKey, saveGui: true);
+                            if (autoEnableBatch && newKey != KeyCode.None)
+                            {
+                                _smartArrangeSetBatchFn?.Invoke(true);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Warn($"SmartInventoryArrange SetCombo failed: {ex.Message}");
                         }
                     };
                 }
@@ -1049,17 +1225,39 @@ namespace ProbablyUnifiedHotkeys
                     DefaultModifiers = KeyModifierMask.None,
                     HasExplicitDefault = true,
                     SupportsModifierCombos = true,
-                    GetKey = () => ComboKeyStore.GetEffectiveCustomHotkey(altPlaceId, KeyModifierMask.None, KeyCode.LeftAlt).Key,
-                    GetExternalModifiers = () => ComboKeyStore.GetEffectiveCustomHotkey(altPlaceId, KeyModifierMask.None, KeyCode.LeftAlt).Modifiers,
+                    GetKey = () =>
+                    {
+                        if (ComboKeyStore.IsExplicitlyUnbound(altPlaceId)) return KeyCode.None;
+                        return ComboKeyStore.GetEffectiveCustomHotkey(altPlaceId, KeyModifierMask.None, KeyCode.LeftAlt).Key;
+                    },
+                    GetExternalModifiers = () =>
+                    {
+                        if (ComboKeyStore.IsExplicitlyUnbound(altPlaceId)) return KeyModifierMask.None;
+                        return ComboKeyStore.GetEffectiveCustomHotkey(altPlaceId, KeyModifierMask.None, KeyCode.LeftAlt).Modifiers;
+                    },
                     SetKey = (key) =>
                     {
-                        ComboKeyStore.SetSavedCustomHotkey(altPlaceId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.LeftAlt);
-                        if (key != KeyCode.None) _smartArrangeSetFixedFn?.Invoke(true);
+                        try
+                        {
+                            ComboKeyStore.SetSavedCustomHotkey(altPlaceId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.LeftAlt);
+                            if (key != KeyCode.None) _smartArrangeSetFixedFn?.Invoke(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Warn($"SmartInventoryArrange alt placement SetKey failed: {ex.Message}");
+                        }
                     },
                     SetCombo = (mods, key) =>
                     {
-                        ComboKeyStore.SetSavedCustomHotkey(altPlaceId, mods, key, KeyModifierMask.None, KeyCode.LeftAlt);
-                        if (key != KeyCode.None) _smartArrangeSetFixedFn?.Invoke(true);
+                        try
+                        {
+                            ComboKeyStore.SetSavedCustomHotkey(altPlaceId, mods, key, KeyModifierMask.None, KeyCode.LeftAlt);
+                            if (key != KeyCode.None) _smartArrangeSetFixedFn?.Invoke(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Warn($"SmartInventoryArrange alt placement SetCombo failed: {ex.Message}");
+                        }
                     }
                 });
             }
@@ -1096,8 +1294,28 @@ namespace ProbablyUnifiedHotkeys
                 SupportsModifierCombos = true,
                 GetKey = () => ComboKeyStore.GetEffectiveCustomHotkey(entryId, KeyModifierMask.None, KeyCode.Mouse2).Key,
                 GetExternalModifiers = () => ComboKeyStore.GetEffectiveCustomHotkey(entryId, KeyModifierMask.None, KeyCode.Mouse2).Modifiers,
-                SetKey = (key) => ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.Mouse2),
-                SetCombo = (mods, key) => ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, KeyCode.Mouse2)
+                SetKey = (key) =>
+                {
+                    try
+                    {
+                        ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.Mouse2);
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"BetterPerformance SetKey failed: {ex.Message}");
+                    }
+                },
+                SetCombo = (mods, key) =>
+                {
+                    try
+                    {
+                        ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, KeyCode.Mouse2);
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"BetterPerformance SetCombo failed: {ex.Message}");
+                    }
+                }
             });
         }
 
@@ -1132,8 +1350,28 @@ namespace ProbablyUnifiedHotkeys
                 SupportsModifierCombos = true,
                 GetKey = () => ComboKeyStore.GetEffectiveCustomHotkey(entryId, KeyModifierMask.None, KeyCode.LeftShift).Key,
                 GetExternalModifiers = () => ComboKeyStore.GetEffectiveCustomHotkey(entryId, KeyModifierMask.None, KeyCode.LeftShift).Modifiers,
-                SetKey = (key) => ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.LeftShift),
-                SetCombo = (mods, key) => ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, KeyCode.LeftShift)
+                SetKey = (key) =>
+                {
+                    try
+                    {
+                        ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, KeyCode.LeftShift);
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"PreciseGroupDrag SetKey failed: {ex.Message}");
+                    }
+                },
+                SetCombo = (mods, key) =>
+                {
+                    try
+                    {
+                        ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, KeyCode.LeftShift);
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"PreciseGroupDrag SetCombo failed: {ex.Message}");
+                    }
+                }
             });
         }
 
@@ -1215,25 +1453,39 @@ namespace ProbablyUnifiedHotkeys
                 },
                 SetKey = (key) =>
                 {
-                    if (expandDropdown?.SetIndex != null)
+                    try
                     {
-                        if (key == KeyCode.LeftControl || key == KeyCode.RightControl) expandDropdown.SetIndex(0);
-                        else if (key == KeyCode.LeftShift || key == KeyCode.RightShift) expandDropdown.SetIndex(1);
-                        else if (key == KeyCode.LeftAlt || key == KeyCode.RightAlt) expandDropdown.SetIndex(2);
+                        if (expandDropdown?.SetIndex != null)
+                        {
+                            if (key == KeyCode.LeftControl || key == KeyCode.RightControl) expandDropdown.SetIndex(0);
+                            else if (key == KeyCode.LeftShift || key == KeyCode.RightShift) expandDropdown.SetIndex(1);
+                            else if (key == KeyCode.LeftAlt || key == KeyCode.RightAlt) expandDropdown.SetIndex(2);
+                        }
+                        KeyCode defKey = GetItemDetailsConfigDefaultKey(group);
+                        ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, defKey);
                     }
-                    KeyCode defKey = GetItemDetailsConfigDefaultKey(group);
-                    ComboKeyStore.SetSavedCustomHotkey(entryId, KeyModifierMask.None, key, KeyModifierMask.None, defKey);
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"ItemDetails SetKey failed: {ex.Message}");
+                    }
                 },
                 SetCombo = (mods, key) =>
                 {
-                    if (mods == KeyModifierMask.None && expandDropdown?.SetIndex != null)
+                    try
                     {
-                        if (key == KeyCode.LeftControl || key == KeyCode.RightControl) expandDropdown.SetIndex(0);
-                        else if (key == KeyCode.LeftShift || key == KeyCode.RightShift) expandDropdown.SetIndex(1);
-                        else if (key == KeyCode.LeftAlt || key == KeyCode.RightAlt) expandDropdown.SetIndex(2);
+                        if (mods == KeyModifierMask.None && expandDropdown?.SetIndex != null)
+                        {
+                            if (key == KeyCode.LeftControl || key == KeyCode.RightControl) expandDropdown.SetIndex(0);
+                            else if (key == KeyCode.LeftShift || key == KeyCode.RightShift) expandDropdown.SetIndex(1);
+                            else if (key == KeyCode.LeftAlt || key == KeyCode.RightAlt) expandDropdown.SetIndex(2);
+                        }
+                        KeyCode defKey = GetItemDetailsConfigDefaultKey(group);
+                        ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, defKey);
                     }
-                    KeyCode defKey = GetItemDetailsConfigDefaultKey(group);
-                    ComboKeyStore.SetSavedCustomHotkey(entryId, mods, key, KeyModifierMask.None, defKey);
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"ItemDetails SetCombo failed: {ex.Message}");
+                    }
                 }
             });
         }
@@ -1366,7 +1618,7 @@ namespace ProbablyUnifiedHotkeys
 
                 keyField?.SetValue(null, targetKey);
                 loadedField?.SetValue(null, true);
-                if (keyProp != null && keyProp.CanWrite)
+                if (keyProp != null && keyProp.CanWrite && keyProp.GetSetMethod(true) != null)
                 {
                     keyProp.SetValue(null, targetKey);
                 }
@@ -1427,7 +1679,7 @@ namespace ProbablyUnifiedHotkeys
                 {
                     setHotkey.Invoke(null, new object[] { targetKey });
                 }
-                else if (hotkeyProp != null && hotkeyProp.CanWrite)
+                else if (hotkeyProp != null && hotkeyProp.CanWrite && hotkeyProp.GetSetMethod(true) != null)
                 {
                     hotkeyProp.SetValue(null, targetKey);
                 }
@@ -1560,6 +1812,7 @@ namespace ProbablyUnifiedHotkeys
                 SupportsModifierCombos = false,
                 GetKey = () =>
                 {
+                    if (ComboKeyStore.IsExplicitlyUnbound("probablystolen.trainer.toggle")) return KeyCode.None;
                     if (TryReadTrainerSavedHotkey(out KeyCode latest))
                     {
                         _trainerCachedKey = latest;
@@ -1570,13 +1823,22 @@ namespace ProbablyUnifiedHotkeys
                 },
                 SetKey = (val) =>
                 {
-                    _trainerCachedKey = val;
-                    _trainerHasCachedKey = true;
-                    _trainerBootSynced = true;
-                    GameObject? host = TryFindTrainerHost();
-                    if (host != null && !TrySendTrainerHotkey(host, val, out Exception? ex) && ex != null)
+                    try
                     {
-                        ModLogger.Warn($"同步修改器热键失败: {ex.Message}", ex);
+                        if (val == KeyCode.None) ComboKeyStore.SetExplicitlyUnbound("probablystolen.trainer.toggle", true);
+                        else ComboKeyStore.SetExplicitlyUnbound("probablystolen.trainer.toggle", false);
+                        _trainerCachedKey = val;
+                        _trainerHasCachedKey = true;
+                        _trainerBootSynced = true;
+                        GameObject? host = TryFindTrainerHost();
+                        if (host != null && !TrySendTrainerHotkey(host, val, out Exception? ex) && ex != null)
+                        {
+                            ModLogger.Warn($"同步修改器热键失败: {ex.Message}", ex);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"Trainer SetKey failed: {ex.Message}");
                     }
                 }
             });

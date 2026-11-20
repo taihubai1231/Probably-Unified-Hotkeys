@@ -20,6 +20,15 @@ namespace ProbablyUnifiedHotkeys
 
         internal static void BuildSelfModProfileSection(CustomUIBuilder builder)
         {
+            UiSessionState.RemoveWindowElements(k =>
+                k == "profile_hdr_self" ||
+                k == "label_profile_action_status" ||
+                k == "label_profile_clipboard_row" ||
+                k == "btn_self_export_json" ||
+                k == "btn_self_import_json" ||
+                k.StartsWith("label_profile_slot_") ||
+                k.StartsWith("btn_slot_"));
+
             builder.BeginColumn(4f, TextAnchor.UpperLeft);
             UiSessionState.SelfProfileSectionContainer = builder.CurrentContainer.gameObject;
             var vlg = UiSessionState.SelfProfileSectionContainer.GetComponent<VerticalLayoutGroup>();
@@ -102,6 +111,16 @@ namespace ProbablyUnifiedHotkeys
             UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 10f);
             builder.End();
 
+            // 实时操作反馈状态行
+            builder.BeginRow(4f, TextAnchor.MiddleLeft);
+            UiLayoutAndFontHelper.ConfigureStretchRowObject(builder.CurrentContainer.gameObject, 28f);
+            UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 18f);
+            builder.AddLabel(string.Empty, "label_profile_action_status");
+            UiSessionState.ProfileActionStatusLabel = builder.Last;
+            UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(builder.Last, string.Empty, minWidth: 260f, minHeight: 24f);
+            UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 10f);
+            builder.End();
+
             builder.End(); // End SelfProfileSectionContainer
         }
 
@@ -141,42 +160,124 @@ namespace ProbablyUnifiedHotkeys
             RefreshProfileSlotButtonAppearance();
         }
 
+        internal static void SetProfileFeedbackStatus(string statusRichText)
+        {
+            if (UiSessionState.ProfileActionStatusLabel != null)
+            {
+                UiLayoutAndFontHelper.SetTextIfChanged(UiSessionState.ProfileActionStatusLabel, statusRichText);
+                I18n.ApplyFontIfRuntime(UiSessionState.ProfileActionStatusLabel.text, statusRichText);
+            }
+            if (UiSessionState.CurrentManager != null)
+            {
+                string plain = System.Text.RegularExpressions.Regex.Replace(statusRichText, "<.*?>", string.Empty).Trim();
+                UiSessionState.SetKeyBindStatusDelegate?.Invoke(UiSessionState.CurrentManager, plain);
+            }
+        }
+
         internal static void OnSaveProfileSlotClicked(int slotIndex)
         {
             UiSessionState.CancelCapture();
             if (UiSessionState.CurrentManager != null)
             {
-                if (UiSessionState.ApplyAllSettingsCallback != null)
+                try
                 {
-                    UiSessionState.ApplyAllSettingsCallback.Invoke(UiSessionState.CurrentManager);
+                    if (UiSessionState.ApplyAllSettingsCallback != null)
+                    {
+                        UiSessionState.ApplyAllSettingsCallback.Invoke(UiSessionState.CurrentManager);
+                    }
+                    else
+                    {
+                        UnifiedOptionWindow.ApplyAllSettings(UiSessionState.CurrentManager);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    UnifiedOptionWindow.ApplyAllSettings(UiSessionState.CurrentManager);
+                    ModLogger.Warn($"Failed to apply settings before profile save: {ex.Message}");
                 }
             }
 
-            HotkeyProfileManager.SaveToSlot(slotIndex, UiSessionState.AllHotkeys, UiSessionState.ModGroups, out _, out _);
-            RefreshProfileSlotButtonAppearance();
+            try
+            {
+                HotkeyProfileManager.SaveToSlot(slotIndex, UiSessionState.AllHotkeys, UiSessionState.ModGroups, out int hkCount, out int genCount);
+                RefreshProfileSlotButtonAppearance();
+
+                string slotName = HotkeyProfileManager.GetSlotDisplayName(slotIndex);
+                string timeStr = DateTime.Now.ToString("HH:mm:ss");
+                string statusMsg = I18n.Format(
+                    "<color=#86efac>✓ 已将当前全部键位与设置保存至【{0}】 ({1})</color>",
+                    "<color=#86efac>✓ Saved all keybinds and settings to [{0}] ({1})</color>",
+                    slotName, timeStr);
+                SetProfileFeedbackStatus(statusMsg);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to save profile: {ex.Message}");
+                string failMsg = I18n.Format(
+                    "<color=#ff8a8a>✗ 保存预设异常：{0}</color>",
+                    "<color=#ff8a8a>✗ Profile save error: {0}</color>",
+                    ex.Message);
+                SetProfileFeedbackStatus(failMsg);
+            }
         }
 
         internal static void OnLoadProfileSlotClicked(int slotIndex)
         {
             UiSessionState.CancelCapture();
+            string slotName = HotkeyProfileManager.GetSlotDisplayName(slotIndex);
             if (!HotkeyProfileManager.TryLoadSlotSnapshot(slotIndex, out var snapshot, out _) || snapshot == null)
             {
+                string warnMsg = I18n.Format(
+                    "<color=#ffd27d>⚠ 【{0}】暂无存档，请先点击「保存」</color>",
+                    "<color=#ffd27d>⚠ [{0}] is empty, please click 'Save' first</color>",
+                    slotName);
+                SetProfileFeedbackStatus(warnMsg);
                 return;
             }
 
-            ApplyProfileSnapshotToCurrentSession(snapshot);
-            RefreshProfileSlotButtonAppearance();
+            try
+            {
+                ApplyProfileSnapshotToCurrentSession(snapshot, out int hkCount, out int genCount);
+                RefreshProfileSlotButtonAppearance();
+
+                string successMsg = I18n.Format(
+                    "<color=#86efac>✓ 已读取并应用【{0}】（恢复 {1} 项按键 / {2} 项设置）</color>",
+                    "<color=#86efac>✓ Loaded [{0}] ({1} keys / {2} settings restored)</color>",
+                    slotName, hkCount, genCount);
+                SetProfileFeedbackStatus(successMsg);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to load profile snapshot: {ex.Message}");
+                string failMsg = I18n.Format(
+                    "<color=#ff8a8a>✗ 读取应用异常：{0}</color>",
+                    "<color=#ff8a8a>✗ Load application error: {0}</color>",
+                    ex.Message);
+                SetProfileFeedbackStatus(failMsg);
+            }
         }
 
         internal static void OnClearProfileSlotClicked(int slotIndex)
         {
             UiSessionState.CancelCapture();
+            string slotName = HotkeyProfileManager.GetSlotDisplayName(slotIndex);
+            if (!HotkeyProfileManager.HasSlotData(slotIndex))
+            {
+                string alreadyEmptyMsg = I18n.Format(
+                    "<color=#99a3b0>【{0}】已是空槽位</color>",
+                    "<color=#99a3b0>[{0}] is already empty</color>",
+                    slotName);
+                SetProfileFeedbackStatus(alreadyEmptyMsg);
+                return;
+            }
+
             HotkeyProfileManager.ClearSlot(slotIndex);
             RefreshProfileSlotButtonAppearance();
+
+            string clearedMsg = I18n.Format(
+                "<color=#ffd27d>✓ 已清空【{0}】存档数据</color>",
+                "<color=#ffd27d>✓ Cleared [{0}] profile data</color>",
+                slotName);
+            SetProfileFeedbackStatus(clearedMsg);
         }
 
         internal static void OnExportClipboardClicked()
@@ -184,36 +285,101 @@ namespace ProbablyUnifiedHotkeys
             UiSessionState.CancelCapture();
             if (UiSessionState.CurrentManager != null)
             {
-                if (UiSessionState.ApplyAllSettingsCallback != null)
+                try
                 {
-                    UiSessionState.ApplyAllSettingsCallback.Invoke(UiSessionState.CurrentManager);
+                    if (UiSessionState.ApplyAllSettingsCallback != null)
+                    {
+                        UiSessionState.ApplyAllSettingsCallback.Invoke(UiSessionState.CurrentManager);
+                    }
+                    else
+                    {
+                        UnifiedOptionWindow.ApplyAllSettings(UiSessionState.CurrentManager);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    UnifiedOptionWindow.ApplyAllSettings(UiSessionState.CurrentManager);
+                    ModLogger.Warn($"Failed to apply settings before export: {ex.Message}");
                 }
             }
 
-            string profileName = HotkeyProfileManager.GetSlotDisplayName(HotkeyProfileManager.ActiveSlotIndex);
-            string json = HotkeyProfileManager.BuildSnapshotJson(profileName, UiSessionState.AllHotkeys, UiSessionState.ModGroups, out _, out _, out _);
-            GUIUtility.systemCopyBuffer = json;
+            try
+            {
+                string profileName = HotkeyProfileManager.GetSlotDisplayName(HotkeyProfileManager.ActiveSlotIndex);
+                string json = HotkeyProfileManager.BuildSnapshotJson(profileName, UiSessionState.AllHotkeys, UiSessionState.ModGroups, out _, out _, out _);
+                GUIUtility.systemCopyBuffer = json;
+
+                string exportMsg = I18n.Format(
+                    "<color=#86efac>✓ 已导出配置 JSON 至剪贴板（共 {0} 字符，可直接粘贴备份或分享）</color>",
+                    "<color=#86efac>✓ Exported profile JSON to clipboard ({0} chars)</color>",
+                    json.Length);
+                SetProfileFeedbackStatus(exportMsg);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to export profile to clipboard: {ex.Message}");
+                string failMsg = I18n.Format(
+                    "<color=#ff8a8a>✗ 导出剪贴板异常：{0}</color>",
+                    "<color=#ff8a8a>✗ Export error: {0}</color>",
+                    ex.Message);
+                SetProfileFeedbackStatus(failMsg);
+            }
         }
 
         internal static void OnImportClipboardClicked()
         {
             UiSessionState.CancelCapture();
-            string rawClipboard = GUIUtility.systemCopyBuffer ?? string.Empty;
-            if (!HotkeyProfileManager.TryParseSnapshotJson(rawClipboard, out var snapshot, out _) || snapshot == null)
+            string rawClipboard = string.Empty;
+            try
             {
+                rawClipboard = GUIUtility.systemCopyBuffer ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to read systemCopyBuffer: {ex.Message}");
+            }
+
+            if (string.IsNullOrWhiteSpace(rawClipboard) ||
+                !HotkeyProfileManager.TryParseSnapshotJson(rawClipboard, out var snapshot, out _) ||
+                snapshot == null)
+            {
+                string errMsg = I18n.Get(
+                    "<color=#ff8a8a>✗ 导入失败：剪贴板内容不是有效的按键方案 JSON</color>",
+                    "<color=#ff8a8a>✗ Import failed: Clipboard does not contain valid profile JSON</color>");
+                SetProfileFeedbackStatus(errMsg);
                 return;
             }
 
-            ApplyProfileSnapshotToCurrentSession(snapshot);
-            RefreshProfileSlotButtonAppearance();
+            try
+            {
+                ApplyProfileSnapshotToCurrentSession(snapshot, out int hkCount, out int genCount);
+                RefreshProfileSlotButtonAppearance();
+
+                string successMsg = I18n.Format(
+                    "<color=#86efac>✓ 已从剪贴板成功导入并立即生效（恢复 {0} 项按键 / {1} 项设置）！</color>",
+                    "<color=#86efac>✓ Successfully imported from clipboard ({0} keys / {1} settings restored)!</color>",
+                    hkCount, genCount);
+                SetProfileFeedbackStatus(successMsg);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to apply imported snapshot: {ex.Message}");
+                string failMsg = I18n.Format(
+                    "<color=#ff8a8a>✗ 导入应用异常：{0}</color>",
+                    "<color=#ff8a8a>✗ Import application error: {0}</color>",
+                    ex.Message);
+                SetProfileFeedbackStatus(failMsg);
+            }
         }
 
         internal static void ApplyProfileSnapshotToCurrentSession(ProfileSnapshot snapshot)
         {
+            ApplyProfileSnapshotToCurrentSession(snapshot, out _, out _);
+        }
+
+        internal static void ApplyProfileSnapshotToCurrentSession(ProfileSnapshot snapshot, out int appliedHkCount, out int appliedGenCount)
+        {
+            appliedHkCount = 0;
+            appliedGenCount = 0;
             if (UiSessionState.CurrentManager == null) return;
 
             bool wasChinese = I18n.IsChinese;
@@ -240,7 +406,6 @@ namespace ProbablyUnifiedHotkeys
             }
 
             // 3. 逐项恢复原版与所有模组快捷键
-            int appliedHkCount = 0;
             for (int i = 0; i < UiSessionState.AllHotkeys.Count; i++)
             {
                 var hk = UiSessionState.AllHotkeys[i];
@@ -254,11 +419,18 @@ namespace ProbablyUnifiedHotkeys
                 hk.PendingModifiers = finalMods;
                 hk.PendingKey = targetKey;
                 hk.HasPendingChange = true;
+                if (targetKey != KeyCode.None)
+                {
+                    ComboKeyStore.SetExplicitlyUnbound(hk.Id, false);
+                }
+                else
+                {
+                    ComboKeyStore.SetExplicitlyUnbound(hk.Id, true);
+                }
                 appliedHkCount++;
             }
 
             // 4. 逐项恢复所有模组常规配置 (开关 / 滑块 / 下拉框 / 输入框)
-            int appliedGenCount = 0;
             for (int g = 0; g < UiSessionState.ModGroups.Count; g++)
             {
                 var group = UiSessionState.ModGroups[g];
@@ -330,6 +502,48 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
                 UiLayoutAndFontHelper.StyleVanillaKeyButtons();
+                UnifiedOptionWindow.SyncVanillaKeyButtonColors();
+
+                if (UiSessionState.VanillaCards != null && UiSessionState.CurrentWindow != null && UiSessionState.CurrentWindow.IsAlive)
+                {
+                    for (int c = 0; c < UiSessionState.VanillaCards.Count; c++)
+                    {
+                        var card = UiSessionState.VanillaCards[c];
+                        if (card == null || card.Entries == null) continue;
+                        for (int i = 0; i < card.Entries.Count; i++)
+                        {
+                            var item = card.Entries[i];
+                            var entry = item?.Entry;
+                            if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+
+                            var el = UiSessionState.CurrentWindow.Get(entry.id);
+                            if (el == null || !el.IsAlive) continue;
+
+                            switch (entry.kind)
+                            {
+                                case GameOptionRegistry.Kind.Toggle:
+                                    if (entry.getBool != null)
+                                    {
+                                        el.SetBool(entry.getBool(), notify: false);
+                                    }
+                                    break;
+                                case GameOptionRegistry.Kind.Slider:
+                                    if (entry.getFloat != null)
+                                    {
+                                        el.SetFloat(entry.getFloat(), notify: false);
+                                    }
+                                    break;
+                                case GameOptionRegistry.Kind.Dropdown:
+                                    if (entry.getIndex != null)
+                                    {
+                                        el.SetIndex(entry.getIndex(), notify: false);
+                                    }
+                                    break;
+                            }
+                        }
+                    }
+                }
+
                 UiSessionState.RefreshConflicts();
                 ConflictAggregationView.RefreshConflicts();
                 RefreshProfileSlotButtonAppearance();

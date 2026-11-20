@@ -42,7 +42,17 @@ namespace ProbablyUnifiedHotkeys
 
             ConflictAggregationView.UpdateConflictToggleButtonAppearance();
             UpdateDiagnosticToggleButtonAppearance();
-            TopSearchAndActionBar.RefreshExpandAllButtonState();
+
+            if (UiSessionState.IsConflictViewActive)
+            {
+                UiSessionState.ExpandToggleBtn?.SetVisible(false);
+            }
+            else
+            {
+                UiSessionState.ExpandToggleBtn?.SetVisible(true);
+                TopSearchAndActionBar.RefreshExpandAllButtonState();
+                UiLayoutAndFontHelper.SyncCompactActionButton(UiSessionState.ExpandToggleBtn);
+            }
         }
 
         internal static void ToggleDiagnosticMode()
@@ -171,6 +181,7 @@ namespace ProbablyUnifiedHotkeys
             var stickyRt = UiSessionState.DiagnosticStickyHeaderRoot.GetComponent<RectTransform>();
             if (stickyRt == null) return;
 
+            UiSessionState.RemoveWindowElements(k => k == "label_diagnostic_summary");
             CustomUIBuilder.ClearContainer(stickyRt);
             using (ComboKeyStore.EnterBypass())
             {
@@ -310,6 +321,14 @@ namespace ProbablyUnifiedHotkeys
 
             RefreshDiagnosticStickyHeader();
 
+            UiSessionState.RemoveWindowElements(k => k.StartsWith("diag_") || k == "label_diagnostic_summary");
+
+            bool wasActive = UiSessionState.DiagnosticContentRoot.activeSelf;
+            if (wasActive)
+            {
+                UiSessionState.DiagnosticContentRoot.SetActive(false);
+            }
+
             CustomUIBuilder.ClearContainer(rt);
             UiSessionState.DiagnosticSectionViews.Clear();
 
@@ -320,7 +339,12 @@ namespace ProbablyUnifiedHotkeys
             }
 
             UiSessionState.DiagnosticViewDirty = false;
-            LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
+
+            if (wasActive)
+            {
+                UiSessionState.DiagnosticContentRoot.SetActive(true);
+            }
+
             if (UiSessionState.ScrollRect != null && UiSessionState.ScrollRect.content != null)
             {
                 LayoutRebuilder.ForceRebuildLayoutImmediate(UiSessionState.ScrollRect.content);

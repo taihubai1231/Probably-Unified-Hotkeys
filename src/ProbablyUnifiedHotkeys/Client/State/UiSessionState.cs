@@ -417,6 +417,13 @@ namespace ProbablyUnifiedHotkeys
         internal static CustomUIElement? ProfileLoadBtn;
         internal static CustomUIElement? ProfileExportBtn;
         internal static CustomUIElement? ProfileImportBtn;
+        internal static CustomUIElement? ProfileActionStatusLabel;
+        internal static readonly Dictionary<string, bool> VanillaOpenToggleBaseline =
+            new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        internal static readonly Dictionary<string, float> VanillaOpenSliderBaseline =
+            new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        internal static readonly Dictionary<string, int> VanillaOpenDropdownBaseline =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         internal static GameObject? SelfProfileSectionContainer;
         internal static readonly CustomUIElement?[] SelfProfileSlotDetailLabels =
             new CustomUIElement?[HotkeyProfileManager.SlotCount];
@@ -531,12 +538,33 @@ namespace ProbablyUnifiedHotkeys
         internal static bool ShouldSilenceMissingElementWarning(CustomUIWindow? window, string id, out CustomUIElement? element)
         {
             element = null;
-            if (!InEnhancedRefreshRules || window == null || window != CurrentWindow || CurrentWindowElements == null || string.IsNullOrEmpty(id))
+            if (!(InEnhancedRefreshRules || IsApplyingSettings) || window == null || window != CurrentWindow || CurrentWindowElements == null || string.IsNullOrEmpty(id))
             {
                 return false;
             }
             CurrentWindowElements.TryGetValue(id, out element);
             return true;
+        }
+
+        internal static void RemoveWindowElements(Func<string, bool> predicate)
+        {
+            if (CurrentWindowElements == null || predicate == null) return;
+            List<string>? toRemove = null;
+            foreach (var kvp in CurrentWindowElements)
+            {
+                if (predicate(kvp.Key))
+                {
+                    toRemove ??= new List<string>();
+                    toRemove.Add(kvp.Key);
+                }
+            }
+            if (toRemove != null)
+            {
+                for (int i = 0; i < toRemove.Count; i++)
+                {
+                    CurrentWindowElements.Remove(toRemove[i]);
+                }
+            }
         }
 
         // =====================================================================
@@ -555,11 +583,15 @@ namespace ProbablyUnifiedHotkeys
             ProfileLoadBtn = null;
             ProfileExportBtn = null;
             ProfileImportBtn = null;
+            ProfileActionStatusLabel = null;
             SelfProfileSectionContainer = null;
             for (int i = 0; i < SelfProfileSlotDetailLabels.Length; i++)
             {
                 SelfProfileSlotDetailLabels[i] = null;
             }
+            VanillaOpenToggleBaseline.Clear();
+            VanillaOpenSliderBaseline.Clear();
+            VanillaOpenDropdownBaseline.Clear();
         }
 
         internal static void ResetDiagnosticSectionDefaults()
@@ -666,10 +698,59 @@ namespace ProbablyUnifiedHotkeys
         // 8. 基准快照、脏状态检测与放弃修改
         // =====================================================================
 
+        public static void CaptureOpenBaselineSnapshot()
+        {
+            VanillaOpenToggleBaseline.Clear();
+            VanillaOpenSliderBaseline.Clear();
+            VanillaOpenDropdownBaseline.Clear();
+
+            if (VanillaCards != null && CurrentWindow != null && CurrentWindow.IsAlive)
+            {
+                for (int c = 0; c < VanillaCards.Count; c++)
+                {
+                    var card = VanillaCards[c];
+                    if (card == null || card.Entries == null) continue;
+                    for (int i = 0; i < card.Entries.Count; i++)
+                    {
+                        var item = card.Entries[i];
+                        var entry = item?.Entry;
+                        if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+
+                        var el = CurrentWindow.Get(entry.id);
+                        if (el == null || !el.IsAlive) continue;
+
+                        switch (entry.kind)
+                        {
+                            case GameOptionRegistry.Kind.Toggle:
+                                VanillaOpenToggleBaseline[entry.id] = el.GetBool();
+                                break;
+                            case GameOptionRegistry.Kind.Slider:
+                                VanillaOpenSliderBaseline[entry.id] = el.GetFloat();
+                                break;
+                            case GameOptionRegistry.Kind.Dropdown:
+                                VanillaOpenDropdownBaseline[entry.id] = el.GetIndex();
+                                break;
+                        }
+                    }
+                }
+            }
+
+            if (CurrentManager != null)
+            {
+                (PendingKeysField?.GetValue(CurrentManager) as Dictionary<string, KeyCode>)?.Clear();
+            }
+        }
+
         public static bool HasUnsavedChanges()
         {
             if (AllHotkeys != null)
             {
+                Dictionary<string, KeyCode>? pkDict = null;
+                if (CurrentManager != null && PendingKeysField != null)
+                {
+                    pkDict = PendingKeysField.GetValue(CurrentManager) as Dictionary<string, KeyCode>;
+                }
+
                 for (int i = 0; i < AllHotkeys.Count; i++)
                 {
                     var hk = AllHotkeys[i];
@@ -682,44 +763,27 @@ namespace ProbablyUnifiedHotkeys
                             ? hk.GetExternalModifiers.Invoke()
                             : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
 
-                    // 显式解绑容错豁免：
-                    // 当 currentKey 与 EffectiveKey 均为 None 时，两端均已处于完全解绑状态；
-                    // 无论第三方 Getter 返回是否存在延迟，还是历史修饰键残留，一律豁免，切断假脏标记。
-                    if (currentKey == KeyCode.None && (hk.EffectiveKey == KeyCode.None || !hk.HasPendingChange || hk.PendingKey == KeyCode.None))
-                    {
-                        continue;
-                    }
-                    if (hk.EffectiveKey == KeyCode.None && !hk.HasPendingChange)
-                    {
-                        continue;
-                    }
-
                     if (hk.ModId == "vanilla")
                     {
-                        if (hk.HasPendingChange)
+                        bool inPendingDict = false;
+                        KeyCode pkValue = KeyCode.None;
+                        if (pkDict != null && !string.IsNullOrEmpty(hk.RawOptionId))
                         {
-                            if (hk.PendingKey == KeyCode.None && currentKey == KeyCode.None)
+                            inPendingDict = pkDict.TryGetValue(hk.RawOptionId, out pkValue);
+                        }
+
+                        if (hk.HasPendingChange || inPendingDict)
+                        {
+                            KeyCode targetKey = hk.HasPendingChange ? hk.PendingKey : pkValue;
+                            KeyModifierMask targetMods = hk.HasPendingChange ? hk.PendingModifiers : currentMods;
+
+                            if (targetKey == KeyCode.None && currentKey == KeyCode.None)
                             {
                                 continue;
                             }
-                            if (hk.PendingKey != currentKey || hk.PendingModifiers != currentMods)
+                            if (targetKey != currentKey || targetMods != currentMods)
                             {
                                 return true;
-                            }
-                        }
-
-                        if (CurrentManager != null && PendingKeysField?.GetValue(CurrentManager) is Dictionary<string, KeyCode> pkDict)
-                        {
-                            if (!string.IsNullOrEmpty(hk.RawOptionId) && pkDict.TryGetValue(hk.RawOptionId, out KeyCode pk))
-                            {
-                                if (pk == KeyCode.None && currentKey == KeyCode.None)
-                                {
-                                    continue;
-                                }
-                                if (pk != currentKey)
-                                {
-                                    return true;
-                                }
                             }
                         }
                     }
@@ -790,31 +854,44 @@ namespace ProbablyUnifiedHotkeys
                         switch (entry.kind)
                         {
                             case GameOptionRegistry.Kind.Toggle:
-                                if (entry.getBool != null && el.GetBool() != entry.getBool())
+                                if (entry.getBool != null)
                                 {
-                                    return true;
+                                    bool curVal = el.GetBool();
+                                    bool origVal = entry.getBool();
+                                    bool hasBase = VanillaOpenToggleBaseline.TryGetValue(entry.id, out bool baseVal);
+                                    if (curVal != origVal && (!hasBase || curVal != baseVal))
+                                    {
+                                        return true;
+                                    }
                                 }
                                 break;
                             case GameOptionRegistry.Kind.Slider:
-                                if (entry.getFloat != null && Mathf.Abs(el.GetFloat() - entry.getFloat()) > 0.001f)
+                                if (entry.getFloat != null)
                                 {
-                                    return true;
+                                    float curVal = el.GetFloat();
+                                    float origVal = entry.getFloat();
+                                    bool hasBase = VanillaOpenSliderBaseline.TryGetValue(entry.id, out float baseVal);
+                                    if (Mathf.Abs(curVal - origVal) > 0.001f && (!hasBase || Mathf.Abs(curVal - baseVal) > 0.001f))
+                                    {
+                                        return true;
+                                    }
                                 }
                                 break;
                             case GameOptionRegistry.Kind.Dropdown:
-                                if (entry.getIndex != null && el.GetIndex() != entry.getIndex())
+                                if (entry.getIndex != null)
                                 {
-                                    return true;
+                                    int curVal = el.GetIndex();
+                                    int origVal = entry.getIndex();
+                                    bool hasBase = VanillaOpenDropdownBaseline.TryGetValue(entry.id, out int baseVal);
+                                    if (curVal != origVal && (!hasBase || curVal != baseVal))
+                                    {
+                                        return true;
+                                    }
                                 }
                                 break;
                         }
                     }
                 }
-            }
-
-            if (CurrentManager != null && OverriddenDropdownsField?.GetValue(CurrentManager) is IDictionary od && od.Count > 0)
-            {
-                return true;
             }
 
             return false;
@@ -825,7 +902,7 @@ namespace ProbablyUnifiedHotkeys
             CancelCapture();
 
             // 1. 原版待提交键位清空，恢复至当前生效键位
-            var pendingKeys = PendingKeysField?.GetValue(CurrentManager) as Dictionary<string, KeyCode>;
+            var pendingKeys = CurrentManager != null ? PendingKeysField?.GetValue(CurrentManager) as Dictionary<string, KeyCode> : null;
             pendingKeys?.Clear();
 
             for (int i = 0; i < AllHotkeys.Count; i++)
@@ -904,7 +981,7 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
-            var overriddenDropdowns = OverriddenDropdownsField?.GetValue(CurrentManager) as IDictionary;
+            var overriddenDropdowns = CurrentManager != null ? OverriddenDropdownsField?.GetValue(CurrentManager) as IDictionary : null;
             overriddenDropdowns?.Clear();
 
             RefreshConflicts();
@@ -916,6 +993,8 @@ namespace ProbablyUnifiedHotkeys
                 var rebuildConflictView = onRebuildConflictView ?? RebuildConflictViewCallback;
                 rebuildConflictView?.Invoke();
             }
+
+            CaptureOpenBaselineSnapshot();
         }
 
         internal static void RefreshCardUI(ModOptionGroup group)
@@ -1068,6 +1147,8 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
             }
+
+            CaptureOpenBaselineSnapshot();
         }
     }
 }

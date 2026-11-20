@@ -82,6 +82,14 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
+            UiSessionState.RemoveWindowElements(k => k.StartsWith("cg_") || k == "header_conflict_status");
+
+            bool wasActive = UiSessionState.ConflictContentRoot.activeSelf;
+            if (wasActive)
+            {
+                UiSessionState.ConflictContentRoot.SetActive(false);
+            }
+
             CustomUIBuilder.ClearContainer(rt);
 
             using (ComboKeyStore.EnterBypass())
@@ -90,7 +98,12 @@ namespace ProbablyUnifiedHotkeys
                 BuildConflictViewContent(conflictBuilder);
             }
             UiSessionState.ConflictViewDirty = false;
-            LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
+
+            if (wasActive)
+            {
+                UiSessionState.ConflictContentRoot.SetActive(true);
+            }
+
             if (UiSessionState.ScrollRect != null && UiSessionState.ScrollRect.content != null)
             {
                 LayoutRebuilder.ForceRebuildLayoutImmediate(UiSessionState.ScrollRect.content);

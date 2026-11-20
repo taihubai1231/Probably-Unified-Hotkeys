@@ -318,6 +318,10 @@ namespace ProbablyUnifiedHotkeys
 
         private static readonly FieldInfo? PreviewCacheField = AccessTools.Field(typeof(ModUIManager), "previewCache");
         private static readonly Dictionary<string, Sprite> PersistentPreviewCache = new Dictionary<string, Sprite>(StringComparer.Ordinal);
+        private static ModUIManager? _lastPopulatedManager;
+        private static string? _lastPopulatedEnvSignature;
+        private static bool _hasCompletedFullPopulate = false;
+        private static readonly System.Text.StringBuilder PopulateSigBuilder = new System.Text.StringBuilder(1024);
 
         internal static void EnsurePreviewCached(ModUIManager manager, LoadedMod? mod)
         {
@@ -341,6 +345,90 @@ namespace ProbablyUnifiedHotkeys
             return HandleField?.GetValue(manager) as CustomUIWindow;
         }
 
+        internal static void LockDetailButtonSizes(ModUIManager? manager)
+        {
+            if (manager == null) return;
+            CustomUIWindow? handle = GetHandle(manager);
+            if (handle == null) return;
+
+            CustomUIElement? activate = handle.Get("activate");
+            CustomUIElement? options = handle.Get("options") ?? handle.Get("settings");
+            CustomUIElement? steam = handle.Get("workshop_page");
+
+            if (activate?.Rect != null)
+            {
+                LayoutElement le = activate.Rect.GetComponent<LayoutElement>() ?? activate.Rect.gameObject.AddComponent<LayoutElement>();
+                le.minHeight = 42f;
+                le.preferredHeight = 42f;
+                le.flexibleHeight = 0f;
+            }
+            if (options?.Rect != null)
+            {
+                LayoutElement le = options.Rect.GetComponent<LayoutElement>() ?? options.Rect.gameObject.AddComponent<LayoutElement>();
+                le.minWidth = 42f;
+                le.preferredWidth = 42f;
+                le.minHeight = 42f;
+                le.preferredHeight = 42f;
+                le.flexibleWidth = 0f;
+                le.flexibleHeight = 0f;
+            }
+            if (steam?.Rect != null)
+            {
+                LayoutElement le = steam.Rect.GetComponent<LayoutElement>() ?? steam.Rect.gameObject.AddComponent<LayoutElement>();
+                le.minWidth = 42f;
+                le.preferredWidth = 42f;
+                le.minHeight = 42f;
+                le.preferredHeight = 42f;
+                le.flexibleWidth = 0f;
+                le.flexibleHeight = 0f;
+            }
+        }
+
+        private static string ComputePopulateEnvironmentSignature(ModUIManager manager, List<LoadedMod> mods)
+        {
+            PopulateSigBuilder.Length = 0;
+            string locale = LocHelper.GetCurrentLocaleCode() ?? string.Empty;
+            string filter = FilterField?.GetValue(manager) as string ?? string.Empty;
+            PopulateSigBuilder.Append(locale).Append('|').Append(filter).Append('|').Append(mods.Count).Append('|');
+
+            for (int i = 0; i < mods.Count; i++)
+            {
+                LoadedMod m = mods[i];
+                if (m == null)
+                {
+                    PopulateSigBuilder.Append("null;");
+                    continue;
+                }
+                string id = m.Manifest?.ID ?? string.Empty;
+                bool active = !string.IsNullOrEmpty(id) && ModLoader.IsModEnabled(id);
+                PopulateSigBuilder.Append(id)
+                    .Append(':')
+                    .Append(active ? '1' : '0')
+                    .Append(':')
+                    .Append(string.IsNullOrEmpty(m.LoadError) ? '0' : '1')
+                    .Append(';');
+            }
+            return PopulateSigBuilder.ToString();
+        }
+
+        private static bool IsPopulateEnvironmentUnchanged(ModUIManager manager, List<LoadedMod> mods, IList rowList)
+        {
+            if (!_hasCompletedFullPopulate || string.IsNullOrEmpty(_lastPopulatedEnvSignature) || _lastPopulatedManager != manager)
+            {
+                return false;
+            }
+            if (rowList.Count == 0)
+            {
+                return false;
+            }
+            if (manager.activeModLayoutObject == null || manager.inactiveModLayoutObject == null)
+            {
+                return false;
+            }
+            string currentSig = ComputePopulateEnvironmentSignature(manager, mods);
+            return string.Equals(currentSig, _lastPopulatedEnvSignature, StringComparison.Ordinal);
+        }
+
         internal static void ResetCaches()
         {
             ScopedModLookup.Clear();
@@ -352,6 +440,9 @@ namespace ProbablyUnifiedHotkeys
             _cachedActiveContainerLayouts.Clear();
             _cachedInactiveContainerLayouts.Clear();
             _suspendedLayoutsStack.Clear();
+            _lastPopulatedManager = null;
+            _lastPopulatedEnvSignature = null;
+            _hasCompletedFullPopulate = false;
         }
 
         internal static void MarkNotEmpty(ModUIManager manager)
@@ -559,7 +650,16 @@ namespace ProbablyUnifiedHotkeys
             _prewarmedManager = manager;
 
             EnsureBuiltFn?.Invoke(manager);
+            LockDetailButtonSizes(manager);
             PopulateLayoutRowsPooled(manager, invokeFollowups: false);
+            RefreshRowIssuesFast(manager);
+            ApplyFilterToRowsDiff(manager);
+            _hasCompletedFullPopulate = true;
+            _lastPopulatedManager = manager;
+            if (ModLoader.Mods != null)
+            {
+                _lastPopulatedEnvSignature = ComputePopulateEnvironmentSignature(manager, ModLoader.Mods);
+            }
         }
 
         /// <summary>
@@ -591,6 +691,11 @@ namespace ProbablyUnifiedHotkeys
             if (mods == null)
             {
                 return false;
+            }
+
+            if (IsPopulateEnvironmentUnchanged(manager, mods, rowList))
+            {
+                return true;
             }
 
             BeginScopedModLookup(mods);
@@ -729,7 +834,12 @@ namespace ProbablyUnifiedHotkeys
                     RefreshRowIssuesFn?.Invoke(manager);
                     ApplyFilterToRowsFn?.Invoke(manager);
                     SelectModFn?.Invoke(manager, null);
+                    _hasCompletedFullPopulate = true;
                 }
+
+                _lastPopulatedManager = manager;
+                _lastPopulatedEnvSignature = ComputePopulateEnvironmentSignature(manager, mods);
+                LockDetailButtonSizes(manager);
 
                 return true;
             }
@@ -939,14 +1049,86 @@ namespace ProbablyUnifiedHotkeys
     {
         public static void Postfix(ModUIManager __instance)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            if (!ModFeatureConfig.EnablePerformancePatches || __instance == null) return;
             try
             {
-                ModUIManagerPerfHelper.PrewarmPanelInstance(__instance);
+                if (CustomUIManager.Instance != null && __instance.panel != null && !__instance.panel.activeSelf && __instance.content != null)
+                {
+                    ModUIManagerPerfHelper.PrewarmPanelInstance(__instance);
+                }
+                else
+                {
+                    ModUIPrewarmRunner.Attach(__instance);
+                }
             }
             catch (Exception ex)
             {
                 ModLogger.Debug($"[Patch_ModUIManager_Awake] Prewarm on Awake warning: {ex.Message}");
+            }
+        }
+    }
+
+    internal sealed class ModUIPrewarmRunner : MonoBehaviour
+    {
+        private ModUIManager? _manager;
+        private int _framesWaited = 0;
+
+        internal static void Attach(ModUIManager manager)
+        {
+            if (manager == null || manager.gameObject == null) return;
+            var runner = manager.gameObject.GetComponent<ModUIPrewarmRunner>();
+            if (runner == null)
+            {
+                runner = manager.gameObject.AddComponent<ModUIPrewarmRunner>();
+            }
+            runner._manager = manager;
+            runner._framesWaited = 0;
+        }
+
+        private void Update()
+        {
+            _framesWaited++;
+            if (_manager == null || _manager.panel == null || _manager.panel.activeSelf || _manager.content == null || CustomUIManager.Instance == null)
+            {
+                if (_framesWaited > 60 || (_manager != null && _manager.panel != null && _manager.panel.activeSelf))
+                {
+                    Destroy(this);
+                }
+                return;
+            }
+
+            try
+            {
+                ModUIManagerPerfHelper.PrewarmPanelInstance(_manager);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[ModUIPrewarmRunner] Prewarm deferred warning: {ex.Message}");
+            }
+            finally
+            {
+                Destroy(this);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(CustomUIManager), "Start")]
+    public static class Patch_CustomUIManager_Start
+    {
+        public static void Postfix()
+        {
+            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            try
+            {
+                ModUIManager? mgr = ModUIManager.Instance;
+                if (mgr != null && mgr.panel != null && !mgr.panel.activeSelf && mgr.content != null)
+                {
+                    ModUIManagerPerfHelper.PrewarmPanelInstance(mgr);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[Patch_CustomUIManager_Start] Prewarm warning: {ex.Message}");
             }
         }
     }
@@ -1001,24 +1183,21 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance, LoadedMod? mod)
         {
-            if (mod?.Manifest != null &&
-                string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.OrdinalIgnoreCase))
-            {
-                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
-                CustomUIElement? previewPanel = handle?.Get("preview_panel");
-                if (previewPanel != null)
-                {
-                    previewPanel.SetVisible(false);
-                }
-                return false;
-            }
-
             if (ModFeatureConfig.EnablePerformancePatches)
             {
                 ModUIManagerPerfHelper.EnsurePreviewCached(__instance, mod);
+                ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
             }
 
             return true;
+        }
+
+        public static void Postfix(ModUIManager __instance)
+        {
+            if (ModFeatureConfig.EnablePerformancePatches)
+            {
+                ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
+            }
         }
     }
 
@@ -1035,6 +1214,7 @@ namespace ProbablyUnifiedHotkeys
         {
             if (!ModFeatureConfig.EnablePerformancePatches) return;
             ModUIManagerPerfHelper.RecordEmptyShowMod(__instance, mod);
+            ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
         }
     }
 
@@ -1064,10 +1244,16 @@ namespace ProbablyUnifiedHotkeys
     [HarmonyPatch(typeof(ModUIManager), nameof(ModUIManager.OpenPanel))]
     public static class Patch_ModUIManager_OpenPanel_ConflictScope
     {
-        public static void Prefix()
+        public static void Prefix(ModUIManager __instance)
         {
             if (!ModFeatureConfig.EnablePerformancePatches) return;
             ConflictScannerPerfHelper.BeginModOpenPanel();
+        }
+
+        public static void Postfix(ModUIManager __instance)
+        {
+            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
         }
 
         public static void Finalizer()
@@ -1082,6 +1268,7 @@ namespace ProbablyUnifiedHotkeys
         private static int _modOpenPanelDepth = 0;
         private static bool _bound = false;
         private static bool _hasCompletedAtLeastOneBuild = false;
+        private static bool _hasReportedForCurrentEnv = false;
         private static string? _lastBuiltModSignature = null;
         private static Action<bool>? _ensureBuiltFn;
         private static readonly System.Text.StringBuilder SigBuilder = new System.Text.StringBuilder(1024);
@@ -1090,6 +1277,7 @@ namespace ProbablyUnifiedHotkeys
         {
             _modOpenPanelDepth = 0;
             _hasCompletedAtLeastOneBuild = false;
+            _hasReportedForCurrentEnv = false;
             _lastBuiltModSignature = null;
         }
 
@@ -1143,6 +1331,17 @@ namespace ProbablyUnifiedHotkeys
                     harmony.Patch(ensureBuiltMethod, prefix: new HarmonyMethod(ebPrefix), postfix: new HarmonyMethod(ebPostfix));
                 }
 
+                Type? modType = conflictScannerAssembly.GetType("ConflictScanner.ConflictScannerMod", throwOnError: false);
+                if (modType != null)
+                {
+                    MethodInfo? reportMethod = AccessTools.Method(modType, "Report");
+                    if (reportMethod != null)
+                    {
+                        MethodInfo repPrefix = AccessTools.Method(typeof(ConflictScannerPerfHelper), nameof(ConflictScannerMod_Report_Prefix));
+                        harmony.Patch(reportMethod, prefix: new HarmonyMethod(repPrefix));
+                    }
+                }
+
                 log?.Log("Bound ConflictScanner.ConflictEngine dedup & memoization patches");
             }
             catch (Exception ex)
@@ -1175,8 +1374,7 @@ namespace ProbablyUnifiedHotkeys
         {
             SigBuilder.Length = 0;
             List<LoadedMod>? mods = ModLoader.Mods;
-            int asmCount = AppDomain.CurrentDomain.GetAssemblies().Length;
-            SigBuilder.Append(asmCount).Append('|').Append(mods != null ? mods.Count : 0).Append('|');
+            SigBuilder.Append(mods != null ? mods.Count : 0).Append('|');
 
             if (mods != null)
             {
@@ -1219,6 +1417,17 @@ namespace ProbablyUnifiedHotkeys
             return string.Equals(ComputeModScanSignature(), _lastBuiltModSignature, StringComparison.Ordinal);
         }
 
+        public static bool ConflictScannerMod_Report_Prefix()
+        {
+            if (_hasReportedForCurrentEnv && HasValidCachedBuildForCurrentEnv())
+            {
+                // 当前模组环境签名已上报且无变动，跳过重复打印 "Scan: 53 DLL(s) read"
+                return false;
+            }
+            _hasReportedForCurrentEnv = true;
+            return true;
+        }
+
         public static bool ConflictEngine_Invalidate_Prefix()
         {
             if (HasValidCachedBuildForCurrentEnv())
@@ -1227,6 +1436,7 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
             _hasCompletedAtLeastOneBuild = false;
+            _hasReportedForCurrentEnv = false;
             _lastBuiltModSignature = null;
             return true;
         }

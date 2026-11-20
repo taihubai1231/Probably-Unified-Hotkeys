@@ -9,7 +9,7 @@ namespace ProbablyUnifiedHotkeys
 {
     public sealed class ProfileSnapshot
     {
-        public string Schema { get; set; } = HotkeyProfileManager.SchemaId;
+        public string Schema { get; set; } = string.Empty;
         public string Version { get; set; } = "1.5.0";
         public string Name { get; set; } = string.Empty;
         public string Timestamp { get; set; } = string.Empty;
@@ -257,6 +257,15 @@ namespace ProbablyUnifiedHotkeys
                     hk.PendingKey = targetKey;
                     hk.HasPendingChange = true;
 
+                    if (targetKey != KeyCode.None)
+                    {
+                        ComboKeyStore.SetExplicitlyUnbound(hk.Id, false);
+                    }
+                    else
+                    {
+                        ComboKeyStore.SetExplicitlyUnbound(hk.Id, true);
+                    }
+
                     if (applyToUnderlying)
                     {
                         if (hk.SetCombo != null)
@@ -266,6 +275,10 @@ namespace ProbablyUnifiedHotkeys
                         else if (hk.SetKey != null)
                         {
                             hk.SetKey(targetKey);
+                        }
+                        else
+                        {
+                            ComboKeyStore.SetSavedCustomHotkey(hk.Id, finalMods, targetKey, hk.DefaultModifiers, hk.DefaultKey);
                         }
                     }
                 }
@@ -651,6 +664,12 @@ namespace ProbablyUnifiedHotkeys
             {
                 ModLogger.Warn($"Failed to parse profile JSON: {ex.Message}", ex);
                 error = BilingualText.Format("解析方案 JSON 失败: {0}", "Failed to parse profile JSON: {0}", ex.Message);
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(parsed.Schema) && !string.Equals(parsed.Schema, SchemaId, StringComparison.OrdinalIgnoreCase))
+            {
+                error = BilingualText.Format("不兼容的方案版本或格式 (schema: {0})", "Incompatible profile schema ({0})", parsed.Schema);
                 return false;
             }
 

@@ -1259,17 +1259,48 @@ namespace ProbablyUnifiedHotkeys
 
                         string label = entry.label?.Invoke() ?? entry.id;
                         string tooltip = entry.tooltip?.Invoke() ?? string.Empty;
+                        string canonicalHkId = "vanilla." + entry.id;
+                        string rawOptId = entry.id;
+                        var rawGetKey = entry.getKey ?? (() => KeyCode.None);
+                        var rawSetKey = entry.setKey;
 
                         list.Add(new ModHotkeyEntry
                         {
-                            Id = "vanilla." + entry.id,
-                            RawOptionId = entry.id,
+                            Id = canonicalHkId,
+                            RawOptionId = rawOptId,
                             ModId = "vanilla",
                             ModDisplayName = BilingualText.Get("原版官方", "Vanilla"),
                             DisplayName = label,
                             Tooltip = tooltip,
-                            GetKey = entry.getKey ?? (() => KeyCode.None),
-                            SetKey = entry.setKey
+                            GetKey = () =>
+                            {
+                                if (ComboKeyStore.IsExplicitlyUnbound(canonicalHkId) || ComboKeyStore.IsExplicitlyUnbound(rawOptId))
+                                {
+                                    return KeyCode.None;
+                                }
+                                return rawGetKey();
+                            },
+                            SetKey = (k) =>
+                            {
+                                try
+                                {
+                                    if (k == KeyCode.None)
+                                    {
+                                        ComboKeyStore.SetExplicitlyUnbound(canonicalHkId, true);
+                                        ComboKeyStore.SetExplicitlyUnbound(rawOptId, true);
+                                    }
+                                    else
+                                    {
+                                        ComboKeyStore.SetExplicitlyUnbound(canonicalHkId, false);
+                                        ComboKeyStore.SetExplicitlyUnbound(rawOptId, false);
+                                    }
+                                    rawSetKey?.Invoke(k);
+                                }
+                                catch (Exception ex)
+                                {
+                                    ModLogger.Warn($"Error in vanilla keybind SetKey ({rawOptId}): {ex.Message}");
+                                }
+                            }
                         });
                     }
                 }
@@ -1657,28 +1688,80 @@ namespace ProbablyUnifiedHotkeys
                 DefaultKey = defaultKey,
                 DefaultModifiers = defaultMods,
                 HasExplicitDefault = entry.BoxedDefault != null,
-                GetKey = () => ParseKey(entry.BoxedValue),
+                GetKey = () =>
+                {
+                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId) || ComboKeyStore.IsExplicitlyUnbound(entry.Key))
+                    {
+                        return KeyCode.None;
+                    }
+                    return ParseKey(entry.BoxedValue);
+                },
                 SetKey = (newKey) =>
                 {
-                    if (entry.ValueType == typeof(KeyCode))
+                    try
                     {
-                        SetEntryBoxed(entry, newKey);
+                        if (newKey == KeyCode.None)
+                        {
+                            ComboKeyStore.SetExplicitlyUnbound(canonicalId, true);
+                            ComboKeyStore.SetExplicitlyUnbound(entry.Key, true);
+                        }
+                        else
+                        {
+                            ComboKeyStore.SetExplicitlyUnbound(canonicalId, false);
+                            ComboKeyStore.SetExplicitlyUnbound(entry.Key, false);
+                        }
+
+                        if (entry.ValueType == typeof(KeyCode))
+                        {
+                            SetEntryBoxed(entry, newKey);
+                        }
+                        else if (entry.ValueType == typeof(int))
+                        {
+                            SetEntryBoxed(entry, (int)newKey);
+                        }
+                        else
+                        {
+                            SetEntryBoxed(entry, newKey.ToString());
+                        }
                     }
-                    else if (entry.ValueType == typeof(int))
+                    catch (Exception ex)
                     {
-                        SetEntryBoxed(entry, (int)newKey);
-                    }
-                    else
-                    {
-                        SetEntryBoxed(entry, newKey.ToString());
+                        ModLogger.Warn($"Error in config entry SetKey ({canonicalId}): {ex.Message}");
                     }
                 }
             };
 
             if (usesComboString)
             {
-                hk.GetExternalModifiers = () => ParseModifiers(entry.BoxedValue);
-                hk.SetCombo = (newMods, newKey) => SetEntryBoxed(entry, FormatComboString(newMods, newKey));
+                hk.GetExternalModifiers = () =>
+                {
+                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId) || ComboKeyStore.IsExplicitlyUnbound(entry.Key))
+                    {
+                        return KeyModifierMask.None;
+                    }
+                    return ParseModifiers(entry.BoxedValue);
+                };
+                hk.SetCombo = (newMods, newKey) =>
+                {
+                    try
+                    {
+                        if (newKey == KeyCode.None)
+                        {
+                            ComboKeyStore.SetExplicitlyUnbound(canonicalId, true);
+                            ComboKeyStore.SetExplicitlyUnbound(entry.Key, true);
+                        }
+                        else
+                        {
+                            ComboKeyStore.SetExplicitlyUnbound(canonicalId, false);
+                            ComboKeyStore.SetExplicitlyUnbound(entry.Key, false);
+                        }
+                        SetEntryBoxed(entry, FormatComboString(newMods, newKey));
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"Error in config entry SetCombo ({canonicalId}): {ex.Message}");
+                    }
+                };
             }
 
             return hk;
@@ -2016,9 +2099,12 @@ namespace ProbablyUnifiedHotkeys
                         if (entry.kind == GameOptionRegistry.Kind.KeyBind)
                         {
                             if (ContainsHotkey(group, entry.id, label)) continue;
+                            var rawGetKey = entry.getKey ?? (() => KeyCode.None);
+                            var rawSetKey = entry.setKey;
+                            string hkId = entry.id;
                             group.Hotkeys.Add(new ModHotkeyEntry
                             {
-                                Id = entry.id,
+                                Id = hkId,
                                 RawOptionId = entry.id,
                                 ModId = group.ModId,
                                 ModDisplayName = group.DisplayName,
@@ -2026,8 +2112,33 @@ namespace ProbablyUnifiedHotkeys
                                 SectionLabel = secLabel,
                                 DisplayName = label,
                                 Tooltip = tooltip,
-                                GetKey = entry.getKey ?? (() => KeyCode.None),
-                                SetKey = entry.setKey
+                                GetKey = () =>
+                                {
+                                    if (ComboKeyStore.IsExplicitlyUnbound(hkId))
+                                    {
+                                        return KeyCode.None;
+                                    }
+                                    return rawGetKey();
+                                },
+                                SetKey = (k) =>
+                                {
+                                    try
+                                    {
+                                        if (k == KeyCode.None)
+                                        {
+                                            ComboKeyStore.SetExplicitlyUnbound(hkId, true);
+                                        }
+                                        else
+                                        {
+                                            ComboKeyStore.SetExplicitlyUnbound(hkId, false);
+                                        }
+                                        rawSetKey?.Invoke(k);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        ModLogger.Warn($"Error in GameOptionRegistry SetKey ({hkId}): {ex.Message}");
+                                    }
+                                }
                             });
                         }
                         else if (entry.kind == GameOptionRegistry.Kind.Toggle ||

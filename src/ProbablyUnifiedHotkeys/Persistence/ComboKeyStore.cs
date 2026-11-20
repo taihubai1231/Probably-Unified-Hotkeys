@@ -16,6 +16,10 @@ namespace ProbablyUnifiedHotkeys
         private const string CustomHotkeysPrefsKey = "probably_unified_hotkeys.custom_hotkeys.v1";
         private const string ForcedHotkeysPrefsKey = "probably_unified_hotkeys.forced_hotkeys.v1";
         private const string IgnoredCandidatesPrefsKey = "probably_unified_hotkeys.ignored_candidates.v1";
+        public const string ExplicitUnboundPrefsKey = "probably_unified_hotkeys.explicit_unbound.v1";
+
+        public static readonly HashSet<string> ExplicitUnboundHotkeys
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private static readonly Dictionary<string, (KeyModifierMask Modifiers, KeyCode Key)> SavedCombos
             = new Dictionary<string, (KeyModifierMask, KeyCode)>(StringComparer.OrdinalIgnoreCase);
@@ -153,6 +157,7 @@ namespace ProbablyUnifiedHotkeys
             SavedCustomHotkeys.Clear();
             ForcedHotkeyIds.Clear();
             IgnoredCandidateIds.Clear();
+            ExplicitUnboundHotkeys.Clear();
             ActiveCombosByKey.Clear();
             ClearInputKeyRemaps();
             MethodRemapScopeStack.Clear();
@@ -194,6 +199,7 @@ namespace ProbablyUnifiedHotkeys
 
         public static void EnsureLoaded()
         {
+            EnsureInitialized();
             if (_loaded) return;
             _loaded = true;
             Load();
@@ -205,6 +211,7 @@ namespace ProbablyUnifiedHotkeys
             SavedCustomHotkeys.Clear();
             ForcedHotkeyIds.Clear();
             IgnoredCandidateIds.Clear();
+            ExplicitUnboundHotkeys.Clear();
             try
             {
                 string raw = PrefsStorage.GetString(PrefsKey);
@@ -269,6 +276,7 @@ namespace ProbablyUnifiedHotkeys
 
                 LoadIdSet(ForcedHotkeysPrefsKey, ForcedHotkeyIds);
                 LoadIdSet(IgnoredCandidatesPrefsKey, IgnoredCandidateIds);
+                LoadIdSet(ExplicitUnboundPrefsKey, ExplicitUnboundHotkeys);
             }
             catch (Exception ex)
             {
@@ -378,8 +386,115 @@ namespace ProbablyUnifiedHotkeys
             if (changed)
             {
                 _forcedHotkeysRevision++;
+                if (ignored && ForcedHotkeyIds.Remove(canonicalId))
+                {
+                    SaveForcedHotkeys();
+                }
                 SaveIdSet(IgnoredCandidatesPrefsKey, IgnoredCandidateIds, "ignored candidates");
             }
+        }
+
+        public static void SaveExplicitUnboundHotkeys() => SaveIdSet(ExplicitUnboundPrefsKey, ExplicitUnboundHotkeys, "explicit unbound set");
+
+        public static bool IsExplicitlyUnbound(string? entryId)
+        {
+            if (string.IsNullOrEmpty(entryId)) return false;
+            EnsureLoaded();
+            if (ExplicitUnboundHotkeys.Contains(entryId)) return true;
+
+            if (entryId.StartsWith("vanilla.", StringComparison.OrdinalIgnoreCase))
+            {
+                string sub = entryId.Substring(8);
+                if (ExplicitUnboundHotkeys.Contains(sub)) return true;
+                if (sub.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+                {
+                    string plain = sub.Substring(4);
+                    if (ExplicitUnboundHotkeys.Contains(plain) || ExplicitUnboundHotkeys.Contains("vanilla." + plain)) return true;
+                }
+                else
+                {
+                    string prefixed = "key_" + sub;
+                    if (ExplicitUnboundHotkeys.Contains(prefixed) || ExplicitUnboundHotkeys.Contains("vanilla." + prefixed)) return true;
+                }
+            }
+            else
+            {
+                if (ExplicitUnboundHotkeys.Contains("vanilla." + entryId)) return true;
+                if (entryId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+                {
+                    string plain = entryId.Substring(4);
+                    if (ExplicitUnboundHotkeys.Contains(plain) || ExplicitUnboundHotkeys.Contains("vanilla." + plain)) return true;
+                }
+                else
+                {
+                    string prefixed = "key_" + entryId;
+                    if (ExplicitUnboundHotkeys.Contains(prefixed) || ExplicitUnboundHotkeys.Contains("vanilla." + prefixed)) return true;
+                }
+            }
+            return false;
+        }
+
+        public static void SetExplicitlyUnbound(string? entryId, bool unbound)
+        {
+            if (string.IsNullOrEmpty(entryId)) return;
+            EnsureLoaded();
+            bool changed;
+            if (unbound)
+            {
+                changed = ExplicitUnboundHotkeys.Add(entryId);
+            }
+            else
+            {
+                changed = ExplicitUnboundHotkeys.Remove(entryId);
+                if (entryId.StartsWith("vanilla.", StringComparison.OrdinalIgnoreCase))
+                {
+                    string sub = entryId.Substring(8);
+                    changed |= ExplicitUnboundHotkeys.Remove(sub);
+                    if (sub.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        changed |= ExplicitUnboundHotkeys.Remove(sub.Substring(4));
+                        changed |= ExplicitUnboundHotkeys.Remove("vanilla." + sub.Substring(4));
+                    }
+                    else
+                    {
+                        changed |= ExplicitUnboundHotkeys.Remove("key_" + sub);
+                        changed |= ExplicitUnboundHotkeys.Remove("vanilla.key_" + sub);
+                    }
+                }
+                else
+                {
+                    changed |= ExplicitUnboundHotkeys.Remove("vanilla." + entryId);
+                    if (entryId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        changed |= ExplicitUnboundHotkeys.Remove(entryId.Substring(4));
+                        changed |= ExplicitUnboundHotkeys.Remove("vanilla." + entryId.Substring(4));
+                    }
+                    else
+                    {
+                        changed |= ExplicitUnboundHotkeys.Remove("key_" + entryId);
+                        changed |= ExplicitUnboundHotkeys.Remove("vanilla.key_" + entryId);
+                    }
+                }
+            }
+
+            if (changed)
+            {
+                SaveExplicitUnboundHotkeys();
+            }
+        }
+
+        public static int GetExplicitUnboundCount()
+        {
+            EnsureLoaded();
+            return ExplicitUnboundHotkeys.Count;
+        }
+
+        public static List<string> GetExplicitUnboundHotkeysSnapshot()
+        {
+            EnsureLoaded();
+            var list = new List<string>(ExplicitUnboundHotkeys);
+            list.Sort(StringComparer.OrdinalIgnoreCase);
+            return list;
         }
 
         public static int GetIgnoredCandidatesCount()
@@ -478,6 +593,14 @@ namespace ProbablyUnifiedHotkeys
                 var kc = kvp.Value.Key;
                 var mods = kc == KeyCode.None ? KeyModifierMask.None : (kvp.Value.Modifiers & ~GetModifierBit(kc));
                 SavedCustomHotkeys[kvp.Key] = (mods, kc);
+                if (kc == KeyCode.None)
+                {
+                    SetExplicitlyUnbound(kvp.Key, true);
+                }
+                else
+                {
+                    SetExplicitlyUnbound(kvp.Key, false);
+                }
             }
             SaveCustomHotkeysCore();
             PrefsStorage.Save();
@@ -582,12 +705,18 @@ namespace ProbablyUnifiedHotkeys
                 }
 
                 SaveCustomHotkeysCore();
+                SaveExplicitUnboundHotkeysCore();
                 PrefsStorage.Save();
             }
             catch (Exception ex)
             {
                 ModLogger.Warn($"Error saving combo store: {ex.Message}", ex);
             }
+        }
+
+        private static void SaveExplicitUnboundHotkeysCore()
+        {
+            SaveIdSet(ExplicitUnboundPrefsKey, ExplicitUnboundHotkeys, "explicit unbound set");
         }
 
         private static void SaveCustomHotkeysCore()
@@ -622,6 +751,10 @@ namespace ProbablyUnifiedHotkeys
         public static KeyCombo GetEffectiveCustomHotkey(string? entryId, KeyModifierMask defaultMods, KeyCode defaultKey)
         {
             EnsureLoaded();
+            if (IsExplicitlyUnbound(entryId))
+            {
+                return new KeyCombo(KeyModifierMask.None, KeyCode.None);
+            }
             if (!string.IsNullOrEmpty(entryId) && SavedCustomHotkeys.TryGetValue(entryId, out var custom))
             {
                 return new KeyCombo(custom.Modifiers, custom.Key);
@@ -651,16 +784,37 @@ namespace ProbablyUnifiedHotkeys
                 ? KeyModifierMask.None
                 : (defaultMods & ~GetModifierBit(defaultKey));
 
-            if (primaryKey == defaultKey && normalized == normDefault)
+            if (primaryKey == KeyCode.None)
             {
+                SetExplicitlyUnbound(entryId, true);
                 SavedCustomHotkeys.Remove(entryId);
+                SetSavedCombo(entryId, KeyModifierMask.None, KeyCode.None);
             }
             else
             {
-                SavedCustomHotkeys[entryId] = (normalized, primaryKey);
+                SetExplicitlyUnbound(entryId, false);
+                if (primaryKey == defaultKey && normalized == normDefault)
+                {
+                    SavedCustomHotkeys.Remove(entryId);
+                }
+                else
+                {
+                    SavedCustomHotkeys[entryId] = (normalized, primaryKey);
+                }
+                SetSavedCombo(entryId, normalized, primaryKey);
             }
 
-            SetSavedCombo(entryId, normalized, primaryKey);
+            Save();
+            RebuildRuntimeFromSaved();
+        }
+
+        public static void RemoveSavedCustomHotkey(string? entryId)
+        {
+            EnsureLoaded();
+            if (string.IsNullOrEmpty(entryId)) return;
+            SetExplicitlyUnbound(entryId, false);
+            SavedCustomHotkeys.Remove(entryId);
+            SavedCombos.Remove(entryId);
             Save();
             RebuildRuntimeFromSaved();
         }
@@ -675,6 +829,7 @@ namespace ProbablyUnifiedHotkeys
             if (string.IsNullOrEmpty(entryId)) return KeyModifierMask.None;
             // 未绑定按键 (KeyCode.None) 绝不携带修饰键前缀，直接返回 None (锁死 v1.4.7 修复)
             if (expectedPrimaryKey == KeyCode.None) return KeyModifierMask.None;
+            if (IsExplicitlyUnbound(entryId)) return KeyModifierMask.None;
 
             if (SavedCustomHotkeys.TryGetValue(entryId, out var customPair))
             {
@@ -1288,6 +1443,19 @@ namespace ProbablyUnifiedHotkeys
         {
             if (key == KeyCode.None || IsBypassed) return;
             EnsureLoaded();
+
+            if (candidateEntryIds != null)
+            {
+                foreach (string id in candidateEntryIds)
+                {
+                    if (string.IsNullOrEmpty(id)) continue;
+                    if (IsExplicitlyUnbound(id))
+                    {
+                        key = KeyCode.None;
+                        return;
+                    }
+                }
+            }
 
             KeyModifierMask required = KeyModifierMask.None;
             bool matchedCustom = false;

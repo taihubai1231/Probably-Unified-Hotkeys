@@ -32,6 +32,11 @@
 - [五、 构建工具链与分发平台陷阱 (PowerShell / Steamworks)](#五-构建工具链与分发平台陷阱-powershell--steamworks)
   - [17. Windows PowerShell 5.1 加载 Mono `mscorlib.dll` 死递归崩栈](#17-windows-powershell-51-加载-mono-mscorlibdll-死递归崩栈)
   - [18. Steamworks 创意工坊 `schinese` 语言槽位不可注销与覆盖陷阱](#18-steamworks-创意工坊-schinese-语言槽位不可注销与覆盖陷阱)
+- [六、 15 项实机反馈与高压性能深水坑 (In-Game Feedback & 40-Mod Latency)](#六-15-项实机反馈与高压性能深水坑-in-game-feedback--40-mod-latency)
+  - [22. `PropertyInfo.SetValue` 只读属性（无 setter）反射写入致命崩溃](#22-propertyinfosetvalue-只读属性无-setter反射写入致命崩溃)
+  - [23. `OverriddenDropdowns` 底层残留与原生控件未修改虚假脏状态误弹窗](#23-overriddendropdowns-底层残留与原生控件未修改虚假脏状态误弹窗)
+  - [24. 搜索框文本变动每字符 12 次全树重排风暴与防抖缺失](#24-搜索框文本变动每字符-12-次全树重排风暴与防抖缺失)
+  - [25. 40 模组 800 个 TMP 文本组件同帧首次激活卡死与视口优先渐进展开](#25-40-模组-800-个-tmp-文本组件同帧首次激活卡死与视口优先渐进展开)
 
 ---
 
@@ -254,3 +259,48 @@
   2. 第二步：在桌面端重新登录 Steam，并运行 `-Step query` 验证当前登录态为 `BLoggedOn=True`。
   3. 第三步：运行 `-Step schinese -SkipCheck`，显式调用 Steamworks API 精准覆写 `schinese` 语言槽位。
 - **【严禁反模式 Anti-pattern】**：严禁仅依赖 `steamcmd` 的单一上传命令作为最终的创意工坊发布，否则会导致简体中文玩家看到过期的历史文案。
+
+---
+
+## 六、 15 项实机反馈与高压性能深水坑 (In-Game Feedback & 40-Mod Latency)
+
+### 22. `PropertyInfo.SetValue` 只读属性（无 setter）反射写入致命崩溃
+- **【现象 Symptom】**：在选项界面点击「应用」保存设置、保存预设槽位或从剪贴板导入时，界面卡死并抛出 `ArgumentException: Set Method not found for 'Key'` 致命异常（`Player.log` 中连续抛出 10+ 次），导致排在其后的 `ComboKeyStore.Save()`、预设槽位保存、基准快照刷新整条链路全部中途夭折。
+- **【根因 Root Cause】**：部分第三方模组（如 `ConflictScanner.Keybind.Key`）的属性为仅带 getter 的只读属性（无 set accessor）。适配层代码若未加防护直接调用 `property.SetValue(null, value)`，CLR 反射引擎由于找不到 Setter 抛出 `ArgumentException`。
+- **【解法 Remedy】**：
+  1. 全仓地毯式排查对 `PropertyInfo` 的写入操作，写入前必须增加严格前置判断：
+     ```csharp
+     if (prop != null && prop.CanWrite && prop.GetSetMethod(true) != null)
+     {
+         prop.SetValue(null, value);
+     }
+     ```
+  2. 对所有适配器的 `SetKey` / `SetCombo` 委托统一用 `try-catch (Exception ex)` 包裹并记录 `ModLogger.Warn`，杜绝任何第三方模组异常外溢。
+- **【严禁反模式 Anti-pattern】**：严禁假设第三方公开属性必然存在可用 Setter，严禁裸调未做 `CanWrite` 检查的 `PropertyInfo.SetValue`。
+
+### 23. `OverriddenDropdowns` 底层残留与原生控件未修改虚假脏状态误弹窗
+- **【现象 Symptom】**：打开选项窗口未进行任何按键修改或常规设置变动，按 Esc 或点击返回时依然触发「存在未保存更改」确认弹窗。
+- **【根因 Root Cause】**：原版 `GameOptionUIManager` 内部维护了 `overriddenDropdowns` 字典，当官方原版分辨率等下拉框因窗口尺寸自适应发生内部更新时，该字典被无辜置位；且旧检测逻辑直接将底层控件读数与原始默认值进行对比，只要原版出厂状态与默认值不同，立即误判为用户修改。
+- **【解法 Remedy】**：
+  1. 引入**开窗基准快照机制 (`CaptureOpenBaselineSnapshot`)**：在装配完成与规则应用的第一时间快照所有开关、滑块、下拉框的当前真实读数。
+  2. 彻底剥离对 `overriddenDropdowns` 字典的污染判据；判定原版常规项脏状态时，要求控件读数必须**同时偏离快照值与底层值**才判定为用户实际修改。
+  3. 针对 `KeyCode.None` 显式解绑条目提供豁免，无实质改动时不触发假脏。
+- **【严禁反模式 Anti-pattern】**：严禁直接依赖原版 `overriddenDropdowns` 内部字段作为脏状态依据，严禁拿易受外部初始化的默认值直接做判脏基准。
+
+### 24. 搜索框文本变动每字符 12 次全树重排风暴与防抖缺失
+- **【现象 Symptom】**：在搜索框中连续输入字符时（如搜 `\"sort\"`），界面严重掉帧甚至卡顿 0.5 秒，打字极度不跟手。
+- **【根因 Root Cause】**：原搜索响应代码在每个字符输入事件触发时，调用了深层滚动方法，其内部嵌套调用了 2 次 `Canvas.ForceUpdateCanvases` 与 6 次父层 `LayoutRebuilder.ForceRebuildLayoutImmediate`，打 1 个字引发 12 次全树重排风暴；且无任何输入防抖，每输一个拼音字母立即触发昂贵的全量卡片匹配与字符串重算。
+- **【解法 Remedy】**：
+  1. 精简 `ScrollToTargetImmediate`，彻底剥除多层强制重排，仅在顶层 Content 节点保留最多单次安全布局刷新。
+  2. 为搜索输入加入 100ms 轻量防抖机制（按回车或清空时 0 延迟即刻生效）；优化失焦防竞态判断，确保防抖期间点击下方按钮（如绑定或展开）绝不吞点击。
+  3. 当模组组名（Group Name）已命中搜索词时，直接放行整张卡片，杜绝每字符重复对卡片内数十个热键执行 `FormatCombo` 与字符串拼接。
+- **【严禁反模式 Anti-pattern】**：严禁在 `onValueChanged` 频繁触发的输入事件中直接同步调用多层 `ForceUpdateCanvases` 与 `ForceRebuildLayoutImmediate`。
+
+### 25. 40 模组 800 个 TMP 文本组件同帧首次激活卡死与视口优先渐进展开
+- **【现象 Symptom】**：玩家订阅 40+ 模组时，首次点击「全部展开」瞬间出现长达 200~400ms 的深度顿挫。
+- **【根因 Root Cause】**：40 个模组卡片内包含约 800 个 TextMeshPro 文本与按钮组件，若在单帧内将全部折叠卡片同时激活，Unity 底层 `CanvasUpdateRegistry` 会在同一帧内对这 800 个从未渲染过的 TMP 材质和网格执行全量初始化与顶点生成，形成巨大的主线程尖刺。
+- **【解法 Remedy】**：
+  1. **视口优先瞬开**：首帧仅同步瞬间展开视口内可见的前 4 张模组卡与原版 5 张核心卡（肉眼可见画面 < 8ms 瞬时呈现到位，顶部按钮立即同步显示「全部收起」）。
+  2. **屏外渐进分帧展开**：将剩余 35+ 张屏外模组卡推入 `s_progressiveExpandQueue`，由 `KeyCaptureController.TickCapture()` 驱动，在后续帧中按每帧 <= 4ms 的安全预算离线平滑展开，彻底消除单帧数百毫秒顿挫。
+  3. 全部收起时，外层容器脱机批量折叠，< 3ms 瞬间收起。
+- **【严禁反模式 Anti-pattern】**：严禁在单帧内暴力将数十个大型复杂卡片（含数百个动态 TMP 文本）无节制全部激活触发同步排版。

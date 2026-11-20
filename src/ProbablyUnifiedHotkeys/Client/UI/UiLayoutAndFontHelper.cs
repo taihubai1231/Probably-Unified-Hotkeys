@@ -951,31 +951,7 @@ namespace ProbablyUnifiedHotkeys
 
             UiSessionState.ScrollRect.StopMovement();
 
-            // 跨视图切换/展开懒加载卡片后，需先刷新画布(含 TMP 首帧度量)，再自底向上逐层重排，最后再次同步画布尺寸
-            Canvas.ForceUpdateCanvases();
-
-            var parentRt = targetRt.parent as RectTransform;
-            int guard = 0;
-            while (parentRt != null && guard < 12)
-            {
-                LayoutRebuilder.ForceRebuildLayoutImmediate(parentRt);
-                if (parentRt == contentRt) break;
-                parentRt = parentRt.parent as RectTransform;
-                guard++;
-            }
-
-            if (UiSessionState.ModCardsContainer != null && UiSessionState.ModCardsContainer.activeInHierarchy)
-            {
-                var cardsRt = UiSessionState.ModCardsContainer.GetComponent<RectTransform>();
-                if (cardsRt != null) LayoutRebuilder.ForceRebuildLayoutImmediate(cardsRt);
-            }
-            if (UiSessionState.NormalContentRoot != null && UiSessionState.NormalContentRoot.activeInHierarchy)
-            {
-                var normalRt = UiSessionState.NormalContentRoot.GetComponent<RectTransform>();
-                if (normalRt != null) LayoutRebuilder.ForceRebuildLayoutImmediate(normalRt);
-            }
-            LayoutRebuilder.ForceRebuildLayoutImmediate(contentRt);
-            Canvas.ForceUpdateCanvases();
+            // 精简为最多 1 次 LayoutRebuilder.ForceRebuildLayoutImmediate(contentRt)（彻底消除逐层重复重排与双重 ForceUpdateCanvases）
             LayoutRebuilder.ForceRebuildLayoutImmediate(contentRt);
 
             float viewportHeight = viewportRt.rect.height;

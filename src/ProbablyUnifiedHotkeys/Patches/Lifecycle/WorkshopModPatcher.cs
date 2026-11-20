@@ -256,18 +256,31 @@ namespace ProbablyUnifiedHotkeys
 
         public static void ConfigEntryKeyCode_GetValue_Postfix(ConfigEntry<KeyCode> __instance, ref KeyCode __result)
         {
-            if (__result == KeyCode.None || ComboKeyStore.IsBypassed || __instance == null) return;
+            if (__instance == null || ComboKeyStore.IsBypassed) return;
             ComboKeyStore.EnsureLoaded();
             string? modId = __instance.Config?.ModId;
             string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
+            if (ComboKeyStore.IsExplicitlyUnbound(fullId) || ComboKeyStore.IsExplicitlyUnbound(__instance.Key))
+            {
+                __result = KeyCode.None;
+                return;
+            }
+            if (__result == KeyCode.None) return;
             ComboKeyStore.FilterRuntimeKey(ref __result, fullId, __instance.Key);
         }
 
         public static void ConfigEntryString_GetValue_Postfix(ConfigEntry<string> __instance, ref string __result)
         {
-            if (string.IsNullOrEmpty(__result) || ComboKeyStore.IsBypassed || __instance == null) return;
+            if (__instance == null || ComboKeyStore.IsBypassed) return;
+            ComboKeyStore.EnsureLoaded();
             string? modId = __instance.Config?.ModId;
             string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
+            if (ComboKeyStore.IsExplicitlyUnbound(fullId) || ComboKeyStore.IsExplicitlyUnbound(__instance.Key))
+            {
+                __result = "None";
+                return;
+            }
+            if (string.IsNullOrEmpty(__result)) return;
             if (!ComboKeyStore.IsManagedStringHotkey(fullId, __instance.Key)) return;
 
             if (!ModOptionScanner.TryParseComboString(__result, out KeyModifierMask embeddedMods, out KeyCode parsedKey) ||
@@ -296,9 +309,16 @@ namespace ProbablyUnifiedHotkeys
 
         public static void ConfigEntryInt_GetValue_Postfix(ConfigEntry<int> __instance, ref int __result)
         {
-            if (__result == 0 || ComboKeyStore.IsBypassed || __instance == null) return;
+            if (__instance == null || ComboKeyStore.IsBypassed) return;
+            ComboKeyStore.EnsureLoaded();
             string? modId = __instance.Config?.ModId;
             string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
+            if (ComboKeyStore.IsExplicitlyUnbound(fullId) || ComboKeyStore.IsExplicitlyUnbound(__instance.Key))
+            {
+                __result = 0;
+                return;
+            }
+            if (__result == 0) return;
             if (!ComboKeyStore.IsManagedIntHotkey(fullId, __instance.Key)) return;
             if (!Enum.IsDefined(typeof(KeyCode), __result)) return;
 
@@ -587,8 +607,14 @@ namespace ProbablyUnifiedHotkeys
 
         public static void ConflictScanner_GetKey_Postfix(ref KeyCode __result)
         {
-            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            if (ComboKeyStore.IsBypassed) return;
             ComboKeyStore.EnsureLoaded();
+            if (ComboKeyStore.IsExplicitlyUnbound("conflict_scanner.ReportKey"))
+            {
+                __result = KeyCode.None;
+                return;
+            }
+            if (__result == KeyCode.None) return;
             ComboKeyStore.FilterRuntimeKey(ref __result, "conflict_scanner.ReportKey");
         }
 
@@ -716,8 +742,14 @@ namespace ProbablyUnifiedHotkeys
 
         public static void ShowItemNames_GetHotkey_Postfix(ref KeyCode __result)
         {
-            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            if (ComboKeyStore.IsBypassed) return;
             ComboKeyStore.EnsureLoaded();
+            if (ComboKeyStore.IsExplicitlyUnbound("ShowItemNames.Hotkey") || ComboKeyStore.IsExplicitlyUnbound("snd.hotkey"))
+            {
+                __result = KeyCode.None;
+                return;
+            }
+            if (__result == KeyCode.None) return;
             ComboKeyStore.FilterRuntimeKey(ref __result, "ShowItemNames.Hotkey");
         }
 
@@ -754,10 +786,17 @@ namespace ProbablyUnifiedHotkeys
         {
             if (key == KeyCode.None)
             {
-                if (_sinSettingsSetHotkeyPropFn != null) _sinSettingsSetHotkeyPropFn(KeyCode.None);
-                else _sinSettingsHotkeyProp?.SetValue(null, KeyCode.None);
-                PlayerPrefs.SetInt("snd.hotkey", 0);
-                _sinSettingsCommitFn?.Invoke();
+                try
+                {
+                    if (_sinSettingsSetHotkeyPropFn != null) _sinSettingsSetHotkeyPropFn(KeyCode.None);
+                    else if (_sinSettingsHotkeyProp != null && _sinSettingsHotkeyProp.CanWrite && _sinSettingsHotkeyProp.GetSetMethod(true) != null) _sinSettingsHotkeyProp.SetValue(null, KeyCode.None);
+                    PlayerPrefs.SetInt("snd.hotkey", 0);
+                    _sinSettingsCommitFn?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Warn($"ShowItemNames_SetHotkey_Prefix error: {ex.Message}");
+                }
                 return false;
             }
             return true;
@@ -997,8 +1036,14 @@ namespace ProbablyUnifiedHotkeys
 
         public static void FactionReputation_GetJournalKey_Postfix(ref KeyCode __result)
         {
-            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            if (ComboKeyStore.IsBypassed) return;
             ComboKeyStore.EnsureLoaded();
+            if (ComboKeyStore.IsExplicitlyUnbound("faction_reputation.journal_key"))
+            {
+                __result = KeyCode.None;
+                return;
+            }
+            if (__result == KeyCode.None) return;
             ComboKeyStore.FilterRuntimeKey(ref __result, "faction_reputation.journal_key");
         }
 
@@ -1129,10 +1174,19 @@ namespace ProbablyUnifiedHotkeys
 
         public static void PenQoL_GetKey_Postfix(MethodBase __originalMethod, ref KeyCode __result)
         {
-            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            if (ComboKeyStore.IsBypassed) return;
             if (!PenQoLGetterCandidates.TryGetValue(__originalMethod, out string[]? ids) || ids == null) return;
 
             ComboKeyStore.EnsureLoaded();
+            foreach (var id in ids)
+            {
+                if (ComboKeyStore.IsExplicitlyUnbound(id))
+                {
+                    __result = KeyCode.None;
+                    return;
+                }
+            }
+            if (__result == KeyCode.None) return;
             ComboKeyStore.FilterRuntimeKey(ref __result, ids);
         }
 
@@ -1180,8 +1234,17 @@ namespace ProbablyUnifiedHotkeys
 
         public static void ClientDemandHighlight_GetToggleKey_Postfix(ref KeyCode __result)
         {
-            if (__result == KeyCode.None || ComboKeyStore.IsBypassed) return;
+            if (ComboKeyStore.IsBypassed) return;
             ComboKeyStore.EnsureLoaded();
+            if (ComboKeyStore.IsExplicitlyUnbound("clientdemandhighlight.toggle_key") ||
+                ComboKeyStore.IsExplicitlyUnbound("hollow.clientdemandhighlight.toggle_key") ||
+                ComboKeyStore.IsExplicitlyUnbound("hollow.clientdemandhighlight:toggleKey") ||
+                ComboKeyStore.IsExplicitlyUnbound("toggleKey"))
+            {
+                __result = KeyCode.None;
+                return;
+            }
+            if (__result == KeyCode.None) return;
             ComboKeyStore.FilterRuntimeKeyWithPrefix(
                 ref __result,
                 "hollow.clientdemandhighlight:",

@@ -133,3 +133,29 @@ flowchart TD
 | **2. 改造件 (`Mods`)** | **单帧瞬开**（< 16 ms） | **已落地** | `Patch_ModUIManager_Awake` 在场景初始化时离线预热（`PrewarmPanelInstance`），提前构建窗口骨架、52 行对象池复用（`RowPool`）与 `ConflictScannerPerfHelper` 签名缓存，消除开窗帧遍历销毁/生成 Prefab 布局风暴及 265 次重复反编译。 |
 | **3. 选项 (`OpenUI`)** | **< 16 ms**（单帧完成） | **已落地** | **模组折叠卡片按需懒构建（Lazy Content Build）**：首次开窗仅渲染原版 5 张核心卡片 + 39 张第三方模组折叠头部（Header），折叠卡片内部改键行与控件**完全不实例化 GameObject**，点击单个展开时再懒构建，分摊全部实例化开销。 |
 | **4. 全部展开 (`Expand All`)** | **无冻结感**（< 50 ms） | **已落地** | **挂起 Canvas 渲染与 LayoutGroup 回流**：批量展开前调用 `EnsureGroupContentBuilt` 在离线非激活（`SetActive(false)`）容器下批量建好内部控件；在 `UiLayoutAndFontHelper.WithSuspendedRootLayout` 保护下一次性批量切换全部原版卡与模组卡的展开态，仅触发 1 次顶层布局重建，杜绝数十次重复回流风暴。 |
+
+---
+
+## 五、 实机 15 项反馈全量根治与防退化闭环 (15-Feedback Hotfix)
+
+针对业务决策人实机验收反馈的 15 项核心痛点，质检与研发部已实施全量穿透根治，并由专项自动化单测套件（`BugfixRegression15SuiteTests.cs`）建立永久防退化护栏：
+
+1. **开窗基准快照防假脏护栏（针对 #1）**：
+   - **风险**：原版下拉框自适应时污染底层 `overriddenDropdowns` 字段，且原版常规项读数偏离出厂默认值导致误判未保存更改。
+   - **解法**：建立 `CaptureOpenBaselineSnapshot()` 开窗基准快照，仅在控件读数同时偏离快照值与底层值时判脏；`HasUnsavedChanges()` 恒守用户修改真实性。
+2. **显式解绑永久防回退护栏（针对 #2）**：
+   - **风险**：用户按 Esc 解绑后重启游戏，原版 `KeyBindHelper` 与第三方反序列化机制因配置项为 None 自动回退底层默认热键。
+   - **解法**：在 `ComboKeyStore` 建立 `ExplicitUnboundHotkeys` 持久化集合，所有运行时按键与第三方适配器在读取和轮询时对显式解绑条目强制保持 `KeyCode.None`，重新绑定新键时自动释放。
+3. **40 模组视口瞬开与分帧展开护栏（针对 #3 & #8）**：
+   - **风险**：40 模组 800+ 控件同帧激活引发 `CanvasUpdateRegistry` 顶点重算风暴；搜索框每输入单字触发 12 次全树重排。
+   - **解法**：全部展开采用「视口前 4 卡瞬开 + 屏外 35 卡分帧渐进展开（<= 4ms/帧）」；搜索框加入 100ms 轻量防抖与单次顶层 Content 刷新。
+4. **改造件详情按钮尺寸硬约束（针对 #4）**：
+   - **风险**：原代码特判隐藏封面框后详情列 Row 弹性拉伸导致停用/齿轮/工坊按钮严重形变。
+   - **解法**：恢复标准 `preview.png` 官方封面展示；在 `LayoutElement` 注入硬约束锁定高度 42px 与图标 42×42px，杜绝任何外部形变。
+5. **只读属性反射写入安全防护与组合键精准抑制（针对 #6 & #7）**：
+   - **风险**：`ConflictScanner.Keybind.Key` 为无 setter 的只读属性，反射调用 `SetValue` 抛出 `ArgumentException` 打崩 `ApplyAllSettings`，导致保存与预设中途夭折；组合键未对齐带 `key_` 前缀候选导致误回退基础单键。
+   - **解法**：地毯式排查对 `PropertyInfo.SetValue` 的调用并增加 `CanWrite && GetSetMethod(true) != null` 严格前置；候选 ID 全对称对齐带 `key_` 与 `vanilla.` 前缀；按下组合键时精准抑制同主键单键。
+6. **模组排查强转与忽略全生命周期（针对 #10）**：
+   - **解法**：实现强转与忽略持久化集合互斥转移，变更时自增 `_forcedHotkeysRevision` 驱动 `ModCatalogCache` 自动就地重扫。
+7. **预设槽位读写与非法剪贴板防崩保护（针对 #12, #13, #14）**：
+   - **解法**：槽位支持 100% 完整快照保存、读取与清空；向剪贴板导入传入空串、乱码、残缺或非本模组 JSON 时 100% 安全返回 `false` 并在 UI 显示彩色错误提示，零异常外溢，零会话状态污染。

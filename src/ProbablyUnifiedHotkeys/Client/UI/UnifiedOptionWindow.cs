@@ -328,6 +328,7 @@ namespace ProbablyUnifiedHotkeys
             {
                 UiSessionState.SuppressRuleConflictRefresh = false;
             }
+            UiSessionState.CaptureOpenBaselineSnapshot();
             UiSessionState.OpenedFrameCount = Time.frameCount;
         }
 
@@ -513,8 +514,15 @@ namespace ProbablyUnifiedHotkeys
                         {
                             selfModLanguageChanged = true;
                         }
-                        gen.ApplyPending();
-                        groupChanged = true;
+                        try
+                        {
+                            gen.ApplyPending();
+                            groupChanged = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Warn($"Failed to apply pending general setting for mod '{group.ModId}' ({gen.Id}): {ex.Message}");
+                        }
                     }
                 }
 
@@ -522,22 +530,29 @@ namespace ProbablyUnifiedHotkeys
                 {
                     if (hotkey.HasPendingChange)
                     {
-                        if (hotkey.SetCombo != null)
+                        try
                         {
-                            hotkey.SetCombo(hotkey.PendingModifiers, hotkey.PendingKey);
-                            ComboKeyStore.SetSavedCombo(hotkey.Id, KeyModifierMask.None, KeyCode.None);
-                            comboChanged = true;
+                            if (hotkey.SetCombo != null)
+                            {
+                                hotkey.SetCombo(hotkey.PendingModifiers, hotkey.PendingKey);
+                                ComboKeyStore.SetSavedCombo(hotkey.Id, KeyModifierMask.None, KeyCode.None);
+                                comboChanged = true;
+                            }
+                            else
+                            {
+                                hotkey.SetKey?.Invoke(hotkey.PendingKey);
+                                ComboKeyStore.SetSavedCombo(hotkey.Id, hotkey.PendingModifiers, hotkey.PendingKey);
+                                comboChanged = true;
+                            }
+                            hotkey.PendingModifiers = KeyModifierMask.None;
+                            hotkey.PendingKey = KeyCode.None;
+                            hotkey.HasPendingChange = false;
+                            groupChanged = true;
                         }
-                        else
+                        catch (Exception ex)
                         {
-                            hotkey.SetKey?.Invoke(hotkey.PendingKey);
-                            ComboKeyStore.SetSavedCombo(hotkey.Id, hotkey.PendingModifiers, hotkey.PendingKey);
-                            comboChanged = true;
+                            ModLogger.Warn($"Failed to apply pending hotkey for mod '{group.ModId}' ({hotkey.Id}): {ex.Message}");
                         }
-                        hotkey.PendingModifiers = KeyModifierMask.None;
-                        hotkey.PendingKey = KeyCode.None;
-                        hotkey.HasPendingChange = false;
-                        groupChanged = true;
                     }
                 }
 
@@ -559,9 +574,23 @@ namespace ProbablyUnifiedHotkeys
 
             if (comboChanged)
             {
-                ComboKeyStore.Save();
+                try
+                {
+                    ComboKeyStore.Save();
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Warn($"Failed to save ComboKeyStore: {ex.Message}");
+                }
             }
-            ComboKeyStore.RebuildRuntimeLookup(UiSessionState.AllHotkeys);
+            try
+            {
+                ComboKeyStore.RebuildRuntimeLookup(UiSessionState.AllHotkeys);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to rebuild runtime lookup: {ex.Message}");
+            }
 
             // 4. 触发通知链，使第三方模组即时热生效
             foreach (var modId in touchedModIds)
@@ -576,21 +605,44 @@ namespace ProbablyUnifiedHotkeys
             }
 
             // 5. 重新刷新基准快照 (Baseline Snapshot) 与全量条目状态复位
-            UiSessionState.RefreshBaselineSnapshotsAfterApply(manager);
+            try
+            {
+                UiSessionState.RefreshBaselineSnapshotsAfterApply(manager);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to refresh baseline snapshots after apply: {ex.Message}");
+            }
+
+            try
+            {
+                SyncVanillaKeyButtonColors();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to sync vanilla key button colors: {ex.Message}");
+            }
 
             // 6. 重新刷新冲突与颜色状态
-            ConflictAggregationView.RefreshConflicts();
-            if (UiSessionState.IsConflictViewActive)
+            try
             {
-                ConflictAggregationView.RebuildConflictView();
-            }
-            if (touchedModIds.Count > 0 || comboChanged)
-            {
-                UiSessionState.DiagnosticViewDirty = true;
-                if (UiSessionState.IsDiagnosticViewActive)
+                ConflictAggregationView.RefreshConflicts();
+                if (UiSessionState.IsConflictViewActive)
                 {
-                    ModDiagnosticView.RebuildDiagnosticView();
+                    ConflictAggregationView.RebuildConflictView();
                 }
+                if (touchedModIds.Count > 0 || comboChanged)
+                {
+                    UiSessionState.DiagnosticViewDirty = true;
+                    if (UiSessionState.IsDiagnosticViewActive)
+                    {
+                        ModDiagnosticView.RebuildDiagnosticView();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to refresh conflicts after apply: {ex.Message}");
             }
         }
 

@@ -35,7 +35,14 @@ namespace ProbablyUnifiedHotkeys
             }
 
             var vanillaEntry = UiSessionState.AllHotkeys.Find(h =>
-                h.ModId == "vanilla" && string.Equals(h.RawOptionId, optionId, StringComparison.Ordinal));
+            {
+                if (h.ModId != "vanilla" || string.IsNullOrEmpty(h.RawOptionId)) return false;
+                if (string.Equals(h.RawOptionId, optionId, StringComparison.OrdinalIgnoreCase)) return true;
+                if (string.Equals(h.RawOptionId, "key_" + optionId, StringComparison.OrdinalIgnoreCase)) return true;
+                if (optionId.StartsWith("key_", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(h.RawOptionId, optionId.Substring(4), StringComparison.OrdinalIgnoreCase)) return true;
+                return false;
+            });
             if (vanillaEntry == null)
             {
                 return false;
@@ -120,12 +127,12 @@ namespace ProbablyUnifiedHotkeys
         }
 
         /// <summary>
-        /// 窗口开启后的按帧预算后台静默预建：在约 1.8ms/帧 的平滑预算内于折叠态(inactive)容器连续构建卡片内容，
+        /// 窗口开启后的按帧预算后台静默预建：在约 3.0ms/帧 的平滑预算内于折叠态(inactive)容器连续构建卡片内容，
         /// 既不在开启首帧产生卡顿，又能平滑预热全量卡片，使“全部展开”与搜索瞬开。
         /// </summary>
         internal static void PrebuildNextCollapsedModCard()
         {
-            if (UiSessionState.CurrentWindow == null || UiSessionState.IsConflictViewActive || UiSessionState.IsDiagnosticViewActive || UiSessionState.CapturingEntry != null || UiSessionState.PendingScrollTarget != null || !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery))
+            if (UiSessionState.CurrentWindow == null || UiSessionState.IsConflictViewActive || UiSessionState.IsDiagnosticViewActive || UiSessionState.CapturingEntry != null || UiSessionState.PendingScrollTarget != null || !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery) || TopSearchAndActionBar.HasPendingProgressiveExpand)
             {
                 return;
             }
@@ -149,7 +156,7 @@ namespace ProbablyUnifiedHotkeys
 
                 CollapsibleCardView.EnsureGroupContentBuilt(group);
 
-                if (PrebuildStopwatch.Elapsed.TotalMilliseconds >= 1.8)
+                if (PrebuildStopwatch.Elapsed.TotalMilliseconds >= 3.0)
                 {
                     break;
                 }
@@ -157,14 +164,20 @@ namespace ProbablyUnifiedHotkeys
         }
 
         /// <summary>
-        /// 每帧由 Patch_GameOptionUIManager_Update 驱动模组/原版快捷键捕获、静默预建、安全 Esc 恢复与搜索延迟滚动。
+        /// 每帧由 Patch_GameOptionUIManager_Update 驱动模组/原版快捷键捕获、搜索防抖、渐进展开、静默预建、安全 Esc 恢复与搜索延迟滚动。
         /// </summary>
         internal static void TickCapture()
         {
+            // 搜索输入防抖倒计时检测
+            TopSearchAndActionBar.TickSearchDebounce();
+
+            // 全部展开分帧渐进展开调度（视口优先瞬开后的屏外卡片平滑处理）
+            TopSearchAndActionBar.TickProgressiveExpand();
+
             // 搜索 / 跨视图跳转后跨帧滚动校准
             UiLayoutAndFontHelper.TickPendingScroll();
 
-            // 闲置时每帧在折叠容器内后台预建未建卡片（Stopwatch 预算 <= 1.8ms）
+            // 闲置时每帧在折叠容器内后台预建未建卡片（Stopwatch 预算 <= 3.0ms）
             PrebuildNextCollapsedModCard();
 
             // 鼠标组合键完成/取消后的同键防重触发窗口释放检测
