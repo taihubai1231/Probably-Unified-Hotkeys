@@ -5,16 +5,36 @@
 
 ---
 
-## [1.5.0] - 2026-11-18
+## [1.5.0] - 2026-11-20
 
 ### Added
 - **7 层单向解耦架构落地**：
   - 确立 `Diagnostics` -> `Config` -> `Core` -> `Persistence` -> `Adapter` -> `Patches` -> `Client` 单向分层拓扑，彻底杜绝逆向跨层调用。
 - **UI 运行时状态独立管理 (`UiSessionState.cs`)**：
   - 彻底修复历史版本与 `v2` 遗留的设计缺陷：将 `Core/Model/ModModel.cs` 净化为 100% 纯业务领域模型（零 `GameObject` / `CustomUIElement` 控件依赖）；
-  - 新增 `src/Client/State/UiSessionState.cs` 独立集中维护所有运行时 UI 控件句柄、卡片展开状态、`BaselineSnapshot` 基准快照与未保存脏状态机。
-- **5,137 行巨石 UI (`UnifiedOptionUI.cs`) 正交拆解**：
-  - 按职责正交拆分为 10 个高内聚子组件：`UnifiedOptionWindow`、`UnsavedConfirmDialog`、`TopSearchAndActionBar`、`CollapsibleCardView`、`KeyCaptureController`、`ConflictAggregationView`、`ModDiagnosticView`、`ProfilePresetCardView`、`SectionLocalizer`、`UiLayoutAndFontHelper`。
+  - 新增 `src/Client/State/UiSessionState.cs` 独立集中维护所有运行时 UI 控件句柄、卡片展开状态、`BaselineSnapshot` 基准快照与未保存脏状态机；
+  - 订阅 `ModCatalogCache.SessionResetRequested` 自动清理控件句柄，杜绝跨会话句柄内存泄露。
+- **5,137 行巨石 UI (`UnifiedOptionUI.cs`) 正交拆解为 10 个高内聚子组件**：
+  - `UnifiedOptionWindow.cs`：主窗口生命周期、`IOptionUiBridge` 18 项契约兑现与离线批量装配；
+  - `UiLayoutAndFontHelper.cs`：`FittedFontSizeCache` 单次字号拟合缓存与 36px 方形折叠按钮防挤压内边距清零；
+  - `UnsavedConfirmDialog.cs`：原生模态居中防丢确认弹窗与按键录入状态豁免；
+  - `TopSearchAndActionBar.cs`：四模式纯内核检索引擎复用与全部展开/收起瞬切调度；
+  - `CollapsibleCardView.cs`：原版分区与模组折叠卡片，落地 ADR-009 离线按需懒构建（Lazy Content Build）；
+  - `KeyCaptureController.cs`：按键/组合键/侧键录入控制器，支持鼠标右键（`Mouse1`）与中键（`Mouse2`）绑定增强（ADR-010）；
+  - `ConflictAggregationView.cs`：冲突专属聚合视图与就地实时联动改键；
+  - `ModDiagnosticView.cs`：疑难接管排查视图、原地热重扫与剪贴板合规汇总复制；
+  - `ProfilePresetCardView.cs`：3 套场景预设快照与剪贴板 JSON 一键导出/导入；
+  - `SectionLocalizer.cs`：零 UI 依赖三层分区标题本地化与结构化键名智能净化。
+- **四大高频核心按钮极致顺滑优化 (ADR-009)**：
+  - 「退出游戏」：通过 `PrepareFastQuit` 消除 52 个模组 `UnpatchAll` 同步反编译与网络等待，退出时间降至 `< 0.05s`；
+  - 「改造件」面板：建立全量模组环境指纹签名，彻底斩断 5 次重复重扫（265 次反编译），实现单帧瞬开；
+  - 「选项」面板：模组折叠卡片按需懒构建，开窗仅加载外壳，消除逐控件回流风暴；
+  - 「全部展开」：在离线非激活容器下批量实例化，结合 `WithSuspendedRootLayout` 挂起顶层重排，达成丝滑瞬切。
+- **释放鼠标右键与中键改键能力 (ADR-010)**：
+  - 修复原版右键被当作取消键的缺陷，全面支持将 `Mouse1`（右键）与 `Mouse2`（中键）直接录制或组合绑定为游戏操作键；
+  - 仅无修饰键单击鼠标左键（`Mouse0`）执行取消录入。
+- **39 项全套离线单元测试 100% 全绿覆盖**：
+  - 新增 `Batch3ClientArchitectureAndStateTests.cs`，反射扫描全程序集架构纯度、独立子组件隔离、`OptionUiHost` 桥梁挂载、模型字典自清理与 `KeyCode.None` 防假脏契约。
 - **完备的工程治理与标准化技术基建**：
   - 新增《AI Agent 协作宪章》(AGENTS.md)，落地单层星型扁平拓扑、零历史自包含派发与防并发红线；
   - 新增《踩坑全景账本》(docs/PITFALLS.md)，按四元组收录 18 大历史深坑；
@@ -24,7 +44,7 @@
 
 ### Changed
 - **异常防崩网加固**：全库消灭空 `catch {}`，统一通过 `SafeExecution.SafeExecute` / `SafeFunc` 执行并记录结构化日志（`[ProbablyUnifiedHotkeys][LEVEL]`）。
-- **0 权限默认纯净契约**：默认构建注入 `DisableDllKeyProbe=true` 编译宏，`manifest.xml` 保持空 `<Capabilities />`，确保静态扫描达到 `0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`，面向官方 2026-12-10 安全白名单门禁。
+- **0 权限默认纯净契约**：默认构建注入 `DisableDllKeyProbe=true` 编译宏，`manifest.xml` 保持空 `<Capabilities />`，确保静态扫描达到 `0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`（1,343 个扫描方法全部通过），面向官方 2026-12-10 安全白名单门禁。
 
 ---
 

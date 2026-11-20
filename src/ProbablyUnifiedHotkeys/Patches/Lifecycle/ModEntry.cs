@@ -42,6 +42,7 @@ namespace ProbablyUnifiedHotkeys
             I18n.EnsureRegistered();
             ModFeatureConfig.EnsureRegistered();
             ModCatalogCache.EnsureEventSubscriptions();
+            UnifiedOptionWindow.EnsureBridgeRegistered();
 
             if (!_perfPatchesHookRegistered)
             {

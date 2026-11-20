@@ -156,3 +156,33 @@
   - `ConflictScanner_LegacyPrefsFallback_DoesNotOverwriteToF7`：验证旧版原生单键（如 `F10` 或 `None`）在 `custom_hotkeys.v1` 为空时绝不误覆盖回 `F7`。
   - `MouseButtons_RightAndMiddleClick_FormattingAndBilingualSupport`：验证 `Mouse1`（右键）与 `Mouse2`（中键）的友好文本格式化与中英双语对齐（ADR-010）。
 - **全套单测当前状态**：33/33 项测试 100% 绿灯通过，0 错误 0 警告。
+
+---
+
+## 6. 阶段 3 第 3 批 (Batch 3) 已落地资产与单测覆盖图谱
+
+> **状态**：阶段 3 第 3 批（表现层正交解耦、5,137 行巨石彻底拆解、折叠卡片按需懒构建、右键绑定增强、全量单测与实机热部署门禁）已全部圆满落地并通过 39 项 xUnit 离线单元测试（100% 全绿），成功真实热部署至游戏 `Mods/probably_unified_hotkeys/` 且通过官方 `ModScanner` 0 权限纯净门禁（1,343 个方法扫描通过）。
+
+### 6.1 落地源码清单与行数统计
+- `src/ProbablyUnifiedHotkeys/Client/State/`：
+  - `UiSessionState.cs` (1,054 行)：集中维护全生命周期运行时 UI 句柄（`CardParts`、`HotkeyUiMap`、`GeneralUiMap`）、`BaselineSnapshot` 基准快照、锁死 `v1.4.7` 空键解绑防假脏状态机，以及响应 `ModCatalogCache.SessionResetRequested` 的句柄自清理。
+- `src/ProbablyUnifiedHotkeys/Client/UI/`（9 大正交组件 + 1 状态机，共 6,991 行）：
+  - `UnifiedOptionWindow.cs` (597 行)：实现 `IOptionUiBridge` 18 项契约，主窗口生命周期与单帧瞬开离线批量装配总控。
+  - `UiLayoutAndFontHelper.cs` (1,026 行)：单次字号拟合缓存（`FittedFontSizeCache`，容量上限 <= 2048）、折叠箭头 36px 防挤压清零内边距（`StyleFoldButton`）、`WithSuspendedRootLayout` 批量挂起重排。
+  - `UnsavedConfirmDialog.cs` (236 行)：居中模态防丢弹窗（保存并退出 / 放弃修改 / 取消），按键录制状态安全豁免。
+  - `TopSearchAndActionBar.cs` (827 行)：四模式高效搜索、拼音与词元边界内核复用、「全部展开」离线预建与单帧瞬切。
+  - `CollapsibleCardView.cs` (979 行)：原版与模组统一折叠卡片渲染、ADR-009 离线非激活态按需懒构建（Lazy Content Build）、24px/16px 像素级排版缩进。
+  - `KeyCaptureController.cs` (381 行)：按键/组合键录入控制器、ADR-010 鼠标右键（`Mouse1`）与中键（`Mouse2`）捕获增强、Esc 解绑清空为无及防误关窗三重吸收、闲置帧预算静默预建（<= 1.8ms）。
+  - `ConflictAggregationView.cs` (238 行)：冲突专属聚合视图、冲突条目增量懒构建、双语高亮与就地联动改键。
+  - `ModDiagnosticView.cs` (1,318 行)：四分类模组排查疑难接管、原地热重扫（保持展开记忆）、合规调用 `GUIUtility.systemCopyBuffer` 汇总复制。
+  - `ProfilePresetCardView.cs` (335 行)：3 套场景预设槽位与剪贴板 JSON 一键导出/导入卡片界面。
+
+### 6.2 补充单元测试套件 (`Batch3ClientArchitectureAndStateTests.cs`)
+- `tests/ProbablyUnifiedHotkeys.Tests/Batch3ClientArchitectureAndStateTests.cs`（6 项新增用例）：
+  - `FinalAssembly_CoreLayer_ZeroUIAndHarmonyReferences`：全程序集反射扫描，断言 Core 层所有类 0 引用 `GameObject` / `TMPro` / `UnityEngine.UI` / `HarmonyLib` / `CustomUIElement`。
+  - `FinalAssembly_AdapterLayer_ZeroTMProAndUnityEngineUIPurity`：断言 Adapter 层所有类 0 引用 `TMPro` / `UnityEngine.UI`。
+  - `FinalAssembly_ClientArchitecture_NineUiComponentsAndStateAreIndependent`：断言全程序集不再存在单文件巨石（验证 Client/UI 9 大组件与 UiSessionState 独立成型，且 `UnifiedOptionWindow.Instance` 完整实现 `IOptionUiBridge` 全部 18 项契约）。
+  - `UnifiedOptionWindow_EnsureBridgeRegistered_MountsOptionUiHostActive`：验证 `EnsureBridgeRegistered` 幂等挂载 `OptionUiHost.Active` 并注入全部解耦生命周期委托。
+  - `UiSessionState_ModelHandleDictionaries_ClearOnCacheInvalidateAndReset`：验证模型句柄字典映射在触发 `ModCatalogCache.Invalidate()` 与 `SessionResetRequested` 时自动清空，杜绝内存陈旧句柄泄露。
+  - `UiSessionState_HasUnsavedChanges_KeyCodeNone_Unbind_ReturnsFalse_LockingV147Contract`：验证 `KeyCode.None` 显式解绑场景下 `HasUnsavedChanges()` 严格返回 `false`，锁死 `v1.4.7` 防假脏弹窗交互契约。
+- **全套单测最终收官状态**：39/39 项测试 100% 绿灯全量通过，0 错误 0 警告。

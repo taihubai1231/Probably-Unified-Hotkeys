@@ -134,6 +134,15 @@ namespace ProbablyUnifiedHotkeys
                 _cachedAllHotkeys = null;
                 _cachedScanReport = null;
             }
+
+            try
+            {
+                SessionResetRequested?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error("Exception in SessionResetRequested", ex);
+            }
         }
 
         /// <summary>

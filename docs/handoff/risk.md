@@ -90,12 +90,21 @@ flowchart TD
   - 独立 .NET 8 工具 `ScannerCheck` 对已热部署的真实 DLL 进行官方 `ModScanner` 审计：达成 **`0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False / UsesDeprecatedReflection=False`**。
 
 ### 3. 批次三：表现层解耦与巨石 UI 拆解 (Batch 3)
-- **涵盖模块**：`Client/State/UiSessionState.cs`、`Client/I18n/`、`Client/UI/`（10 个独立视图组件）。
-- **高危风险点**：
-  1. **5,137 行巨石拆解时的状态竞态**：原 `UnifiedOptionUI.cs` 内部共享了大量私有字段，拆解为 10 个独立文件后，若状态传递设计不当，极易出现跨组件空指针或事件丢失。
+- **涵盖模块**：`Client/State/UiSessionState.cs`、`Client/I18n/`、`Client/UI/`（9 大独立正交视图组件 + 1 状态机，共 10 个文件）。
+- **当前状态**：**已全部落地并通过全量脱机单测（39/39 Tests Green, 100% 通过），标准 4 文件真实热部署至游戏 Mods 目录且通过官方 `ModScanner` 0 权限纯净门禁（1,343 个方法扫描通过）**。
+- **高危风险点与闭环验证结果**：
+  1. **5,137 行巨石拆解时的状态竞态与句柄泄露**：原 `UnifiedOptionUI.cs` 内部共享了大量私有字段，拆解为 10 个独立文件后，若状态传递设计不当，极易出现跨组件空指针或事件丢失。
+     - **闭环验证**：由 `UiSessionState.cs` 集中维护运行时 UI 句柄，订阅 `ModCatalogCache.SessionResetRequested` 自动清空 `CardParts`、`HotkeyUiMap` 与 `GeneralUiMap`，经单测 `UiSessionState_ModelHandleDictionaries_ClearOnCacheInvalidateAndReset` 锁死零泄露契约。
   2. **搜索框失焦点击竞争 (Race Condition)**：`TMP_InputField` 失焦瞬间触发 `OnSearchChanged`，在同一帧内重置下方卡片树，导致用户鼠标点击穿透或目标错位。
+     - **闭环验证**：在 `TopSearchAndActionBar.cs` 中实现 `onEndEdit` 幂等防竞态判断，并在主窗口层配合滚动校准队列延迟排版回流。
   3. **Esc 录键与防误关窗三重拦截失效**：录制按键状态下按 Esc，若吸收信号不及时，同帧穿透到顶层 `CustomUIManager.HandleEscape`，导致选项窗口被误关闭。
-  4. **UGUI 布局冲突吞字**：方形折叠按钮内边距未清零、`TMP_InputField` 覆盖 `preferredWidth` 挤压左侧标签等排版回退。
+     - **闭环验证**：`KeyCaptureController` 在捕获到 `KeyCode.Escape` 时调用 `UiSessionState.MarkEscapeConsumed()`，同步填充原版及 CustomUI 消费帧戳，并将键位解绑清空为无（`KeyCode.None`），确保弹窗安全与零误关。
+  4. **UGUI 布局冲突吞字与折叠按钮被压扁**：方形折叠按钮内边距未清零、`TMP_InputField` 覆盖 `preferredWidth` 挤压左侧标签等排版回退。
+     - **闭环验证**：`UiLayoutAndFontHelper.StyleFoldButton` 显式清零 `Meta_Button` 内边距 `(0,0,0,0)`，杜绝 36px 方形按钮变形；`ConfigureSearchOrLongInputField` 锁定右侧弹性伸缩；字号拟合缓存容量锁死 <= 2048。
+  5. **解绑为「无」点击应用后误弹假脏确认弹窗（v1.4.7 防退化）**：
+     - **闭环验证**：`UiSessionState.HasUnsavedChanges()` 严格对 `KeyCode.None` 显式解绑豁免，经单测 `UiSessionState_HasUnsavedChanges_KeyCodeNone_Unbind_ReturnsFalse_LockingV147Contract` 锁死契约。
+  6. **鼠标右键（`Mouse1`）录入支持（ADR-010）**：
+     - **闭环验证**：`KeyCaptureController` 支持直接单键绑定 `Mouse1`（右键）与 `Mouse2`（中键），仅在无修饰键单击鼠标左键（`Mouse0`）时取消录入，彻底释放右键改键能力。
 - **应对护栏**：
   - 引入 `UiSessionState.cs` 集中维护运行时 UI 句柄、`BaselineSnapshot` 基准快照与脏状态标志，各 UI 子组件仅作为无状态或弱状态的渲染器。
   - 搜索框变更加入节流防抖处理，卡片树重新排版延迟至帧末执行。
@@ -121,6 +130,6 @@ flowchart TD
 | 按钮/交互路径 | 帧预算/耗时目标 | 实现状态 | 架构护栏与性能优化机制 |
 |---|---|---|---|
 | **1. 退出游戏 (`Exit`)** | **< 0.05 秒**（原 6.4 秒） | **已落地** | `PrepareFastQuit` 安全执行 `PrefsStorage.Save()` 后将各模组的 `HarmonyInstance` 赋空，阻断 52 个模组在自身 `OnDisable` 中重复触发 `UnpatchAll` 的连环反编译与遥测等待，直接调用 `Application.Quit()`。 |
-| **2. 改造件 (`Mods`)** | **单帧瞬开**（< 16 ms） | **已落地** | `Patch_ModUIManager_Awake` 在场景初始化时离线预热（`PrewarmPanelInstance`），提前构建窗口骨架、52 行对象池复用（`RowPool`）与冲突缓存预热，消除开窗帧遍历销毁/生成 Prefab 布局风暴。 |
-| **3. 选项 (`OpenUI`)** | **< 16 ms**（单帧完成） | **第 3 批军令状** | **模组折叠卡片按需懒构建（Lazy Content Build）**：首次开窗仅渲染原版 5 张核心卡片 + 39 张第三方模组折叠头部（Header），折叠卡片内部改键行与控件**完全不实例化 GameObject**，点击单个展开时再懒构建，分摊全部实例化开销。 |
-| **4. 全部展开 (`Expand All`)** | **无冻结感**（< 50 ms） | **第 3 批军令状** | **挂起 Canvas 渲染与 LayoutGroup 回流**：批量展开前临时禁用根 Canvas 或挂起 Content 的 `VerticalLayoutGroup` / `ContentSizeFitter`；批量按需实例化剩余卡片内容，全面复用 `FittedFontSizeCache` 单次字号拟合缓存；完成后一次性恢复 Canvas 并触发单次 `LayoutRebuilder.ForceRebuildLayoutImmediate`，杜绝数十次重复回流风暴。 |
+| **2. 改造件 (`Mods`)** | **单帧瞬开**（< 16 ms） | **已落地** | `Patch_ModUIManager_Awake` 在场景初始化时离线预热（`PrewarmPanelInstance`），提前构建窗口骨架、52 行对象池复用（`RowPool`）与 `ConflictScannerPerfHelper` 签名缓存，消除开窗帧遍历销毁/生成 Prefab 布局风暴及 265 次重复反编译。 |
+| **3. 选项 (`OpenUI`)** | **< 16 ms**（单帧完成） | **已落地** | **模组折叠卡片按需懒构建（Lazy Content Build）**：首次开窗仅渲染原版 5 张核心卡片 + 39 张第三方模组折叠头部（Header），折叠卡片内部改键行与控件**完全不实例化 GameObject**，点击单个展开时再懒构建，分摊全部实例化开销。 |
+| **4. 全部展开 (`Expand All`)** | **无冻结感**（< 50 ms） | **已落地** | **挂起 Canvas 渲染与 LayoutGroup 回流**：批量展开前调用 `EnsureGroupContentBuilt` 在离线非激活（`SetActive(false)`）容器下批量建好内部控件；在 `UiLayoutAndFontHelper.WithSuspendedRootLayout` 保护下一次性批量切换全部原版卡与模组卡的展开态，仅触发 1 次顶层布局重建，杜绝数十次重复回流风暴。 |

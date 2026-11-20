@@ -29,6 +29,7 @@ namespace ProbablyUnifiedHotkeys.Tests
             HotkeyProfileManager.ActiveSlotIndex = 0;
             ModEntry.ResetApplicationQuittingForTest();
             KnownModAdapters.ResetBootSyncForTest();
+            UiSessionState.FrameCountProviderForTest = () => 100;
         }
     }
 }
