@@ -95,81 +95,54 @@ flowchart TD
 
 ---
 
-## 5. GitHub Actions Tag 自动化发布流程
+## 5. 发版前置审批门禁与 GitHub Actions 自动化发布流程
 
-仓库配置了针对 Git Tag 的自动化 CI/CD 流水线（`.github/workflows/`）：
+### 5.0 正式发布前强制备份与人工审阅门禁（最高红线）
+在执行任何 `git push`、打版本 Tag 或上传创意工坊前，**必须先完成以下两步并获得老板明确批准**：
+1. **离线版本备份封存**：将当前待发布版本的标准 4 文件与 `.zip` 压缩包完整备份留档；
+2. **三端定稿简介呈审**：将 `manifest.xml`、`README.md` 以及工坊简介的**无 BBCode 纯净阅读文档**呈交老板过目签字，未获明确同意严禁执行上传或推送。
 
-### 5.1 触发流程
-```bash
-# 1. 确认工作区完全干净且本地 check_mod.ps1 验证通过
-git status
+### 5.1 触发流程（无损历史保留）
+```powershell
+# 1. 将通过 check_mod.ps1 验证的最新正式 DLL 同步至 CI 兜底资产目录
+Copy-Item "src/ProbablyUnifiedHotkeys/bin/Release/netstandard2.1/ProbablyUnifiedHotkeys.dll" ".github/release-assets/ProbablyUnifiedHotkeys.dll" -Force
 
-# 2. 创建符合语义化的发布 Tag 并推送到远端
-git tag v1.5.0 -m "release: v1.5.0 official release"
+# 2. 提交并推送主分支，创建语义化 Tag 触发自动打包挂载 Release
+git push origin main
+git tag -a v1.5.0 -m "Release v1.5.0"
 git push origin v1.5.0
 ```
 
-### 5.2 CI 自动化作业
-1. **Runner 环境**：`windows-latest`，安装 .NET 8.0 SDK。
-2. **构建与扫描**：
-   - 执行 Release 编译；
-   - 运行 `ScannerCheck` 静态安全扫描；
-   - 提取部署目录下的标准 4 文件。
-3. **打包发布**：
-   - 压缩打包生成 `probably_unified_hotkeys_v1.5.0.zip`；
-   - 自动生成 GitHub Release，包含对应版本号、校验哈希（SHA256）与从 `CHANGELOG.md` 提取的更新说明。
+### 5.2 CI 自动化作业 (`.github/workflows/release.yml`)
+1. **Runner 环境**：`windows-latest`。
+2. **智能双源打包**：若云端存在游戏 `Managed` 依赖缓存则在线运行单测并编译；若云端无游戏私有程序集，则自动取用经本地 `ModScanner` 零权限门禁验证过的 `.github/release-assets/ProbablyUnifiedHotkeys.dll`，与 `manifest.xml`、`README.md`、`preview.png` 组装为标准 4 文件压缩包 `ProbablyUnifiedHotkeys-v1.5.0.zip`。
+3. **自动创建 Release**：通过 `softprops/action-gh-release@v2` 自动发布正式 GitHub Release 并挂载 `.zip` 下载附件。
 
 ---
 
-## 6. Steam 创意工坊 `SteamTagger` 双语槽位三步闭环 SOP
+## 6. Steam 创意工坊双语槽位发布 SOP
 
-### 6.1 为什么必须三步闭环？
-Valve Steamworks UGC API 对工坊物品的语言槽位（如 `schinese` 简体中文、`english` 默认英文）**不提供删除接口**。一旦物品曾写入过 `schinese` 槽位，中文 Steam 客户端将**永久优先**读取该槽位。如果仅使用普通的 `steamcmd` 命令行脚本更新，只会覆写 `default` 全局槽位，导致国内玩家看到的永远是过期的旧版说明。
+### 6.1 为什么必须同步 `english` 与 `schinese` 双槽位？
+Valve Steamworks UGC API 对工坊物品的语言槽位（如 `schinese` 简体中文、`english` 默认槽位）**不提供删除接口**。一旦物品曾写入过 `schinese` 槽位，中文 Steam 客户端将**永久优先**读取该槽位。因此每次发版必须同时更新 `english` 默认槽位（含 4 文件内容包、封面与更新日志）与 `schinese` 中文槽位。
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Dev as 开发者 / 发布机
-    participant CMD as steamcmd
-    participant Steam as 桌面 Steam 客户端
-    participant Tagger as SteamTagger (.NET 8)
-    participant UGC as Steamworks UGC 云端
+### 6.2 首选标准流程：桌面 Steam 免掉线一键双槽位发布（推荐）
+当本地桌面 Steam 客户端已启动并登录作者账号时，直接运行一行命令即可完成全套预检、4 文件内容包上传、`english` + `schinese` 双槽位标题/简介同步及更新日志写入，**全程不会踢掉桌面 Steam 登录态，无需重复输入手机令牌**：
 
-    Dev->>CMD: 执行 publish_workshop.ps1 -Step default
-    CMD->>UGC: 上传 Mod 文件 + 写入 default 英文/默认描述
-    Note over Dev,Steam: 关键：退出控制台，在桌面端打开 Steam 登录开发者账号
-    Dev->>Tagger: 执行 publish_workshop.ps1 -Step query
-    Tagger->>Steam: 探测 IPC 状态，确认 BLoggedOn=True
-    Dev->>Tagger: 执行 publish_workshop.ps1 -Step schinese -SkipCheck
-    Tagger->>UGC: 调用 SteamUGC()->SetItemTitle/Description(schinese)
-    UGC-->>Dev: 同步完成，国内玩家即刻拉取最新中文更新文案
-```
-
-### 6.2 详细执行步骤
-
-#### 步骤一：上传模组文件与默认槽位更新
-在终端中执行：
 ```powershell
-.\tools\publish_workshop.ps1 -Step default
+.\tools\publish_workshop.ps1 -Step publish
 ```
-- **动作**：通过 `steamcmd` 将编译好的 4 个模组文件上传至创意工坊（工坊 ID: `3837828444`），并更新默认的英文说明与更新日志。
+- **自动执行链路**：
+  1. 自动调用 `check_mod.ps1` 完成 Release 编译、4 文件纯净审计、VDF 字节数校验与 `ScannerCheck` 零权限扫描；
+  2. 调用 `SteamTagger --publish-full` 通过桌面 Steam IPC 上传内容包、封面、`english` 默认槽位描述及 `changenote`（返回 `k_EResultOK`）；
+  3. 紧接着自动同步 `schinese` 简体中文槽位标题与描述（返回 `k_EResultOK`），并回查校验线上双槽位最新时间戳与体积。
 
-#### 步骤二：恢复桌面端 Steam 登录态与会话验真
-- **动作**：在本地桌面打开 Steam 客户端，登录模组作者账号。
-- **验真**：在终端运行：
-```powershell
-.\tools\publish_workshop.ps1 -Step query
-```
-- **预期结果**：控制台输出显示 `Steam Client Connected: True`、`BLoggedOn: True`，确认 IPC 句柄建立成功。
+### 6.3 备选降级流程：无桌面客户端时分步使用 `steamcmd`
+仅在未运行桌面 Steam 客户端时使用（注意：`steamcmd` 登录会顶掉桌面 Steam 会话）：
+1. 上传文件与默认槽位：`.\tools\publish_workshop.ps1 -Step default`
+2. 重新登录桌面 Steam 客户端并验真：`.\tools\publish_workshop.ps1 -Step query`
+3. 覆盖 `schinese` 槽位：`.\tools\publish_workshop.ps1 -Step schinese -SkipCheck`
 
-#### 步骤三：精准覆盖 `schinese` 语言槽位
-在终端中执行：
-```powershell
-.\tools\publish_workshop.ps1 -Step schinese -SkipCheck
-```
-- **动作**：`tools/SteamTagger` 建立与桌面 Steam 的直接 IPC 连接，调用原生 `SteamUGC()->SetItemTitle(..., "schinese")` 与 `SetItemDescription(..., "schinese")`，将最新的简体中文标题、排版说明与更新日志覆写进工坊的 `schinese` 专属槽位。
-
-#### 步骤四：工坊页面最终验收
+### 6.4 工坊页面最终验收
 在浏览器或 Steam 客户端中打开创意工坊页面：  
 [https://steamcommunity.com/sharedfiles/filedetails/?id=3837828444](https://steamcommunity.com/sharedfiles/filedetails/?id=3837828444)  
-核验页面展示的版本号（`v1.5.0`）、特性说明、更新日期与排版渲染无误。
+核验页面展示的版本号、特性说明、更新日期与排版渲染无误。

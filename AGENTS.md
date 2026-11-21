@@ -58,18 +58,19 @@ flowchart TD
 2. **零占位代码铁律（Zero-TODO Policy）**：
    - 代码与文档中严禁遗留 `TODO`、`FIXME`、`// 待实现`、`/* placeholder */` 等任何敷衍性占位符；交付物必须是功能完备、逻辑闭环且经得起静态检查的成品。
 
-### 2.3 对外文案去 AI 化（去人机味）铁律
+### 2.3 对外文案去 AI 化与规范书面语铁律
 1. **核心红线范围**：
    - 所有面向玩家、用户与社区的对外文案交付物（包括但不限于根目录 `README.md`、创意工坊 VDF 描述、游戏内 `manifest.xml`、`CHANGELOG.md` 及 GitHub Release Notes），严禁出现中文维基百科 `WP:AISIGNS`（《AI生成文的特征》）所列之机器腔、空洞八股与模板化格式。
 2. **强制关联资产与自检规程**：
    - **工程规范手册**：撰写与评审文案前必须严格学习并执行 [docs/ANTI_AI_WRITING_GUIDE.md](file:///d:/Workspace/probably_unified_hotkeys_re/docs/ANTI_AI_WRITING_GUIDE.md)（《对外文案去 AI 化工程参考手册》）。
-   - **标准自检技能**：在生成或审查文案时，必须主动激活并执行工作区技能 [.agents/skills/anti-ai-writing/SKILL.md](file:///d:/Workspace/probably_unified_hotkeys_re/.agents/skills/anti-ai-writing/SKILL.md) 规定的 7 步执行清单。
+   - **标准自检技能**：在生成或审查文案时，必须主动激活并执行工作区技能 [.agents/skills/anti-ai-writing/SKILL.md](file:///d:/Workspace/probably_unified_hotkeys_re/.agents/skills/anti-ai-writing/SKILL.md) 规定的 8 步执行清单。
 3. **关键门禁指标**：
-   - **零禁词红线**：严禁出现夸张虚浮程度副词（彻底、全面、深度、丝滑、极致等）与互联网包装黑话（赋能、闭环、一站式等）。
+   - **零禁词与零生造缩略词红线**：严禁出现夸张虚浮程度副词（彻底、全面、深度、丝滑、极致等）与互联网包装黑话（赋能、闭环、一站式等）；**统一采用规范现代汉语书面语，严禁生造缩略词或夹杂内部口语黑话**（严禁使用「切场、退游、退页面、开窗、换机、秒开、筛出」等生造词，必须使用「返回主菜单、退出游戏、退出页面、打开页面、更换设备、缩短加载时间、筛选出」等标准表达）。
    - **零否定平行与对称强迫**：严禁滥用「不是…而是…」、「不仅…更是…」等虚假对比句，章节标题严禁机械套用「XX与YY」对称模板。
    - **拒绝括号与加粗列表模板**：严禁正文及列表中频繁插塞「（如…）」等冗余举例括号；严禁列表清一色套用 `**加粗词：** 解释句` 机械格式。
-   - **人机交付分层**：向人类审阅者呈交预览时必须提供排版干净的纯文本或 Markdown 净版，严禁直接倾倒 `[hr]`、`[b]`、`[list]` 等底层机器 BBCode 标记。
-   - **违规退回机制**：凡初审命中明显 AI 腔者，直接判定为交付不合格并不予合并，必须就地平实重写。
+   - **三端文案联动同步与同级原则**：修改任一端对外文案（工坊 `.vdf`、GitHub `README.md`、游戏内 `manifest.xml`）的用词规范时，**必须同步排查并修正其余两端的同类表述**，严禁顾此失彼；提及组合键与鼠标右键/侧键时，必须同级并列提及空键解绑；严禁重新引入已弃用的「多吉改键器」及已删减的冗余 FAQ。
+   - **人机交付分层**：向人类审阅者呈交预览时必须提供排版干净的纯文本或 Markdown 净版文档，严禁直接倾倒 `[hr]`、`[b]`、`[list]` 等底层机器 BBCode 标记。
+   - **违规退回机制**：凡初审命中明显 AI 腔或生造缩略词者，直接判定为交付不合格并不予合并，必须就地平实重写。
 
 ---
 
@@ -85,37 +86,43 @@ flowchart TD
 3. **零外部无命名空间反射红线**：
    - 严禁对无命名空间的外部第三方类（如 `probablystolen.trainer`、`RealTimeClock` 等）使用 `AccessTools` / `Type.GetType` 动态打补丁，否则会被官方扫描器识别为 `reflection-external` 并触发废弃拦截。此类模组统一通过官方只读数据通道接入。
 
+### 3.2 原生 UI 尺寸保护与局部表现边界
+1. **禁止擅改原版控件外部物理尺寸**：
+   - 未经老板明确授权，严禁更改游戏原版 UI 控件的外部宽高尺寸（例如按键绑定按钮外框宽度严格保持原版 `160f`，长组合键显示不全仅允许通过收窄内部留白 `padding` 与字号自动缩放解决）。
+2. **本模组专属定制隔离边界**：
+   - 本模组专属的界面定制（如在「改造件」详情页隐藏本模组自身的封面大图），作用范围必须严格限定于本模组 ID（`probably_unified_hotkeys`），严禁外溢影响其他订阅模组的封面显隐、布局或按钮尺寸。
+
 ---
 
-## 第四章 提交与验证门禁（Definition of Done）
+## 第四章 分级验证与发布审批门禁（Definition of Done）
 
-任何涉及代码修改或重大文档重构的分支/提交，在交付前必须按顺序通过以下流水线门禁：
+### 4.1 按变更性质分级验证（禁止无效空转）
+1. **纯文案/文档修改快速通道（免跑重型编译与测试）**：
+   - 当变更**仅涉及纯文本、简介或工程文档**（如 `probably_unified_hotkeys.vdf`、`README.md`、`docs/*.md`），且未改动任何 `.cs` 源码、`.csproj` 或 XML 结构时，**直接快速完成文本修改与轻量格式校验（如 VDF `< 8,000` UTF-8 字节与双引号闭合检查）**。
+   - **效率红线**：此类纯文本任务严禁机械启动多代理编队，严禁重复运行全套 `dotnet build`、单元测试与全模组静态复查。
+2. **代码与配置变更完整门禁**：
+   任何涉及 `.cs` 源码、构建配置或 `manifest.xml` 结构的修改，在交付前必须按顺序通过以下 4 步流水线门禁（亦可通过 `.\tools\check_mod.ps1` 一键执行）：
+   1. **工程编译验证**：
+      ```powershell
+      dotnet build src/ProbablyUnifiedHotkeys/ProbablyUnifiedHotkeys.csproj -c Release
+      ```
+      要求：**Zero Errors, Zero Warnings**（开启 `<Nullable>enable</Nullable>` 与 `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` 严格模式）。
+   2. **.NET 8 官方静态合规扫描（禁止 PowerShell 5.1 直接加载 Mono DLL）**：
+      - **红线警告**：严禁在 PowerShell 5.1 进程中通过 `AssemblyResolve` 加载游戏 `Managed\` 目录，否则 Mono `mscorlib.dll` 进入 .NET Framework 4.8 会引发死递归 `StackOverflowException`。
+      - **合规操作**：必须统一通过独立 .NET 8 工具 `tools/ScannerCheck` 进行扫描：
+      ```powershell
+      dotnet run --project .\tools\ScannerCheck -c Release
+      ```
+      扫描结果必须严格满足：`Detected Capabilities: 0`、`HardFlags: 0`、`DeprecatedCapabilities: 0`、`UsesDeprecatedReflection: False`、`Refused: False`。
+   3. **部署目录 4 文件纯净度审计**：
+      游戏部署目录 `Mods\probably_unified_hotkeys\` 内严格仅允许存在以下 4 个官方文件，禁止混入任何多余文件或子目录：`ProbablyUnifiedHotkeys.dll`、`manifest.xml`、`README.md`、`preview.png`。
+   4. **VDF 工坊描述字节限制**：
+      `tools/steamcmd/probably_unified_hotkeys.vdf` 的 `description` 字段 UTF-8 编码体积必须严格控制在 **8,000 字节** 以内。
 
-1. **工程编译验证（亦可通过 `.\tools\check_mod.ps1` 一键验证）**：
-   ```powershell
-   dotnet build src/ProbablyUnifiedHotkeys/ProbablyUnifiedHotkeys.csproj -c Release
-   ```
-   要求：**Zero Errors, Zero Warnings**（开启 `<Nullable>enable</Nullable>` 与 `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` 严格模式）。
-2. **.NET 8 官方静态合规扫描（禁止 PowerShell 直接加载）**：
-   - **红线警告**：严禁在 PowerShell 5.1 进程中通过 `AssemblyResolve` 加载游戏 `Managed\` 目录，否则 Mono `mscorlib.dll` 进入 .NET Framework 4.8 会引发死递归 `StackOverflowException`（“无法创建新的堆栈防护页面”）。
-   - **合规操作**：必须统一通过独立 .NET 8 工具 `tools/ScannerCheck` 进行扫描：
-   ```powershell
-   dotnet run --project .\tools\ScannerCheck -c Release
-   ```
-   扫描结果必须严格满足：
-   - `Detected Capabilities`: `0`
-   - `HardFlags`: `0`
-   - `DeprecatedCapabilities`: `0`
-   - `UsesDeprecatedReflection`: `False`
-   - `Refused`: `False`
-3. **部署目录 4 文件纯净度审计**：
-   游戏部署目录 `Mods\probably_unified_hotkeys\` 内严格仅允许存在以下 4 个官方文件，禁止混入任何多余文件或目录：
-   - `ProbablyUnifiedHotkeys.dll`
-   - `manifest.xml`
-   - `README.md`
-   - `preview.png`
-4. **VDF 工坊描述字节限制**：
-   - `tools/steamcmd/probably_unified_hotkeys.vdf` 的 `description` 字段 UTF-8 编码体积必须严格控制在 **8,000 字节** 以内。
+### 4.2 正式发布前强制备份与人工过目签字门禁
+在执行任何正式对外发布动作（`git push`、打正式版本 Tag 触发 GitHub Release、调用 `publish_workshop.ps1` 上传创意工坊）之前，**必须严格满足以下两项前置条件，未获老板明确指令绝对禁止擅自上传**：
+1. **离线版本封存备份**：先将当前待发布版本的完整成品包备份封存；
+2. **三端简介净版呈审签字**：将定稿的游戏内简介（`manifest.xml`）、GitHub 简介（`README.md`）与创意工坊简介（必须提供剥离 `[hr]`/`[b]`/`[*]` 等 BBCode 的纯净阅读版文档）一并呈交老板审阅，待老板明确批准后方可执行上传（创意工坊优先通过 `.\tools\publish_workshop.ps1 -Step publish` 直连桌面 Steam 客户端免掉线一键同步双语槽位）。
 
 ---
 
