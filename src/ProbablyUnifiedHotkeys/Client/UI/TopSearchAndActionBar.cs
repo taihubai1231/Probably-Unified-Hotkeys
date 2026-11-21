@@ -374,20 +374,21 @@ namespace ProbablyUnifiedHotkeys
             return text;
         }
 
-        private static void IndexString(string? text, out string lower, out string initials, out string fullPy)
+        private static void IndexString(string? text, out string lower, out string initials, out string fullPy, out string simplified)
         {
             if (string.IsNullOrEmpty(text))
             {
                 lower = string.Empty;
                 initials = string.Empty;
                 fullPy = string.Empty;
+                simplified = string.Empty;
                 return;
             }
 
-            string simp = PinyinEngine.ToSimplified(text!);
-            lower = simp.ToLowerInvariant();
-            initials = PinyinEngine.ToInitials(simp);
-            fullPy = PinyinEngine.ToFullPinyin(simp);
+            simplified = PinyinEngine.ToSimplified(text!);
+            lower = simplified.ToLowerInvariant();
+            initials = PinyinEngine.ToInitials(simplified);
+            fullPy = PinyinEngine.ToFullPinyin(simplified);
         }
 
         private sealed class GroupSearchData
@@ -395,9 +396,11 @@ namespace ProbablyUnifiedHotkeys
             public string DisplayNameLower = string.Empty;
             public string DisplayNameInitials = string.Empty;
             public string DisplayNameFullPy = string.Empty;
+            public string DisplayNameSimplified = string.Empty;
             public string ModIdLower = string.Empty;
             public string ModIdInitials = string.Empty;
             public string ModIdFullPy = string.Empty;
+            public string ModIdSimplified = string.Empty;
 
             public bool Matches(string normQuery, string compactQuery)
             {
@@ -406,13 +409,19 @@ namespace ProbablyUnifiedHotkeys
                 {
                     return true;
                 }
-                if (compactQuery.Length > 0 &&
-                    (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                     DisplayNameFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                     ModIdInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                     ModIdFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                if (compactQuery.Length > 0)
                 {
-                    return true;
+                    if (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
+                        ModIdInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0)
+                    {
+                        return true;
+                    }
+
+                    if (PinyinEngine.MatchesPolyphoneTokens(DisplayNameSimplified, compactQuery) ||
+                        PinyinEngine.MatchesPolyphoneTokens(ModIdSimplified, compactQuery))
+                    {
+                        return true;
+                    }
                 }
                 return false;
             }
@@ -423,12 +432,15 @@ namespace ProbablyUnifiedHotkeys
             public string DisplayNameLower = string.Empty;
             public string DisplayNameInitials = string.Empty;
             public string DisplayNameFullPy = string.Empty;
+            public string DisplayNameSimplified = string.Empty;
             public string SectionLabelLower = string.Empty;
             public string SectionLabelInitials = string.Empty;
             public string SectionLabelFullPy = string.Empty;
+            public string SectionLabelSimplified = string.Empty;
             public string SectionLower = string.Empty;
             public string SectionInitials = string.Empty;
             public string SectionFullPy = string.Empty;
+            public string SectionSimplified = string.Empty;
 
             public bool Matches(string normQuery, string compactQuery)
             {
@@ -441,19 +453,15 @@ namespace ProbablyUnifiedHotkeys
                 if (compactQuery.Length > 0)
                 {
                     if (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                        DisplayNameFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0)
+                        (!string.IsNullOrEmpty(SectionLabelInitials) && SectionLabelInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0) ||
+                        (!string.IsNullOrEmpty(SectionInitials) && SectionInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
                     {
                         return true;
                     }
-                    if (!string.IsNullOrEmpty(SectionLabelInitials) &&
-                        (SectionLabelInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                         SectionLabelFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
-                    {
-                        return true;
-                    }
-                    if (!string.IsNullOrEmpty(SectionInitials) &&
-                        (SectionInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                         SectionFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+
+                    if (PinyinEngine.MatchesPolyphoneTokens(DisplayNameSimplified, compactQuery) ||
+                        (!string.IsNullOrEmpty(SectionLabelSimplified) && PinyinEngine.MatchesPolyphoneTokens(SectionLabelSimplified, compactQuery)) ||
+                        (!string.IsNullOrEmpty(SectionSimplified) && PinyinEngine.MatchesPolyphoneTokens(SectionSimplified, compactQuery)))
                     {
                         return true;
                     }
@@ -467,15 +475,19 @@ namespace ProbablyUnifiedHotkeys
             public string DisplayNameLower = string.Empty;
             public string DisplayNameInitials = string.Empty;
             public string DisplayNameFullPy = string.Empty;
+            public string DisplayNameSimplified = string.Empty;
             public string SectionLabelLower = string.Empty;
             public string SectionLabelInitials = string.Empty;
             public string SectionLabelFullPy = string.Empty;
+            public string SectionLabelSimplified = string.Empty;
             public string SectionLower = string.Empty;
             public string SectionInitials = string.Empty;
             public string SectionFullPy = string.Empty;
+            public string SectionSimplified = string.Empty;
             public string ProbedLower = string.Empty;
             public string ProbedInitials = string.Empty;
             public string ProbedFullPy = string.Empty;
+            public string ProbedSimplified = string.Empty;
 
             public KeyCombo CachedCombo;
             public string CachedComboText = string.Empty;
@@ -494,25 +506,17 @@ namespace ProbablyUnifiedHotkeys
                 if (compactQuery.Length > 0)
                 {
                     if (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                        DisplayNameFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0)
+                        (!string.IsNullOrEmpty(SectionLabelInitials) && SectionLabelInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0) ||
+                        (!string.IsNullOrEmpty(SectionInitials) && SectionInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0) ||
+                        (!string.IsNullOrEmpty(ProbedInitials) && ProbedInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
                     {
                         return true;
                     }
-                    if (!string.IsNullOrEmpty(SectionLabelInitials) &&
-                        (SectionLabelInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                         SectionLabelFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
-                    {
-                        return true;
-                    }
-                    if (!string.IsNullOrEmpty(SectionInitials) &&
-                        (SectionInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                         SectionFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
-                    {
-                        return true;
-                    }
-                    if (!string.IsNullOrEmpty(ProbedInitials) &&
-                        (ProbedInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                         ProbedFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+
+                    if (PinyinEngine.MatchesPolyphoneTokens(DisplayNameSimplified, compactQuery) ||
+                        (!string.IsNullOrEmpty(SectionLabelSimplified) && PinyinEngine.MatchesPolyphoneTokens(SectionLabelSimplified, compactQuery)) ||
+                        (!string.IsNullOrEmpty(SectionSimplified) && PinyinEngine.MatchesPolyphoneTokens(SectionSimplified, compactQuery)) ||
+                        (!string.IsNullOrEmpty(ProbedSimplified) && PinyinEngine.MatchesPolyphoneTokens(ProbedSimplified, compactQuery)))
                     {
                         return true;
                     }
@@ -566,6 +570,7 @@ namespace ProbablyUnifiedHotkeys
             public string DisplayNameLower = string.Empty;
             public string DisplayNameInitials = string.Empty;
             public string DisplayNameFullPy = string.Empty;
+            public string DisplayNameSimplified = string.Empty;
 
             public bool Matches(VanillaOptionItem item, string query, string normQuery, string compactQuery)
             {
@@ -582,11 +587,17 @@ namespace ProbablyUnifiedHotkeys
                     return true;
                 }
 
-                if (compactQuery.Length > 0 &&
-                    (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                     DisplayNameFullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+                if (compactQuery.Length > 0)
                 {
-                    return true;
+                    if (DisplayNameInitials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0)
+                    {
+                        return true;
+                    }
+
+                    if (PinyinEngine.MatchesPolyphoneTokens(DisplayNameSimplified, compactQuery))
+                    {
+                        return true;
+                    }
                 }
 
                 return false;
@@ -597,14 +608,14 @@ namespace ProbablyUnifiedHotkeys
         private static readonly Dictionary<ModGeneralEntry, GeneralSearchData> s_generalSearchIndex = new Dictionary<ModGeneralEntry, GeneralSearchData>();
         private static readonly Dictionary<ModHotkeyEntry, HotkeySearchData> s_hotkeySearchIndex = new Dictionary<ModHotkeyEntry, HotkeySearchData>();
         private static readonly Dictionary<VanillaOptionItem, VanillaItemSearchData> s_vanillaItemSearchIndex = new Dictionary<VanillaOptionItem, VanillaItemSearchData>();
-        private static readonly Dictionary<VanillaSectionCard, (string lower, string initials, string fullPy)> s_vanillaCardSearchIndex = new Dictionary<VanillaSectionCard, (string, string, string)>();
+        private static readonly Dictionary<VanillaSectionCard, (string lower, string initials, string fullPy, string simplified)> s_vanillaCardSearchIndex = new Dictionary<VanillaSectionCard, (string, string, string, string)>();
 
         private static GroupSearchData GetOrCreateGroupIndex(ModOptionGroup group)
         {
             if (s_groupSearchIndex.TryGetValue(group, out var data)) return data;
             data = new GroupSearchData();
-            IndexString(group.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy);
-            IndexString(group.ModId, out data.ModIdLower, out data.ModIdInitials, out data.ModIdFullPy);
+            IndexString(group.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy, out data.DisplayNameSimplified);
+            IndexString(group.ModId, out data.ModIdLower, out data.ModIdInitials, out data.ModIdFullPy, out data.ModIdSimplified);
             s_groupSearchIndex[group] = data;
             return data;
         }
@@ -613,9 +624,9 @@ namespace ProbablyUnifiedHotkeys
         {
             if (s_generalSearchIndex.TryGetValue(gen, out var data)) return data;
             data = new GeneralSearchData();
-            IndexString(gen.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy);
-            IndexString(gen.SectionLabel, out data.SectionLabelLower, out data.SectionLabelInitials, out data.SectionLabelFullPy);
-            IndexString(gen.Section, out data.SectionLower, out data.SectionInitials, out data.SectionFullPy);
+            IndexString(gen.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy, out data.DisplayNameSimplified);
+            IndexString(gen.SectionLabel, out data.SectionLabelLower, out data.SectionLabelInitials, out data.SectionLabelFullPy, out data.SectionLabelSimplified);
+            IndexString(gen.Section, out data.SectionLower, out data.SectionInitials, out data.SectionFullPy, out data.SectionSimplified);
             s_generalSearchIndex[gen] = data;
             return data;
         }
@@ -624,12 +635,12 @@ namespace ProbablyUnifiedHotkeys
         {
             if (s_hotkeySearchIndex.TryGetValue(hotkey, out var data)) return data;
             data = new HotkeySearchData();
-            IndexString(hotkey.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy);
-            IndexString(hotkey.SectionLabel, out data.SectionLabelLower, out data.SectionLabelInitials, out data.SectionLabelFullPy);
-            IndexString(hotkey.Section, out data.SectionLower, out data.SectionInitials, out data.SectionFullPy);
+            IndexString(hotkey.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy, out data.DisplayNameSimplified);
+            IndexString(hotkey.SectionLabel, out data.SectionLabelLower, out data.SectionLabelInitials, out data.SectionLabelFullPy, out data.SectionLabelSimplified);
+            IndexString(hotkey.Section, out data.SectionLower, out data.SectionInitials, out data.SectionFullPy, out data.SectionSimplified);
             if (hotkey.IsReadOnlyProbed)
             {
-                IndexString(hotkey.ProbedSourceDetail, out data.ProbedLower, out data.ProbedInitials, out data.ProbedFullPy);
+                IndexString(hotkey.ProbedSourceDetail, out data.ProbedLower, out data.ProbedInitials, out data.ProbedFullPy, out data.ProbedSimplified);
             }
             s_hotkeySearchIndex[hotkey] = data;
             return data;
@@ -639,15 +650,15 @@ namespace ProbablyUnifiedHotkeys
         {
             if (s_vanillaItemSearchIndex.TryGetValue(item, out var data)) return data;
             data = new VanillaItemSearchData();
-            IndexString(item.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy);
+            IndexString(item.DisplayName, out data.DisplayNameLower, out data.DisplayNameInitials, out data.DisplayNameFullPy, out data.DisplayNameSimplified);
             s_vanillaItemSearchIndex[item] = data;
             return data;
         }
 
-        private static (string lower, string initials, string fullPy) GetOrCreateVanillaCardIndex(VanillaSectionCard card)
+        private static (string lower, string initials, string fullPy, string simplified) GetOrCreateVanillaCardIndex(VanillaSectionCard card)
         {
             if (s_vanillaCardSearchIndex.TryGetValue(card, out var data)) return data;
-            IndexString(card.DisplayName + " " + card.SectionId, out data.lower, out data.initials, out data.fullPy);
+            IndexString(card.DisplayName + " " + card.SectionId, out data.lower, out data.initials, out data.fullPy, out data.simplified);
             s_vanillaCardSearchIndex[card] = data;
             return data;
         }
@@ -679,11 +690,17 @@ namespace ProbablyUnifiedHotkeys
         {
             var data = GetOrCreateVanillaCardIndex(card);
             if (data.lower.IndexOf(normQuery, StringComparison.Ordinal) >= 0) return true;
-            if (compactQuery.Length > 0 &&
-                (data.initials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0 ||
-                 data.fullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0))
+            if (compactQuery.Length > 0)
             {
-                return true;
+                if (data.initials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0)
+                {
+                    return true;
+                }
+
+                if (PinyinEngine.MatchesPolyphoneTokens(data.simplified, compactQuery))
+                {
+                    return true;
+                }
             }
             return false;
         }

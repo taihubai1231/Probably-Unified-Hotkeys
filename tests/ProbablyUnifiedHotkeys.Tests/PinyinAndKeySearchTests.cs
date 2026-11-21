@@ -118,5 +118,70 @@ namespace ProbablyUnifiedHotkeys.Tests
             Assert.False(KeySearchMatcher.MatchesHotkeyBinding(hotkey, "yp"));
             Assert.False(KeySearchMatcher.MatchesHotkeyBinding(hotkey, "背包"));
         }
+
+        [Fact]
+        public void PolyphoneSearch_MultiPronunciation_FullAndInitialAndMixedCoverage()
+        {
+            // PolyphoneTable capacity check: at least 160+ polyphones covered
+            Assert.True(PolyphoneTable.Count >= 160, $"PolyphoneTable should contain at least 160 polyphones, actual: {PolyphoneTable.Count}");
+
+            // Boss Issue #2: "多重密码解序器" search by "chong", "zhong", "duochong", "dcmm", "dcmmjxq", "duoch", etc.
+            string target = "多重密码解序器";
+
+            // Full pinyin matches with polyphone
+            Assert.True(PinyinEngine.Matches(target, "chong"), "Must match 'chong' for '多重密码解序器'");
+            Assert.True(PinyinEngine.Matches(target, "zhong"), "Must match 'zhong' for '多重密码解序器'");
+            Assert.True(PinyinEngine.Matches(target, "duochong"), "Must match 'duochong' for '多重密码解序器'");
+            Assert.True(PinyinEngine.Matches(target, "duozhong"), "Must match 'duozhong' for '多重密码解序器'");
+
+            // Initial acronym matches with polyphone
+            Assert.True(PinyinEngine.Matches(target, "dcmm"), "Must match 'dcmm' (duo-chong-mi-ma)");
+            Assert.True(PinyinEngine.Matches(target, "dzmm"), "Must match 'dzmm' (duo-zhong-mi-ma)");
+            Assert.True(PinyinEngine.Matches(target, "dcmmjxq"), "Must match 'dcmmjxq' full initials");
+            Assert.True(PinyinEngine.Matches(target, "dzmmjxq"), "Must match 'dzmmjxq' full initials");
+
+            // Mixed initial + full pinyin
+            Assert.True(PinyinEngine.Matches(target, "dchong"), "Must match mixed 'd' + 'chong'");
+            Assert.True(PinyinEngine.Matches(target, "duocmm"), "Must match mixed 'duo' + 'c' + 'm' + 'm'");
+
+            // Incomplete / prefix syllable matches
+            Assert.True(PinyinEngine.Matches(target, "duoch"), "Must match prefix 'duoch'");
+            Assert.True(PinyinEngine.Matches(target, "jxq"), "Must match substring initials 'jxq'");
+
+            // Negative tests: middle substring inside syllable must NOT match (Pitfall 12)
+            Assert.False(PinyinEngine.Matches(target, "ong"), "Substring 'ong' inside 'chong' must NOT match");
+            Assert.False(PinyinEngine.Matches(target, "hon"), "Substring 'hon' inside 'chong' must NOT match");
+            Assert.False(PinyinEngine.Matches(target, "yp"), "Token boundary check false positive prevention");
+
+            // Other key polyphones check
+            Assert.True(PinyinEngine.Matches("调整参数", "tiao"));
+            Assert.True(PinyinEngine.Matches("调整参数", "diao"));
+            Assert.True(PinyinEngine.Matches("调整参数", "tzcs"));
+            Assert.True(PinyinEngine.Matches("调整参数", "dzcs"));
+
+            Assert.True(PinyinEngine.Matches("银行账目", "hang"));
+            Assert.True(PinyinEngine.Matches("银行账目", "xing"));
+            Assert.True(PinyinEngine.Matches("银行账目", "yhzm"));
+            Assert.True(PinyinEngine.Matches("银行账目", "yxzm"));
+
+            Assert.True(PinyinEngine.Matches("无限子弹", "dan"));
+            Assert.True(PinyinEngine.Matches("无限子弹", "tan"));
+
+            Assert.True(PinyinEngine.Matches("长按切换", "chang"));
+            Assert.True(PinyinEngine.Matches("长按切换", "zhang"));
+
+            Assert.True(PinyinEngine.Matches("外壳装甲", "ke"));
+            Assert.True(PinyinEngine.Matches("外壳装甲", "qiao"));
+
+            Assert.True(PinyinEngine.Matches("模组设置", "mo"));
+            Assert.True(PinyinEngine.Matches("模组设置", "mu"));
+
+            Assert.True(PinyinEngine.Matches("降低延迟", "jiang"));
+            Assert.True(PinyinEngine.Matches("降低延迟", "xiang"));
+
+            // Traditional Chinese polyphone matching
+            Assert.True(PinyinEngine.Matches("多重密碼解序器", "chong"));
+            Assert.True(PinyinEngine.Matches("多重密碼解序器", "dcmm"));
+        }
     }
 }

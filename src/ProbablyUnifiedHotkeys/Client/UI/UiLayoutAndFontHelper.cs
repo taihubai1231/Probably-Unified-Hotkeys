@@ -14,7 +14,7 @@ namespace ProbablyUnifiedHotkeys
     /// </summary>
     internal static class UiLayoutAndFontHelper
     {
-        internal const float KeybindButtonWidth = 195f; // 放宽按钮宽度，使 Ctrl + Space 等组合键与鼠标侧键拥有充裕展示空间
+        internal const float KeybindButtonWidth = 160f; // 与原版 GameOptionUIManager.KEYBIND_BUTTON_WIDTH (160f) 严格一致，严禁改动外部尺寸
 
         // =====================================================================
         // 1. 字体拟合度量规格与高频主题色彩缓存
@@ -227,6 +227,19 @@ namespace ProbablyUnifiedHotkeys
                 btn.text.enableAutoSizing = false;
             }
 
+            btn.text.enableWordWrapping = false;
+            btn.text.overflowMode = TextOverflowModes.Ellipsis;
+            if (btn.text.margin.x != 2f || btn.text.margin.z != 2f)
+            {
+                btn.text.margin = new Vector4(2f, 0f, 2f, 0f);
+            }
+
+            var hlg = btn.root != null ? btn.root.GetComponent<HorizontalLayoutGroup>() : null;
+            if (hlg != null && (hlg.padding.left != 4 || hlg.padding.right != 4 || hlg.padding.top != 2 || hlg.padding.bottom != 2))
+            {
+                hlg.padding = new RectOffset(4, 4, 2, 2);
+            }
+
             bool textChanged = !string.Equals(btn.text.text, value, StringComparison.Ordinal);
             if (textChanged)
             {
@@ -242,18 +255,16 @@ namespace ProbablyUnifiedHotkeys
                 if (le != null && le.preferredWidth > 0f) w = le.preferredWidth;
                 else if (rt != null && rt.rect.width > 0f) w = rt.rect.width;
 
-                var hlg = btn.root != null ? btn.root.GetComponent<HorizontalLayoutGroup>() : null;
-                int hPad = hlg != null ? hlg.padding.horizontal : 16;
-                int vPad = hlg != null ? hlg.padding.vertical : 8;
+                int vPad = hlg != null ? hlg.padding.vertical : 4;
                 float btnHeight = (le != null && le.preferredHeight > 0f) ? le.preferredHeight : 48f;
                 float targetSize = BaseButtonFontSize > 0f ? BaseButtonFontSize : btn.text.fontSize;
 
                 spec = new ButtonFitSpec
                 {
-                    AvailWidth = Mathf.Max(20f, w - hPad - 16f),
-                    AvailHeight = Mathf.Max(18f, btnHeight - vPad - 8f),
+                    AvailWidth = Mathf.Max(20f, w - 12f),
+                    AvailHeight = Mathf.Max(18f, btnHeight - vPad),
                     MaxFontSize = targetSize > 0f ? targetSize : 15f,
-                    MinFontSize = 9.5f
+                    MinFontSize = 8.5f
                 };
                 ButtonFitSpecCache[cacheKey] = spec;
             }
@@ -297,7 +308,7 @@ namespace ProbablyUnifiedHotkeys
 
             if (!FittedFontSizeCache.TryGetValue(key, out float fitted))
             {
-                float safeWidth = spec.AvailWidth > 0f ? spec.AvailWidth * 0.96f : float.PositiveInfinity;
+                float safeWidth = spec.AvailWidth > 0f ? spec.AvailWidth * 0.94f : float.PositiveInfinity;
                 float safeHeight = spec.AvailHeight > 0f ? spec.AvailHeight * 0.88f : float.PositiveInfinity;
 
                 tmp.fontSize = spec.MaxFontSize;
@@ -416,10 +427,7 @@ namespace ProbablyUnifiedHotkeys
                 }
 
                 float targetSize = BaseButtonFontSize > 0f ? BaseButtonFontSize : btn.text.fontSize;
-                Vector4 baseMargin = HasBaseButtonMargin ? BaseButtonMargin : btn.text.margin;
-                float leftMargin = Mathf.Max(baseMargin.x, 6f);
-                float rightMargin = Mathf.Max(baseMargin.z, 6f);
-                btn.text.margin = new Vector4(leftMargin, baseMargin.y, rightMargin, baseMargin.w);
+                btn.text.margin = new Vector4(2f, 0f, 2f, 0f);
                 btn.text.enableWordWrapping = false;
                 btn.text.overflowMode = TextOverflowModes.Ellipsis;
                 btn.text.enableAutoSizing = false;
@@ -427,22 +435,20 @@ namespace ProbablyUnifiedHotkeys
                 var hlg = btn.root != null ? btn.root.GetComponent<HorizontalLayoutGroup>() : null;
                 if (hlg != null)
                 {
-                    hlg.padding.left = 8;
-                    hlg.padding.right = 8;
+                    hlg.padding = new RectOffset(4, 4, 2, 2);
                 }
                 var le = btn.root != null ? btn.root.GetComponent<LayoutElement>() : null;
                 float btnHeight = (le != null && le.preferredHeight > 0f) ? le.preferredHeight : 48f;
-                int hPad = hlg != null ? hlg.padding.horizontal : 16;
-                int vPad = hlg != null ? hlg.padding.vertical : 8;
-                float availWidth = Mathf.Max(20f, width - hPad - leftMargin - rightMargin - 4f);
-                float availHeight = Mathf.Max(18f, btnHeight - vPad - baseMargin.y - baseMargin.w);
+                int vPad = hlg != null ? hlg.padding.vertical : 4;
+                float availWidth = Mathf.Max(20f, width - 12f);
+                float availHeight = Mathf.Max(18f, btnHeight - vPad);
 
                 var spec = new ButtonFitSpec
                 {
                     AvailWidth = availWidth,
                     AvailHeight = availHeight,
-                    MaxFontSize = targetSize,
-                    MinFontSize = 9.5f
+                    MaxFontSize = targetSize > 0f ? targetSize : 15f,
+                    MinFontSize = 8.5f
                 };
                 int cacheKey = btn.root != null ? btn.root.GetInstanceID() : btn.GetHashCode();
                 ButtonFitSpecCache[cacheKey] = spec;

@@ -462,13 +462,13 @@ namespace ProbablyUnifiedHotkeys.Tests
         }
 
         /// <summary>
-        /// 针对 #4：长组合键排版、可用宽度放宽至 195f 与字号拟合规格验证，确保不截断且字体度量安全。
+        /// 针对 #4：长组合键排版、严格恢复原版 160f 尺寸与字号拟合规格验证，确保不改大外部尺寸且长组合键不截断。
         /// </summary>
         [Fact]
         public void Feedback04_LongComboKey_ButtonWidthAndFitSpec_NeverTruncated()
         {
-            // 1. 验证按键按钮基准宽度已放宽至 195f（原 160f 过于局促）
-            Assert.Equal(195f, UiLayoutAndFontHelper.KeybindButtonWidth);
+            // 1. 验证按键按钮基准宽度严格恢复为原版 160f（严禁改大外部框体）
+            Assert.Equal(160f, UiLayoutAndFontHelper.KeybindButtonWidth);
 
             // 2. 模拟长组合键文本格式化
             string combo1 = ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl, KeyCode.Space);
@@ -482,17 +482,17 @@ namespace ProbablyUnifiedHotkeys.Tests
             string combo3 = ComboKeyStore.FormatCombo(KeyModifierMask.Ctrl | KeyModifierMask.Shift | KeyModifierMask.Alt, KeyCode.Mouse4);
             Assert.Equal($"Ctrl+Shift+Alt+{expectedMouse4}", combo3);
 
-            // 3. 验证 ButtonFitSpec 在 195f 下的可用宽度与字号范围
+            // 3. 验证 ButtonFitSpec 在 160f 下的可用宽度（释放 24px+ 留白后达 148px）与字号范围
             var spec = new UiLayoutAndFontHelper.ButtonFitSpec
             {
-                AvailWidth = Mathf.Max(20f, 195f - 16f - 16f), // 163f
-                AvailHeight = Mathf.Max(18f, 48f - 8f - 8f),   // 32f
+                AvailWidth = Mathf.Max(20f, 160f - 12f), // 148f
+                AvailHeight = Mathf.Max(18f, 48f - 4f),   // 44f
                 MaxFontSize = 15f,
-                MinFontSize = 9.5f
+                MinFontSize = 8.5f
             };
 
-            Assert.True(spec.AvailWidth >= 160f, $"AvailWidth should be at least 160f, was {spec.AvailWidth}");
-            Assert.Equal(9.5f, spec.MinFontSize);
+            Assert.True(spec.AvailWidth >= 140f, $"AvailWidth should be at least 140f, was {spec.AvailWidth}");
+            Assert.Equal(8.5f, spec.MinFontSize);
             Assert.Equal(15f, spec.MaxFontSize);
         }
 

@@ -222,8 +222,8 @@ namespace ProbablyUnifiedHotkeys
             return sb.ToString();
         }
 
-        private static readonly Dictionary<string, (string lower, string initials, string fullPy)> _searchNormCache
-            = new Dictionary<string, (string, string, string)>(512, StringComparer.Ordinal);
+        private static readonly Dictionary<string, (string lower, string initials, string fullPy, string simplified)> _searchNormCache
+            = new Dictionary<string, (string, string, string, string)>(512, StringComparer.Ordinal);
         private static readonly object _searchCacheLock = new object();
 
         private static string StripSeparators(string text)
@@ -248,7 +248,12 @@ namespace ProbablyUnifiedHotkeys
             return text;
         }
 
-        private static void GetNormalizedSearchForms(string targetText, out string targetLower, out string initials, out string fullPy)
+        private static void GetNormalizedSearchForms(
+            string targetText,
+            out string targetLower,
+            out string initials,
+            out string fullPy,
+            out string simplified)
         {
             lock (_searchCacheLock)
             {
@@ -257,11 +262,12 @@ namespace ProbablyUnifiedHotkeys
                     targetLower = cached.lower;
                     initials = cached.initials;
                     fullPy = cached.fullPy;
+                    simplified = cached.simplified;
                     return;
                 }
             }
 
-            string simplified = ToSimplified(targetText);
+            simplified = ToSimplified(targetText);
             targetLower = simplified.ToLowerInvariant();
             initials = ToInitials(simplified);
             fullPy = ToFullPinyin(simplified);
@@ -272,12 +278,193 @@ namespace ProbablyUnifiedHotkeys
                 {
                     _searchNormCache.Clear();
                 }
-                _searchNormCache[targetText] = (targetLower, initials, fullPy);
+                _searchNormCache[targetText] = (targetLower, initials, fullPy, simplified);
             }
         }
 
         /// <summary>
-        /// 综合检索匹配：检查目标文本是否匹配关键词（支持繁简中文、英文大小写、拼音首字母与全拼极速命中）
+        /// 高性能多音字逐位匹配器（支持全拼、拼音首字母缩写、前缀音节及首字母+全拼混打，零堆分配）
+        /// </summary>
+        public static bool MatchesPolyphoneTokens(string simplified, string compactQuery)
+        {
+            if (string.IsNullOrEmpty(compactQuery)) return true;
+            if (string.IsNullOrEmpty(simplified)) return false;
+
+            // 若查询长度远超文本可能的最大拼音长度，直接短路（每个汉字拼音最多 6 字母）
+            if (compactQuery.Length > simplified.Length * 6) return false;
+
+            // 状态记录：记录探索失败的 (charIdx, qPos)，避免指数回溯（零堆分配）
+            Span<ulong> failedStates = simplified.Length <= 64 && compactQuery.Length <= 64
+                ? stackalloc ulong[simplified.Length]
+                : default;
+
+            for (int startIdx = 0; startIdx < simplified.Length; startIdx++)
+            {
+                char c = simplified[startIdx];
+                if (char.IsWhiteSpace(c) || char.IsPunctuation(c)) continue;
+
+                if (MatchFrom(simplified, compactQuery, startIdx, 0, failedStates))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool MatchFrom(
+            string text,
+            string query,
+            int charIdx,
+            int qPos,
+            Span<ulong> failedStates)
+        {
+            // 1. 查询全部字符已被消费完毕 -> 成功匹配！
+            if (qPos >= query.Length) return true;
+
+            // 2. 目标文本已遍历完毕，但查询仍有未消费字符 -> 匹配失败
+            if (charIdx >= text.Length) return false;
+
+            // 3. 查表检查该状态是否已知失败（零分配剪枝）
+            if (!failedStates.IsEmpty && qPos < 64)
+            {
+                if ((failedStates[charIdx] & (1UL << qPos)) != 0)
+                {
+                    return false;
+                }
+            }
+
+            char c = text[charIdx];
+
+            // 4. 跳过空白与标点符号
+            if (char.IsWhiteSpace(c) || char.IsPunctuation(c))
+            {
+                return MatchFrom(text, query, charIdx + 1, qPos, failedStates);
+            }
+
+            int remQuery = query.Length - qPos;
+            c = MapToSimplified(c);
+            int code = c;
+
+            // 5. 非汉字字符（英文、数字等）：按单字符匹配
+            if (code < CJK_START || code > CJK_END)
+            {
+                char cLower = char.ToLowerInvariant(c);
+                if (cLower == query[qPos])
+                {
+                    if (MatchFrom(text, query, charIdx + 1, qPos + 1, failedStates))
+                    {
+                        return true;
+                    }
+                }
+
+                if (!failedStates.IsEmpty && qPos < 64)
+                {
+                    failedStates[charIdx] |= (1UL << qPos);
+                }
+                return false;
+            }
+
+            // 6. 汉字字符：获取候选拼音列表（多音字或单一默认音节）
+            if (PolyphoneTable.TryGetPolyphones(c, out string[] polyReadings))
+            {
+                // 6A. 优先尝试全拼或末尾音节前缀匹配
+                for (int pIdx = 0; pIdx < polyReadings.Length; pIdx++)
+                {
+                    string p = polyReadings[pIdx];
+                    int pLen = p.Length;
+                    if (pLen == 0) continue;
+
+                    if (remQuery >= pLen)
+                    {
+                        if (string.Compare(query, qPos, p, 0, pLen, StringComparison.Ordinal) == 0)
+                        {
+                            if (MatchFrom(text, query, charIdx + 1, qPos + pLen, failedStates))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    else // remQuery < pLen: 位于查询末尾，支持未打完的半截音节匹配（如 "duoch" 匹配 "多重"）
+                    {
+                        if (string.Compare(query, qPos, p, 0, remQuery, StringComparison.Ordinal) == 0)
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                // 6B. 尝试拼音首字母匹配（如 "dcmm" 匹配 "多重密码"）
+                uint triedInitials = 0;
+                for (int pIdx = 0; pIdx < polyReadings.Length; pIdx++)
+                {
+                    string p = polyReadings[pIdx];
+                    if (p.Length == 0) continue;
+                    char init = p[0];
+                    int bit = init - 'a';
+                    if (bit >= 0 && bit < 32)
+                    {
+                        if ((triedInitials & (1U << bit)) != 0) continue;
+                        triedInitials |= (1U << bit);
+                    }
+
+                    if (query[qPos] == init)
+                    {
+                        if (MatchFrom(text, query, charIdx + 1, qPos + 1, failedStates))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // 单读音汉字（快速路径）
+                string singlePy = GetPinyin(c);
+                int pLen = singlePy.Length;
+                if (pLen > 0)
+                {
+                    // 全拼或末尾音节前缀
+                    if (remQuery >= pLen)
+                    {
+                        if (string.Compare(query, qPos, singlePy, 0, pLen, StringComparison.Ordinal) == 0)
+                        {
+                            if (MatchFrom(text, query, charIdx + 1, qPos + pLen, failedStates))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (string.Compare(query, qPos, singlePy, 0, remQuery, StringComparison.Ordinal) == 0)
+                        {
+                            return true;
+                        }
+                    }
+
+                    // 首字母
+                    char init = singlePy[0];
+                    if (query[qPos] == init)
+                    {
+                        if (MatchFrom(text, query, charIdx + 1, qPos + 1, failedStates))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // 记录该状态失败
+            if (!failedStates.IsEmpty && qPos < 64)
+            {
+                failedStates[charIdx] |= (1UL << qPos);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 综合检索匹配：检查目标文本是否匹配关键词（支持繁简中文、英文大小写、多音字全拼、首字母缩写与混合拼写极速命中）
         /// </summary>
         public static bool Matches(string targetText, string query)
         {
@@ -294,17 +481,19 @@ namespace ProbablyUnifiedHotkeys
             string normQuery = ToSimplified(query.Trim()).ToLowerInvariant();
             if (normQuery.Length == 0) return true;
 
-            GetNormalizedSearchForms(targetText, out string targetLower, out string initials, out string fullPy);
+            GetNormalizedSearchForms(targetText, out string targetLower, out string initials, out string fullPy, out string simplified);
 
             // 1. 直接中英文字符串包含
             if (targetLower.IndexOf(normQuery, StringComparison.Ordinal) >= 0) return true;
 
-            // 2. 拼音首字母与全拼包含
+            // 2. 拼音首字母快速包含（极速快径）
             string compactQuery = StripSeparators(normQuery);
             if (compactQuery.Length == 0) return true;
 
             if (initials.IndexOf(compactQuery, StringComparison.Ordinal) >= 0) return true;
-            if (fullPy.IndexOf(compactQuery, StringComparison.Ordinal) >= 0) return true;
+
+            // 3. 多音字全拼、首字母缩写、前缀音节及首尾混合拼写极速匹配（音节边界严格对齐，零误命中）
+            if (MatchesPolyphoneTokens(simplified, compactQuery)) return true;
 
             return false;
         }

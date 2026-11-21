@@ -519,7 +519,10 @@ namespace ProbablyUnifiedHotkeys
                     }
                     ComboKeyStore.SetSavedCombo(hk.Id, hk.PendingModifiers, hk.PendingKey);
                     comboChanged = true;
+                    hk.SnapshotKey = hk.PendingKey;
+                    hk.SnapshotModifiers = hk.PendingModifiers;
                     hk.PendingModifiers = KeyModifierMask.None;
+                    hk.PendingKey = KeyCode.None;
                     hk.HasPendingChange = false;
                 }
             }

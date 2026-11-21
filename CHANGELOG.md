@@ -41,13 +41,13 @@
   - 新增《Harmony 补丁与 ModScanner 解耦规范》(docs/HARMONY_SPEC.md)；
   - 新增《9 阶段实机回归验收清单》(docs/REGRESSION_CHECKLIST.md)；
   - 新增《标准化发布作业程序》(docs/RELEASE_SOP.md) 与《跨阶段交接三件套》(docs/handoff/)。
-- **7 项核心交互深度打磨与排雷闭环**：
-  - **组合键 / 侧键全链路闭环与按钮宽度放宽**：按键按钮放宽至 195f，结合水平 padding 收敛使可用宽度达 163px，长组合键拟合字号钳制在 `[9.5f, 15f]`；全面打通 `Mouse3~Mouse6` 侧键与 `Ctrl/Shift/Alt + 侧键` 录入、显示、持久化与往返解析；
-  - **单帧瞬开「全部展开」脱机批量切换**：废除多帧渐进队列与时钟，根容器脱机一次性原子完成所有卡片展开与折叠箭头切换，单帧 < 8ms 瞬成且滚动条滑块一步到位绝不变形跳动；
-  - **搜索栏 300ms 防抖与智能 IME 拼音识别**：连续打字期间 0 重排，手停顿 0.3s（或按 Enter、退格清空）时一次性呈现；识别 `Input.compositionString` 杜绝拼音候选串输入中提前过滤；搜索框聚焦时按 Esc 优先释放输入框聚焦（`DeactivateInputField`），绝不误退窗口；
-  - **改造件面板隐藏封面且按钮 100% 零形变**：选中本模组隐藏封面大图，将 345px 空间 100% 转移给文字描述滚动区；父 Row 挂载 `LayoutElement` 解耦拉伸，锁定操作按钮高度 42px（正方形 42×42px，`flexibleHeight = 0`），彻底根除形变。
-- **48 项全套离线单元测试 100% 全绿覆盖**：
-  - 扩充至 48 项单元测试，新增覆盖长组合键字号拟合宽度计算、原版与单键模组组合键保存重开零退化零假脏、鼠标侧键与修饰组合侧键完整往返、搜索防抖与预索引一致性。
+- **终极收官 4 项顽疾清零与全链路防退化闭环**：
+  - **改造件详情页零错位重叠与按钮 42px 零拉伸（Bug #1）**：移除父 Row 的 `minHeight/preferredHeight` 强锁与左侧 `column` 的 `ContentSizeFitter`，保持父 Row `childControlHeight = true && childForceExpandHeight = false` 让 7 行元数据高度自然展开；仅在右侧按钮自身注入 `LayoutElement`（`preferredHeight = 42f, minHeight = 42f, flexibleHeight = 0f`），配合 `preview_panel` 对本模组专属隐藏与描述 `ScrollRect`（`flexibleHeight = 1f`），达成文字零错位、按钮 42px 零拉伸；
+  - **中文多音字检索引擎全面升级（Bug #2）**：突破 `pinyin.bin` 单一读音局限，新增 `PolyphoneTable.cs` 覆盖 215+ 个高频多音字（如「重」覆盖 `zhong` 与 `chong`，「调」覆盖 `tiao` 与 `diao`，「行」覆盖 `hang` 与 `xing` 等）；实现零堆分配位掩码剪枝检索 `MatchesPolyphoneTokens`，全面支持全拼、声母缩写、混合拼打与半截前缀容错（如「多重密码解序器」对 `chong`、`zhong`、`duochong`、`duozhong`、`dcmm`、`dcmmjxq`、`dzmm`、`duoch` 均 100% 命中，且无关词零误判）；
+  - **彻底破案并根治组合键底层失效与同主键效果抵消（Bug #3）**：DseCecil 逆向揭示游戏物品翻转/旋转（`ItemMouseDragHandler`）未走 `KeyBindHelper.GetKeyDown`，而是由 `InputActionManager` 收集并通过 `KeyBindHelper.Get("flip_item")` 直接读取 `KeyCode`；且当顺逆时针旋转同主键（如 `Ctrl + F` 与 `Ctrl + Alt + F`）时，未过滤的物理按键同帧产生 `+90°` 与 `-90°` 毫秒级物理抵消。通过在 `OptionAndKeyBindPatches.cs` 中挂载底层 `Patch_KeyBindHelper_Get` Postfix，按当前修饰键掩码精确放行物理键，同主键不同修饰键精准解耦，单按物理键零误触，保存期与 ES3 读写全链路 bypass 保护；
+  - **按键按钮恢复原版 160f 尺寸与长组合键自适应零截断（Bug #4）**：严格坚守 `KeybindButtonWidth = 160f` 原生设计尺寸（杜绝改大外部框体）；通过将按钮水平 padding 收窄至 4px、文本 margin 收窄至 2px，在外部框体尺寸一分不差的前提下直接释放 24px+ 有效宽度（达 148px）；配合 `FittedFontSizeCache` 单次字号自适应微缩（`[8.5f, 15f]`），确保 `Ctrl + Space`、`Ctrl+Alt+F`、`Ctrl+Shift+F12` 等长组合键完整清晰显示，绝不触发截断省略号；
+- **55 项全套离线单元测试 100% 全绿覆盖**：
+  - 新增 `FinalShipVerificationTests.cs`，100% 针对上述 4 项问题编写代码级与沙盘级自动化单测（场景 A 翻转、场景 B 同主键不同修饰键顺逆时针零抵消、场景 C 单组合键防误触抑制、按钮 160f 原尺寸不变与多音字全覆盖），测试总数增至 55 项，100% 全绿通过。
 
 ### Changed
 - **异常防崩网加固**：全库消灭空 `catch {}`，统一通过 `SafeExecution.SafeExecute` / `SafeFunc` 执行并记录结构化日志（`[ProbablyUnifiedHotkeys][LEVEL]`）。

@@ -39,7 +39,10 @@
   - [25. 40 模组 800 个 TMP 文本组件同帧首次激活卡死与脱机批量瞬开](#25-40-模组-800-个-tmp-文本组件同帧首次激活卡死与脱机批量瞬开)
   - [26. `ProfilePresetCardView` 误调 `SetKeyBindStatusDelegate` 污染原版卡片标题栏](#26-profilepresetcardview-误调-setkeybindstatusdelegate-污染原版卡片标题栏)
   - [27. 扫描与开窗未开启 `EnterBypass` 导致组合键退化单键与假脏弹窗](#27-扫描与开窗未开启-enterbypass-导致组合键退化单键与假脏弹窗)
-  - [28. 改造件详情列隐藏封面后父 Row 弹性垂直拉伸导致按钮形变](#28-改造件详情列隐藏封面后父-row-弹性垂直拉伸导致按钮形变)
+  - [28. 改造件详情列隐藏封面后父 Row 强锁与 ContentSizeFitter 挤压错位灾难](#28-改造件详情列隐藏封面后父-row-强锁与-contentsizefitter-挤压错位灾难)
+  - [29. 预编译拼音单音字典局限与高频多音字词元匹配引擎](#29-预编译拼音单音字典局限与高频多音字词元匹配引擎)
+  - [30. 原版 InputActionHandler 绕过 GetKeyDown 直读 KeyCode 与同主键效果抵消](#30-原版-inputactionhandler-绕过-getkeydown-直读-keycode-与同主键效果抵消)
+  - [31. 改大按钮外部物理宽度破坏界面原生统一感与收窄内留白自适应准则](#31-改大按钮外部物理宽度破坏界面原生统一感与收窄内留白自适应准则)
 
 ---
 
@@ -327,12 +330,53 @@
   3. `ExplicitUnbound` 严格限定于全量规范 ID（`canonicalId`），并在恢复默认时自动释放。
 - **【严禁反模式 Anti-pattern】**：严禁在未开启 Bypass 状态下读取可能已被组合键运行时拦截的 `ConfigEntry.Value`；严禁依据裸键名处理显式解绑。
 
-### 28. 改造件详情列隐藏封面后父 Row 弹性垂直拉伸导致按钮形变
-- **【现象 Symptom】**：隐藏封面框后，「停用」「齿轮」「Steam工坊」三个按钮被垂直拉伸为几百像素高的畸变巨物。
-- **【根因 Root Cause】**：详情列父容器 `VerticalLayoutGroup` 的 `childControlHeight = true`，当 `preview_panel` 隐藏释放出 345px 空间后，承载操作按钮的父 Row 因缺少高度约束被弹性拉长分摊了垂直高度。
+### 28. 改造件详情列隐藏封面后父 Row 强锁与 ContentSizeFitter 挤压错位灾难
+- **【现象 Symptom】**：隐藏封面后，详情页上方 7 行模组元数据与正文文字严重重叠挤压，排版混乱不堪；或三个操作按钮被垂直拉伸为几百像素高的畸变巨物。
+- **【根因 Root Cause】**：
+  1. 初始修复时，错误给父 Row 挂载 `minHeight = 42f, preferredHeight = 42f`，强行将拥有 7 行文本的整行压扁为 42px，导致左侧文本溢出并挤压重叠；
+  2. 错误给左侧元数据列 `column` 注入 `ContentSizeFitter`，导致 UGUI 布局引擎在纵向计算时发生环形依赖冲突；
+  3. 未对右侧按钮自身的 `LayoutElement` 做出独立高度钳制，依赖父容器分配导致变形。
 - **【解法 Remedy】**：
-  1. 将承载按钮的父 Row 容器 `HorizontalLayoutGroup.childControlHeight` 与 `childForceExpandHeight` 均锁定为 `false`；
-  2. 为父 Row 挂载 `LayoutElement` 并动态锁定 `minHeight = 42f, preferredHeight = 42f, flexibleHeight = 0f`；
-  3. 对所有按钮注入硬约束：锁定高度 42px（正方形按钮锁定 42×42px，`flexibleHeight = 0f`）；
-  4. 将隐藏封面释放出来的 345px 空间通过下方 `detail_description` 所在 `ScrollRect`（`flexibleHeight = 1f`）100% 转移给文字描述滚动区。
-- **【严禁反模式 Anti-pattern】**：严禁只隐藏上方大控件而不对其下方可能被拉伸的 `VerticalLayoutGroup` 子 Row 进行高度约束锁定。
+  1. 彻底移除给左侧 `column` 动态注入的 `ContentSizeFitter`，存在时自动销毁还原；
+  2. 父 Row 保持原版 `HorizontalLayoutGroup.childControlHeight = true`，并将 `childForceExpandHeight = false`；
+  3. 若父 Row 挂有 `LayoutElement`，仅设 `flexibleHeight = 0f`，保持 `minHeight = -1f, preferredHeight = -1f`，由左侧元数据 7 行真实高度自然决定 Row 高度；
+  4. 仅在右侧按钮自身注入 `LayoutElement`：严格锁定 `preferredHeight = 42f, minHeight = 42f, flexibleHeight = 0f`（正方形图标按钮额外锁定 `preferredWidth/minWidth = 42f, flexibleWidth = 0f`），配合 `TextAnchor.MiddleLeft` 确保按钮 42px 零拉伸；
+  5. 下方文字滚动区 `ScrollRect` 锁定 `flexibleHeight = 1f` 平稳吸收释放出的空间。
+- **【严禁反模式 Anti-pattern】**：严禁在含有多行子文本的复杂横向容器上强锁 `preferredHeight` 或 `minHeight`，严禁在 UGUI 嵌套层级中随意添加 `ContentSizeFitter`。
+
+### 29. 预编译拼音单音字典局限与高频多音字词元匹配引擎
+- **【现象 Symptom】**：搜索栏输入「chong」搜不到「多重密码解序器」，搜「zhong」却可以搜到；搜索「dcmm」、「dcmmjxq」无法命中；输入「ong」却误匹配到包含「zhong」的不相关项目。
+- **【根因 Root Cause】**：
+  1. 嵌入式预编译资源 `pinyin.bin` 每个汉字仅编码单一首选读音（如「重」仅记录 `zhong`），多音分支读音全部丢失；
+  2. 检索逻辑将拼音全串平铺匹配，未做词元边界判定，导致音节内部任意子串（如 `ong`）误命中词元。
+- **【解法 Remedy】**：
+  1. 引入静态零分配《高频汉字多音字补充读音字典》（`PolyphoneTable.cs`），收录 215+ 个高频多音字（如「重」覆盖 `chong/zhong`，「调」覆盖 `tiao/diao`，「行」覆盖 `hang/xing` 等）；
+  2. 构建零分配多音字匹配引擎（`MatchesPolyphoneTokens`）：使用 `stackalloc ulong[64]` 剪枝位掩码，全面支持全拼、声母缩写、混合拼打与半截前缀容错（如「duoch」命中）；
+  3. 严格执行音节边界安全防护，坚决杜绝音节内部任意子串（如 `ong`、`yp`）假阳性误判。
+- **【严禁反模式 Anti-pattern】**：严禁假定中文单字仅有单一读音，严禁在拼音检索中使用无音节词元边界保护的平铺子串包含（`Contains`）。
+
+### 30. 原版 InputActionHandler 绕过 GetKeyDown 直读 KeyCode 与同主键效果抵消
+- **【现象 Symptom】**：
+  1. 玩家将「翻转物品 (`flip_item`)」绑为 `Ctrl + Space`，实机中单按 `Space` 依然能翻转物品；
+  2. 玩家将「顺时针旋转 (`rotate_cw`)」绑为 `Ctrl + F`，同时将「逆时针旋转 (`rotate_ccw`)」绑为 `Ctrl + Alt + F`，两个按键在局内同时失效；改成 `Ctrl + D` 后恢复但变成单键。
+- **【根因 Root Cause】**：
+  1. 游戏物品拖拽/旋转/翻转是由 `ItemMouseDragHandler` 负责，其通过 `InputActionManager.Update()` 在每帧收集各 Handler 的 `get_keyListeners()`，直接遍历执行 `Input.GetKeyDown(keyCode)` 并传给 `OnEventPress`；
+  2. 原版此处**完全没有调用 `KeyBindHelper.GetKeyDown`**，而是直接调用 `KeyBindHelper.Get("flip_item")` 获取物理键；
+  3. 之前补丁仅挂载了 `GetKeyDown`，未拦截 `KeyBindHelper.Get`，导致其永远返回裸物理键 `KeyCode.Space` 或 `KeyCode.F`；
+  4. 当顺逆时针同主键 `F` 时，同一帧内 `RotCW()`（+90°）与 `RotCCW()`（-90°）同时触发，物理效果毫秒级完美抵消（`+90° - 90° = 0°`），视觉上表现为按键彻底失灵！
+- **【解法 Remedy】**：
+  1. 在 `OptionAndKeyBindPatches.cs` 中挂载底层原生 `KeyBindHelper.Get(string id)` Postfix 补丁；
+  2. 处于局内运行期时，若当前动作配置了组合键，仅在修饰键掩码完全匹配时返回物理 KeyCode，否则直接返回 `KeyCode.None`；
+  3. 单按物理主键 `F` 时两者均返回 `None`；按 `Ctrl + F` 时仅 `rotate_cw` 返回 `F`，`rotate_ccw` 返回 `None`，精准顺时针旋转绝不抵消；按 `Ctrl + Alt + F` 时仅 `rotate_ccw` 返回 `F`，精准逆时针旋转；
+  4. 原版保存期（`KeyBindHelper.Save`）与槽位渲染（`ToolboxHelper.SlotLabel`）注入 `EnterBypass()`，确保底层 ES3 持久化与标签渲染始终拿到底层真实物理按键。
+- **【严禁反模式 Anti-pattern】**：严禁只挂钩高级封装的 `GetKeyDown` 而遗漏底层物理键提供源 `KeyBindHelper.Get`；严禁在保存或存档序列化期返回 `KeyCode.None` 导致配置损坏。
+
+### 31. 改大按钮外部物理宽度破坏界面原生统一感与收窄内留白自适应准则
+- **【现象 Symptom】**：为了容纳 `Ctrl + Space`、`Ctrl+Alt+F` 等长组合键，将按键按钮外部宽度从 160f 暴力放大到 195f，破坏了原版选项界面规整统一的栅格排版美感，引起玩家视觉不适。
+- **【根因 Root Cause】**：原版按钮内部留白（padding）过于宽大（左右各 16px，文本 margin 又占用若干像素），有效净宽仅 124px，导致在未深度挖掘内部空间前就草率修改了外部框体尺寸。
+- **【解法 Remedy】**：
+  1. 严格 100% 恢复 `UiLayoutAndFontHelper.KeybindButtonWidth = 160f` 原版原生尺寸，绝不动外部框体一分一毫；
+  2. 将按钮自身 `HorizontalLayoutGroup.padding` 从左右各 16px 收窄为左右各 `4px`（上下各 `2px`）；
+  3. 将文本 `margin` 设为 `(2, 0, 2, 0)`，在外部尺寸零改变的前提下，为内部文字释放出 **24px+** 的净可用宽度（达 148px）；
+  4. 配合 `ButtonFitSpec` 与 `FittedFontSizeCache` 单次微缩自适应（`safeWidth = AvailWidth * 0.94f`，字号钳制在 `[8.5f, 15f]`），确保长组合键完整清晰显示，绝不触发截断省略号。
+- **【严禁反模式 Anti-pattern】**：严禁在未穷尽内部留白压缩与微缩排版前擅自放大原生标准 UI 控件的外部物理包围盒。

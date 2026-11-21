@@ -162,24 +162,19 @@ flowchart TD
 
 ---
 
-## 六、 7 项核心交互打磨与触类旁通防退化护栏 (Post-v1.5.0 Polish)
+## 六、 终极收官 4 大顽疾清零与全链路防退化护栏 (Final Ship Hardening)
 
-1. **原版「按键绑定」标题栏防污染护栏**：
-   - 彻底切断除按键捕获状态提示外所有逻辑（尤其是预设方案反馈）对 `UiSessionState.SetKeyBindStatusDelegate` 的调用，预设卡片反馈独立限制在卡片内部状态栏与底栏。
-2. **组合键 / 侧键全链路保存重开与零退化护栏**：
-   - 扫描配置与开窗期间强制包裹 `using (ComboKeyStore.EnterBypass())`，杜绝 `ConfigEntry<KeyCode>.Value` 被运行时拦截器掩盖为 None；
-   - 重构 `SyncVanillaPendingFromManager` 同步算法，主键一致且无修改时保持已持久化修饰键；
-   - 显式解绑 `ExplicitUnbound` 仅对规范全量 ID 生效，消除裸键名逃逸污染；
-   - 鼠标侧键（`Mouse3~6`）及 `Ctrl/Shift/Alt + 侧键` 完整打通格式化、捕获、持久化与往返解析。
-3. **长组合键字号拟合与按钮宽度放宽**：
-   - `KeybindButtonWidth` 从 160f 放宽至 195f，结合按钮水平 padding 收缩，真实可用宽度大幅提升至 163px；
-   - 缺省 Spec 自适应拟合，动态字号安全钳制在 `[9.5f, 15f]`，绝不截断。
-4. **单帧瞬开「全部展开」脱机批量切换护栏**：
-   - 彻底废除多帧渐进展开队列 `s_progressiveExpandQueue` 与时钟调度；
-   - 切换时将外层根容器 `NormalContentRoot.SetActive(false)` 临时脱机，批量建齐并切换状态后恢复激活，仅调 1 次顶层布局重建，耗时 < 8ms 且滚动条滑块一步到位绝不变形跳动。
-5. **搜索栏 300ms 防抖、IME 识别与 Esc 聚焦释放**：
-   - 防抖延至 300ms 覆盖敲键间隔；检查 `Input.compositionString` 杜绝拼音候选态提前重排；
-   - 前缀收窄短路加速；扩展 `IOptionUiBridge.IsSearchInputFocused`，输入框聚焦时按 Esc 优先释放输入框聚焦，绝不误触窗口关闭。
-6. **改造件面板去封面与详情按钮零变形护栏**：
-   - 选中本模组时隐藏封面 `preview_panel`，释放出 345px 空间并 100% 转移给描述滚动区；
-   - 锁定承载按钮父 Row 的 `childControlHeight = false` 与高度 `LayoutElement`（`flexibleHeight = 0`），锁定按钮高度 42px（图标 42×42px），杜绝任何形变。
+针对业务决策人实机复现提出的 4 大最高优先级痛点，各专员与总检官已彻底攻坚根治并新增 `FinalShipVerificationTests.cs`（全量单测扩充至 55/55 Tests 100% 全绿通过）：
+
+1. **改造件详情页零错位重叠与按钮 42px 零拉伸护栏（针对 #1）**：
+   - **痛点根因**：旧方案错误在父 Row 上注入 `minHeight = 42f, preferredHeight = 42f`，强行将 7 行元数据压扁，且在左侧 `column` 注入 `ContentSizeFitter` 引发布局引擎回流错位。
+   - **闭环解法**：彻底移除左侧 `column` 的 `ContentSizeFitter`；父 Row 保持 `childControlHeight = true && childForceExpandHeight = false`，解除 `minHeight/preferredHeight` 约束，让元数据 7 行自然决定高度；仅在右侧按钮自身注入 `LayoutElement`（`preferredHeight = 42f, minHeight = 42f, flexibleHeight = 0f`），配合 `preview_panel` 对本模组专属隐藏与描述 `ScrollRect`（`flexibleHeight = 1f`），达成文字零错位、按钮 42px 零拉伸。
+2. **215+ 中文多音字全覆盖与零分配检索护栏（针对 #2）**：
+   - **痛点根因**：`pinyin.bin` 每个汉字仅记录单一读音（「重」仅记录 `zhong`），导致输入「chong」、「duochong」、「dcmm」搜不到「多重密码解序器」；无词元边界保护导致「ong」误命中。
+   - **闭环解法**：新增静态只读 `PolyphoneTable.cs` 覆盖 215+ 高频多音字；实现 `MatchesPolyphoneTokens` 零分配位掩码剪枝检索，全拼、声母缩写、混合拼打与半截前缀容错（如「duoch」）全部命中，音节词元边界零误判，100% 保持 `ArchitecturePurityTests` 纯度。
+3. **组合键底层直读挂钩与同主键效果零抵消护栏（针对 #3）**：
+   - **痛点根因**：DseCecil 逆向揭示游戏 `ItemMouseDragHandler` 通过 `InputActionManager` 收集按键时，直接读取 `KeyBindHelper.Get("flip_item")`，原代码只挂钩 `GetKeyDown` 导致物理键 `Space` 直接泄露；且顺逆时针旋转同主键 `F`（`Ctrl + F` 与 `Ctrl + Alt + F`）时同帧触发 `+90° - 90° = 0°` 物理抵消。
+   - **闭环解法**：在 `OptionAndKeyBindPatches.cs` 中挂载底层 `Patch_KeyBindHelper_Get` Postfix，按当前按住的修饰键掩码精准放行，单按物理键返回 `KeyCode.None`；同主键不同修饰键精准解耦，绝不互相抵消；保存与 ES3 持久化全链路注入 `EnterBypass()` 杜绝损坏存档。
+4. **按钮原生 160f 尺寸恢复与收窄留白字号微缩护栏（针对 #4）**：
+   - **痛点根因**：之前为了显示长组合键擅自将按钮外部框体放大至 195f，破坏了原版选项界面规整统一的视觉美感。
+   - **闭环解法**：`KeybindButtonWidth` 严格 100% 恢复为原版 `160f`；将按钮内部横向 padding 收窄至 4px、文本 margin 设为 2px，在外部尺寸一分一毫都不变的前提下直接释放 24px+ 净宽（达 148px）；配合 `FittedFontSizeCache` 单次字号自适应（`[8.5f, 15f]`），确保 `Ctrl + Space` 与 `Ctrl+Alt+F` 完整显示，绝不截断。

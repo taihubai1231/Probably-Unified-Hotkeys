@@ -27,6 +27,7 @@ namespace ProbablyUnifiedHotkeys.Tests
             typeof(ModScanReport),
             typeof(ConflictDetector),
             typeof(PinyinEngine),
+            typeof(PolyphoneTable),
             typeof(TradSimpTable),
             typeof(KeySearchMatcher)
         };

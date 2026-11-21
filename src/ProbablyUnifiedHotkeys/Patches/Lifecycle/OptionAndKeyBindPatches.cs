@@ -152,7 +152,7 @@ namespace ProbablyUnifiedHotkeys
     }
 
     /// <summary>
-    /// 隔离原版捕获轮询，避免修改模组快捷键时触发原版 KeyBindHelper 干扰。
+    /// 隔离原版捕获轮询，避免修改模组快捷键或在统一设置中心录入按键时触发原版 KeyBindHelper 干扰。
     /// </summary>
     [HarmonyPatch(typeof(GameOptionUIManager), "PollKeyCapture")]
     public static class Patch_GameOptionUIManager_PollKeyCapture
@@ -160,7 +160,11 @@ namespace ProbablyUnifiedHotkeys
         public static bool Prefix()
         {
             var bridge = OptionUiHost.Active;
-            return bridge == null || !bridge.IsCapturingModHotkey;
+            if (bridge != null && (bridge.IsEnhancedWindowOpen || bridge.IsCapturingAnyKey))
+            {
+                return false;
+            }
+            return true;
         }
     }
 
@@ -374,7 +378,11 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
 
-            KeyCode key = KeyBindHelper.Get(id);
+            KeyCode key;
+            using (ComboKeyStore.EnterBypass())
+            {
+                key = KeyBindHelper.Get(id);
+            }
             if (key == KeyCode.None)
             {
                 return false;
@@ -502,6 +510,29 @@ namespace ProbablyUnifiedHotkeys
     }
 
     /// <summary>
+    /// 让原版 KeyBindHelper.Get 在游戏运行时（非 UI / 非保存阶段）按组合键过滤按键。
+    /// 当绑定了修饰组合键时，仅在修饰键完全匹配时返回物理 KeyCode，否则返回 KeyCode.None；
+    /// 当绑定单键且该单键正被激活的组合键抑制时，返回 KeyCode.None。
+    /// 彻底解决 ItemMouseDragHandler 等 InputActionHandler 绕过 GetKeyDown 直接读 KeyCode 导致组合键失效及同主键互斥的问题。
+    /// </summary>
+    [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.Get))]
+    public static class Patch_KeyBindHelper_Get
+    {
+        public static void Postfix(string id, ref KeyCode __result)
+        {
+            if (ComboKeyStore.IsBypassed || __result == KeyCode.None) return;
+            ComboKeyStore.EnsureLoaded();
+            ComboKeyStore.FilterRuntimeKey(ref __result,
+                "vanilla." + id,
+                id,
+                "vanilla.key_" + id,
+                "key_" + id,
+                id.StartsWith("key_", StringComparison.OrdinalIgnoreCase) ? "vanilla." + id.Substring(4) : "",
+                id.StartsWith("key_", StringComparison.OrdinalIgnoreCase) ? id.Substring(4) : "");
+        }
+    }
+
+    /// <summary>
     /// 让原版 KeyBindHelper.GetKeyDown / GetKey 在游戏运行时识别组合键与鼠标侧键。
     /// </summary>
     [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.GetKeyDown))]
@@ -525,7 +556,31 @@ namespace ProbablyUnifiedHotkeys
     }
 
     /// <summary>
-    /// 修复空按键的冲突判定：KeyCode.None 代表未绑定/空按键，永不与其他按键冲突。
+    /// 确保 KeyBindHelper.Save 期间永远以 Bypass 模式读取真实底层 KeyCode 保存至 ES3，绝不落盘 KeyCode.None。
+    /// </summary>
+    [HarmonyPatch(typeof(KeyBindHelper), nameof(KeyBindHelper.Save))]
+    public static class Patch_KeyBindHelper_Save
+    {
+        private static IDisposable? _bypass;
+        public static void Prefix() => _bypass = ComboKeyStore.EnterBypass();
+        public static void Finalizer() { _bypass?.Dispose(); _bypass = null; }
+    }
+
+    /// <summary>
+    /// 确保 ToolboxHelper.SlotLabel 渲染槽位快捷键说明时永远以 Bypass 模式获取真实 KeyCode，杜绝因未按住修饰键导致标签闪烁或丢失。
+    /// </summary>
+    [HarmonyPatch(typeof(ToolboxHelper), "SlotLabel")]
+    public static class Patch_ToolboxHelper_SlotLabel
+    {
+        private static IDisposable? _bypass;
+        public static void Prefix() => _bypass = ComboKeyStore.EnterBypass();
+        public static void Finalizer() { _bypass?.Dispose(); _bypass = null; }
+    }
+
+    /// <summary>
+    /// 修复空按键与组合键的冲突判定：
+    /// 1. KeyCode.None 代表未绑定/空按键，永不与其他按键冲突；
+    /// 2. 在统一设置中心开启时，放行原版按键查重，由 ConflictDetector 精确计算修饰键差异，允许同主键不同修饰键共存。
     /// </summary>
     [HarmonyPatch(typeof(GameOptionUIManager), "FindPendingKeyOwner")]
     public static class Patch_GameOptionUIManager_FindPendingKeyOwner
@@ -533,6 +588,12 @@ namespace ProbablyUnifiedHotkeys
         public static bool Prefix(KeyCode key, ref string? __result)
         {
             if (key == KeyCode.None)
+            {
+                __result = null;
+                return false;
+            }
+            var bridge = OptionUiHost.Active;
+            if (bridge != null && bridge.IsEnhancedWindowOpen)
             {
                 __result = null;
                 return false;

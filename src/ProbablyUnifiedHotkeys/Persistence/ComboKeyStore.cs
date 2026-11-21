@@ -89,6 +89,21 @@ namespace ProbablyUnifiedHotkeys
                 if (_bypassDepth > 0) return true;
                 if (ExternalBypassPredicate != null && ExternalBypassPredicate()) return true;
                 if (!PrefsStorage.UseInMemoryPrefsForTests && CheckKeyBindHelperCapturingSafe()) return true;
+                if (!PrefsStorage.UseInMemoryPrefsForTests && CheckGameOptionUIManagerOpenSafe()) return true;
+                return false;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool CheckGameOptionUIManagerOpenSafe()
+        {
+            try
+            {
+                return GameOptionUIManager.Instance != null && GameOptionUIManager.Instance.IsOpen;
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"GameOptionUIManager check bypassed/failed: {ex.Message}");
                 return false;
             }
         }

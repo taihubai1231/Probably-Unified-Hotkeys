@@ -396,35 +396,37 @@ namespace ProbablyUnifiedHotkeys
                 le.flexibleHeight = 0f;
             }
 
-            // 2. 锁定承载三颗按钮的父 Row 容器及其 HorizontalLayoutGroup，杜绝父容器将缺失封面释放出的垂直高度分摊给按钮
+            // 2. 保持父 row 原版 childControlHeight = true，并将 childForceExpandHeight = false，杜绝按钮被拉伸；
+            // 若父 row 挂有 LayoutElement，仅设 flexibleHeight = 0f，绝不触碰它的 preferredHeight 和 minHeight！
             RectTransform? rowRt = (activate?.Rect?.parent ?? options?.Rect?.parent ?? steam?.Rect?.parent) as RectTransform;
             if (rowRt != null)
             {
                 HorizontalLayoutGroup? hlg = rowRt.GetComponent<HorizontalLayoutGroup>();
                 if (hlg != null)
                 {
-                    hlg.childControlHeight = false;
+                    hlg.childControlHeight = true;
                     hlg.childForceExpandHeight = false;
                     hlg.childAlignment = TextAnchor.MiddleLeft;
                 }
 
                 Transform? metaColTf = rowRt.childCount > 0 ? rowRt.GetChild(0) : null;
-                float metaHeight = 0f;
                 if (metaColTf is RectTransform metaRt)
                 {
-                    ContentSizeFitter csf = metaRt.GetComponent<ContentSizeFitter>() ?? metaRt.gameObject.AddComponent<ContentSizeFitter>();
-                    csf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-                    metaHeight = LayoutUtility.GetPreferredHeight(metaRt);
+                    ContentSizeFitter? csf = metaRt.GetComponent<ContentSizeFitter>();
+                    if (csf != null)
+                    {
+                        UnityEngine.Object.Destroy(csf);
+                    }
                 }
 
-                float targetRowHeight = Mathf.Max(42f, metaHeight);
+                LayoutElement? rowLe = rowRt.GetComponent<LayoutElement>();
+                if (rowLe != null)
+                {
+                    rowLe.flexibleHeight = 0f;
+                    rowLe.minHeight = -1f;
+                    rowLe.preferredHeight = -1f;
+                }
 
-                LayoutElement rowLe = rowRt.GetComponent<LayoutElement>() ?? rowRt.gameObject.AddComponent<LayoutElement>();
-                rowLe.minHeight = 42f;
-                rowLe.preferredHeight = targetRowHeight;
-                rowLe.flexibleHeight = 0f;
-
-                rowRt.sizeDelta = new Vector2(rowRt.sizeDelta.x, targetRowHeight);
                 LayoutRebuilder.MarkLayoutForRebuild(rowRt);
 
                 if (rowRt.parent is RectTransform detailColRt)
@@ -1268,6 +1270,20 @@ namespace ProbablyUnifiedHotkeys
                 ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
                 return false; // 跳过原版 ApplyPreview，保持 preview_panel 隐藏且按钮零变形
             }
+            else
+            {
+                // 切到别的模组走原版恢复
+                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
+                CustomUIElement? previewPanel = handle?.Get("preview_panel");
+                if (previewPanel != null && previewPanel.Rect != null && !previewPanel.Rect.gameObject.activeSelf)
+                {
+                    previewPanel.SetVisible(true);
+                    if (previewPanel.Rect.parent is RectTransform parentRt)
+                    {
+                        LayoutRebuilder.MarkLayoutForRebuild(parentRt);
+                    }
+                }
+            }
 
             return true;
         }
@@ -1302,6 +1318,20 @@ namespace ProbablyUnifiedHotkeys
                 if (previewPanel != null && previewPanel.Rect != null && previewPanel.Rect.gameObject.activeSelf)
                 {
                     previewPanel.SetVisible(false);
+                    if (previewPanel.Rect.parent is RectTransform parentRt)
+                    {
+                        LayoutRebuilder.MarkLayoutForRebuild(parentRt);
+                    }
+                }
+            }
+            else
+            {
+                // 切到别的模组走原版恢复
+                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
+                CustomUIElement? previewPanel = handle?.Get("preview_panel");
+                if (previewPanel != null && previewPanel.Rect != null && !previewPanel.Rect.gameObject.activeSelf)
+                {
+                    previewPanel.SetVisible(true);
                     if (previewPanel.Rect.parent is RectTransform parentRt)
                     {
                         LayoutRebuilder.MarkLayoutForRebuild(parentRt);
