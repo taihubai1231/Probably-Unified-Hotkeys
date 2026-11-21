@@ -15,33 +15,12 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    name: Run Offline Unit Tests
-    runs-on: windows-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Run Unit Tests
-        run: dotnet test tests/ProbablyUnifiedHotkeys.Tests/ProbablyUnifiedHotkeys.Tests.csproj -c Release --verbosity normal
-
   build-release:
     name: Build & Package Release
-    needs: test
     runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
 
       - name: Restore Game Managed Assemblies Cache
         id: cache-game-assemblies
@@ -65,11 +44,18 @@ jobs:
             "has_deps=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
 
-      - name: Build Mod (if dependencies available)
+      - name: Setup .NET SDK
+        if: steps.check-deps.outputs.has_deps == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run Unit Tests & Build Mod (if game assemblies cached)
         if: steps.check-deps.outputs.has_deps == 'true'
         shell: pwsh
         run: |
           $managedDir = "${{ steps.check-deps.outputs.managed_dir }}"
+          dotnet test tests/ProbablyUnifiedHotkeys.Tests/ProbablyUnifiedHotkeys.Tests.csproj -c Release -p:ContinuousIntegrationBuild=true -p:DeployToGame=false -p:ManagedDir="$managedDir"
           dotnet build src/ProbablyUnifiedHotkeys/ProbablyUnifiedHotkeys.csproj -c Release -p:ContinuousIntegrationBuild=true -p:DeployToGame=false -p:ManagedDir="$managedDir"
 
       - name: Assemble Release Package
