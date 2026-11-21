@@ -58,6 +58,19 @@ flowchart TD
 2. **零占位代码铁律（Zero-TODO Policy）**：
    - 代码与文档中严禁遗留 `TODO`、`FIXME`、`// 待实现`、`/* placeholder */` 等任何敷衍性占位符；交付物必须是功能完备、逻辑闭环且经得起静态检查的成品。
 
+### 2.3 对外文案去 AI 化（去人机味）铁律
+1. **核心红线范围**：
+   - 所有面向玩家、用户与社区的对外文案交付物（包括但不限于根目录 `README.md`、创意工坊 VDF 描述、游戏内 `manifest.xml`、`CHANGELOG.md` 及 GitHub Release Notes），严禁出现中文维基百科 `WP:AISIGNS`（《AI生成文的特征》）所列之机器腔、空洞八股与模板化格式。
+2. **强制关联资产与自检规程**：
+   - **工程规范手册**：撰写与评审文案前必须严格学习并执行 [docs/ANTI_AI_WRITING_GUIDE.md](file:///d:/Workspace/probably_unified_hotkeys_re/docs/ANTI_AI_WRITING_GUIDE.md)（《对外文案去 AI 化工程参考手册》）。
+   - **标准自检技能**：在生成或审查文案时，必须主动激活并执行工作区技能 [.agents/skills/anti-ai-writing/SKILL.md](file:///d:/Workspace/probably_unified_hotkeys_re/.agents/skills/anti-ai-writing/SKILL.md) 规定的 7 步执行清单。
+3. **关键门禁指标**：
+   - **零禁词红线**：严禁出现夸张虚浮程度副词（彻底、全面、深度、丝滑、极致等）与互联网包装黑话（赋能、闭环、一站式等）。
+   - **零否定平行与对称强迫**：严禁滥用「不是…而是…」、「不仅…更是…」等虚假对比句，章节标题严禁机械套用「XX与YY」对称模板。
+   - **拒绝括号与加粗列表模板**：严禁正文及列表中频繁插塞「（如…）」等冗余举例括号；严禁列表清一色套用 `**加粗词：** 解释句` 机械格式。
+   - **人机交付分层**：向人类审阅者呈交预览时必须提供排版干净的纯文本或 Markdown 净版，严禁直接倾倒 `[hr]`、`[b]`、`[list]` 等底层机器 BBCode 标记。
+   - **违规退回机制**：凡初审命中明显 AI 腔者，直接判定为交付不合格并不予合并，必须就地平实重写。
+
 ---
 
 ## 第三章 游戏底层约束与零权限门禁

@@ -186,3 +186,20 @@
   - `UiSessionState_ModelHandleDictionaries_ClearOnCacheInvalidateAndReset`：验证模型句柄字典映射在触发 `ModCatalogCache.Invalidate()` 与 `SessionResetRequested` 时自动清空，杜绝内存陈旧句柄泄露。
   - `UiSessionState_HasUnsavedChanges_KeyCodeNone_Unbind_ReturnsFalse_LockingV147Contract`：验证 `KeyCode.None` 显式解绑场景下 `HasUnsavedChanges()` 严格返回 `false`，锁死 `v1.4.7` 防假脏弹窗交互契约。
 - **全套单测最终收官状态**：39/39 项测试 100% 绿灯全量通过，0 错误 0 警告。
+
+---
+
+## 7. 规范基建与文案治理资产图谱 (Docs & Skills)
+
+> **状态**：已正式建立面向工作区全体 Agent 的对外文案去 AI 化（去人机味）全套规范、标准技能与治理宪章关联。
+
+### 7.1 资产清单与职责映射
+- `docs/ANTI_AI_WRITING_GUIDE.md`：
+  - **定位**：对外文案去 AI 化工程参考手册（全维度工程指南）。
+  - **核心内容**：深度拆解中文维基百科 `WP:AISIGNS`（《AI生成文的特征》）；剖析均值回归、论证坍缩、过度防御等底层机理；结构化提炼 6 种内容逻辑病症与改写处方；制定高频 AI 虚浮词黑名单、否定平行句破除法、标题去对称法与去括号举例规范；收录《深空当铺》老板亲自批改的 5 大黄金前后对比案例；提供 8 项自检清单。
+- `.agents/skills/anti-ai-writing/SKILL.md`：
+  - **定位**：工作区级标准 Antigravity Skill。
+  - **核心内容**：为所有进入工作区撰写或审查 `README.md`、创意工坊简介（VDF）、`manifest.xml`、`CHANGELOG.md` 及 Release Notes 的 Agent 提供自动化发现能力与 7 步去人机味执行清单（Check 1~7）、快速 Bad/Good 对照表与违规阻断门禁。
+- `AGENTS.md`：
+  - **定位**：工程协作宪章。
+  - **核心内容**：在第二章正式植入第 2.3 节「对外文案去 AI 化（去人机味）铁律」，强制关联上述指南与技能，确立零禁词、零伪深刻对比句、零机械加粗列表、审阅净版与代码分离等强制性验收标准。
