@@ -56,18 +56,13 @@ jobs:
         run: |
           $managedDir = "managed-libs"
           if (Test-Path "$managedDir\Assembly-CSharp.dll") {
-            Write-Host "Found cached game assemblies in $managedDir"
             "has_deps=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             "managed_dir=$managedDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } elseif ($env:PROBABLY_STOLEN_DIR -and (Test-Path "$env:PROBABLY_STOLEN_DIR\Probably Stolen_Data\Managed\Assembly-CSharp.dll")) {
+            "has_deps=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "managed_dir=$env:PROBABLY_STOLEN_DIR\Probably Stolen_Data\Managed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
-            Write-Host "Game assemblies not found in cache. Checking default or environment paths..."
-            if ($env:PROBABLY_STOLEN_DIR -and (Test-Path "$env:PROBABLY_STOLEN_DIR\Probably Stolen_Data\Managed\Assembly-CSharp.dll")) {
-              "has_deps=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-              "managed_dir=$env:PROBABLY_STOLEN_DIR\Probably Stolen_Data\Managed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            } else {
-              Write-Host "::warning::Game assemblies not available in CI environment. Mod compilation skipped."
-              "has_deps=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            }
+            "has_deps=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
 
       - name: Build Mod (if dependencies available)
@@ -78,7 +73,7 @@ jobs:
           dotnet build src/ProbablyUnifiedHotkeys/ProbablyUnifiedHotkeys.csproj -c Release -p:ContinuousIntegrationBuild=true -p:DeployToGame=false -p:ManagedDir="$managedDir"
 
       - name: Assemble Release Package
-        if: steps.check-deps.outputs.has_deps == 'true'
+        id: package
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
@@ -86,27 +81,44 @@ jobs:
             $tag = "${{ github.event.inputs.release_tag }}"
             if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "v1.5.0" }
           }
-          $zipName = "ProbablyUnifiedHotkeys-$tag.zip"
-          $stageDir = "staging/probably_unified_hotkeys"
-          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
-
-          Copy-Item "src/ProbablyUnifiedHotkeys/bin/Release/netstandard2.1/ProbablyUnifiedHotkeys.dll" -Destination $stageDir/
-          Copy-Item "src/ProbablyUnifiedHotkeys/manifest.xml" -Destination $stageDir/
-          if (Test-Path "README.md") {
+          $dllSource = "src/ProbablyUnifiedHotkeys/bin/Release/netstandard2.1/ProbablyUnifiedHotkeys.dll"
+          if (-not (Test-Path $dllSource)) {
+            $dllSource = ".github/release-assets/ProbablyUnifiedHotkeys.dll"
+          }
+          if (Test-Path $dllSource) {
+            $zipName = "ProbablyUnifiedHotkeys-$tag.zip"
+            $stageDir = "staging/probably_unified_hotkeys"
+            New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+            Copy-Item $dllSource -Destination "$stageDir/ProbablyUnifiedHotkeys.dll"
+            Copy-Item "src/ProbablyUnifiedHotkeys/manifest.xml" -Destination $stageDir/
             Copy-Item "README.md" -Destination $stageDir/
-          }
-          if (Test-Path "src/ProbablyUnifiedHotkeys/preview.png") {
             Copy-Item "src/ProbablyUnifiedHotkeys/preview.png" -Destination $stageDir/
+            Compress-Archive -Path "staging/*" -DestinationPath $zipName -Force
+            "has_zip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "Successfully packaged $zipName"
+          } else {
+            "has_zip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
 
-          Compress-Archive -Path "staging/*" -DestinationPath $zipName
-          Write-Host "Successfully packaged $zipName"
+      - name: Generate Release Notes
+        shell: pwsh
+        run: |
+          $notes = @(
+            "## v1.5.0 更新说明",
+            "",
+            "1. **【官方零权限适配】** 重构底层代码，默认以官方零权限标准运行，避免触发安全警告或加载拦截。",
+            "2. **【组合键与鼠标键修复】** 修复同主键组合键失效及单键误触发问题；新增鼠标右键直接绑定支持，并在保持按钮原尺寸的前提下自动缩放字号以完整显示长组合键。",
+            "3. **【检索与展开优化】** 新增 200 余个常见多音字的拼音匹配，优化搜索框逐字输入与「全部展开」按钮的响应速度。",
+            "4. **【模组封面加载优化】** 「改造件」页面优先读取本地已下载的模组封面，缩短图片加载时间。",
+            "5. **【退出与返回主菜单加速】** 移除返回主菜单及退出游戏时的多余等待与卸载卡顿，缩短页面切换与关闭游戏的耗时。",
+            "6. **【配置状态同步修复】** 修复未修改设置时退出页面误弹出未保存提示的问题，以及将按键设为空键后重新绑定失效的问题。"
+          ) -join "`n"
+          $notes | Out-File -FilePath "release_notes.md" -Encoding utf8
 
       - name: Publish GitHub Release
-        if: steps.check-deps.outputs.has_deps == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: ProbablyUnifiedHotkeys-*.zip
+          files: ${{ steps.package.outputs.has_zip == 'true' && 'ProbablyUnifiedHotkeys-*.zip' || '' }}
+          body_path: release_notes.md
           draft: false
           prerelease: false
-          generate_release_notes: true

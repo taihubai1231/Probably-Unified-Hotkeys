@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet("query", "default", "schinese", "tags")]
+    [ValidateSet("query", "publish", "default", "schinese", "tags")]
     [string]$Step = "query",
     [string]$GameDir,
     [string]$SteamCmdExe = "E:\Program Files\steamcmd\steamcmd.exe",
@@ -49,11 +49,23 @@ switch ($Step) {
         & dotnet run --project $SteamTaggerCsproj -c Release -p:GameDir="$GameDir" -p:DeployToGame=false -- --game-dir "$GameDir" --query schinese
         if ($LASTEXITCODE -ne 0) { throw "SteamTagger --query failed (exit $LASTEXITCODE)" }
     }
+    "publish" {
+        if (-not $SkipCheck) {
+            $checkParams = @{ GameDir = $GameDir }
+            if ($NoDeploy) { $checkParams.NoDeploy = $true }
+            & $CheckScript @checkParams
+        }
+        & dotnet run --project $SteamTaggerCsproj -c Release -p:GameDir="$GameDir" -p:DeployToGame=false -- --game-dir "$GameDir" --publish-full "$RepoVdf"
+        if ($LASTEXITCODE -ne 0) { throw "SteamTagger --publish-full failed (exit $LASTEXITCODE)" }
+        Write-Host "=================================================================" -ForegroundColor Green
+        Write-Host "[OK] Workshop content package + default & schinese descriptions + changenotes published!" -ForegroundColor Green
+        Write-Host "=================================================================" -ForegroundColor Green
+    }
     "default" {
         if (-not $SkipCheck) {
-            $checkArgs = @("-GameDir", "$GameDir")
-            if ($NoDeploy) { $checkArgs += "-NoDeploy" }
-            & $CheckScript @checkArgs
+            $checkParams = @{ GameDir = $GameDir }
+            if ($NoDeploy) { $checkParams.NoDeploy = $true }
+            & $CheckScript @checkParams
         }
         if (-not (Test-Path -LiteralPath $SteamCmdExe)) {
             throw "steamcmd.exe not found at $SteamCmdExe"
@@ -74,9 +86,9 @@ switch ($Step) {
     }
     "schinese" {
         if (-not $SkipCheck) {
-            $checkArgs = @("-GameDir", "$GameDir")
-            if ($NoDeploy) { $checkArgs += "-NoDeploy" }
-            & $CheckScript @checkArgs
+            $checkParams = @{ GameDir = $GameDir }
+            if ($NoDeploy) { $checkParams.NoDeploy = $true }
+            & $CheckScript @checkParams
         }
         & dotnet run --project $SteamTaggerCsproj -c Release -p:GameDir="$GameDir" -p:DeployToGame=false -- --game-dir "$GameDir" --update-schinese "$RepoVdf"
         if ($LASTEXITCODE -ne 0) { throw "SteamTagger --update-schinese failed (exit $LASTEXITCODE)" }

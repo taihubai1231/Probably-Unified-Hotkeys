@@ -12,11 +12,11 @@
   <ItemGroup>
     <Reference Include="com.rlabrecque.steamworks.net">
       <HintPath>$(ManagedDir)\com.rlabrecque.steamworks.net.dll</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
   </ItemGroup>
 

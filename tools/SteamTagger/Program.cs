@@ -90,6 +90,14 @@ internal static class Program
             {
                 mode = "--apply";
             }
+            else if (args[i] == "--publish-full")
+            {
+                mode = "--publish-full";
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    vdfArg = args[++i];
+                }
+            }
             else if (args[i] == "--update-schinese")
             {
                 mode = "--update-schinese";
@@ -134,6 +142,13 @@ internal static class Program
             {
                 QueryDetails("BEFORE", "schinese");
                 return ApplyTags();
+            }
+
+            if (mode == "--publish-full")
+            {
+                QueryDetails("BEFORE_EN", "english");
+                QueryDetails("BEFORE_ZH", "schinese");
+                return PublishFullWorkshopItem(vdfArg);
             }
 
             if (mode == "--update-schinese")
@@ -235,6 +250,96 @@ internal static class Program
         return 0;
     }
 
+    private static int PublishFullWorkshopItem(string? explicitVdfPath)
+    {
+        string vdfPath = ResolveVdfPath(explicitVdfPath);
+        Console.WriteLine($"[PublishFull] Using VDF: {vdfPath}");
+
+        string vdf = File.ReadAllText(vdfPath, Encoding.UTF8);
+        Match titleMatch = Regex.Match(vdf, "\"title\"\\s+\"([^\"]+)\"");
+        Match descMatch = Regex.Match(vdf, "\"description\"\\s+\"([\\s\\S]*?)\"\\r?\\n\\t\"changenote\"");
+        Match changeMatch = Regex.Match(vdf, "\"changenote\"\\s+\"([^\"]*)\"");
+        Match contentMatch = Regex.Match(vdf, "\"contentfolder\"\\s+\"([^\"]+)\"");
+        Match previewMatch = Regex.Match(vdf, "\"previewfile\"\\s+\"([^\"]+)\"");
+
+        string title = titleMatch.Groups[1].Value;
+        string desc = descMatch.Groups[1].Value.Replace("\r\n", "\n");
+        string changeNote = changeMatch.Success && !string.IsNullOrWhiteSpace(changeMatch.Groups[1].Value)
+            ? changeMatch.Groups[1].Value.Replace("\r\n", "\n")
+            : "Release v1.5.0";
+        string contentFolder = contentMatch.Groups[1].Value.Replace("\\\\", "\\");
+        string previewFile = previewMatch.Groups[1].Value.Replace("\\\\", "\\");
+
+        int descBytes = Encoding.UTF8.GetByteCount(desc);
+        Console.WriteLine($"[PublishFull] Title len={title.Length}, Desc utf8Bytes={descBytes}, Content='{contentFolder}'");
+        if (string.IsNullOrEmpty(title) || string.IsNullOrEmpty(desc) || !Directory.Exists(contentFolder) || !File.Exists(previewFile))
+        {
+            Console.Error.WriteLine("ERR: Invalid VDF fields or missing contentFolder / previewFile.");
+            return 6;
+        }
+        if (descBytes >= 8000)
+        {
+            Console.Error.WriteLine("ERR: Description UTF-8 byte count >= 8000.");
+            return 10;
+        }
+
+        // Step 1: Upload content folder + preview + default (english) title/description + changenote
+        UGCUpdateHandle_t hDefault = SteamUGC.StartItemUpdate(new AppId_t(AppIdVal), new PublishedFileId_t(ItemIdVal));
+        bool okLang1 = SteamUGC.SetItemUpdateLanguage(hDefault, "english");
+        bool okTitle1 = SteamUGC.SetItemTitle(hDefault, title);
+        bool okDesc1 = SteamUGC.SetItemDescription(hDefault, desc);
+        bool okContent = SteamUGC.SetItemContent(hDefault, contentFolder);
+        bool okPreview = SteamUGC.SetItemPreview(hDefault, previewFile);
+        Console.WriteLine($"[Step 1/2 Default+Content] Lang={okLang1} Title={okTitle1} Desc={okDesc1} Content={okContent} Preview={okPreview}");
+        if (!okLang1 || !okTitle1 || !okDesc1 || !okContent || !okPreview)
+        {
+            Console.Error.WriteLine("ERR: Step 1 SetItem* returned false.");
+            return 7;
+        }
+
+        SteamAPICall_t call1 = SteamUGC.SubmitItemUpdate(hDefault, changeNote);
+        if (!WaitCallResult<SubmitItemUpdateResult_t>(call1, out var res1, out bool ioFail1))
+        {
+            Console.Error.WriteLine($"ERR: Step 1 SubmitItemUpdate failed/timeout ioFail={ioFail1}");
+            return 8;
+        }
+        Console.WriteLine($"[Step 1/2 Default+Content] Result={res1.m_eResult} needsLegal={res1.m_bUserNeedsToAcceptWorkshopLegalAgreement}");
+        if (res1.m_eResult != EResult.k_EResultOK)
+        {
+            return 9;
+        }
+
+        // Step 2: Synchronize Simplified Chinese (schinese) title & description slot
+        Thread.Sleep(1000);
+        UGCUpdateHandle_t hZh = SteamUGC.StartItemUpdate(new AppId_t(AppIdVal), new PublishedFileId_t(ItemIdVal));
+        bool okLang2 = SteamUGC.SetItemUpdateLanguage(hZh, "schinese");
+        bool okTitle2 = SteamUGC.SetItemTitle(hZh, title);
+        bool okDesc2 = SteamUGC.SetItemDescription(hZh, desc);
+        Console.WriteLine($"[Step 2/2 Schinese] Lang={okLang2} Title={okTitle2} Desc={okDesc2}");
+        if (!okLang2 || !okTitle2 || !okDesc2)
+        {
+            Console.Error.WriteLine("ERR: Step 2 SetItem* returned false.");
+            return 7;
+        }
+
+        SteamAPICall_t call2 = SteamUGC.SubmitItemUpdate(hZh, null);
+        if (!WaitCallResult<SubmitItemUpdateResult_t>(call2, out var res2, out bool ioFail2))
+        {
+            Console.Error.WriteLine($"ERR: Step 2 SubmitItemUpdate failed/timeout ioFail={ioFail2}");
+            return 8;
+        }
+        Console.WriteLine($"[Step 2/2 Schinese] Result={res2.m_eResult} needsLegal={res2.m_bUserNeedsToAcceptWorkshopLegalAgreement}");
+        if (res2.m_eResult != EResult.k_EResultOK)
+        {
+            return 9;
+        }
+
+        Thread.Sleep(2000);
+        QueryDetails("AFTER_EN", "english");
+        QueryDetails("AFTER_ZH", "schinese");
+        return 0;
+    }
+
     private static int ApplyTags()
     {
         UGCUpdateHandle_t updateHandle = SteamUGC.StartItemUpdate(new AppId_t(AppIdVal), new PublishedFileId_t(ItemIdVal));
@@ -323,7 +428,7 @@ internal static class Program
             if (qres.m_eResult == EResult.k_EResultOK && qres.m_unNumResultsReturned > 0 && SteamUGC.GetQueryUGCResult(q, 0, out var details))
             {
                 Console.WriteLine($"[{label}] Title={details.m_rgchTitle}");
-                Console.WriteLine($"[{label}] Visibility={details.m_eVisibility} Owner={details.m_ulSteamIDOwner} Truncated={details.m_bTagsTruncated}");
+                Console.WriteLine($"[{label}] UpdatedUnix={details.m_rtimeUpdated} FileSize={details.m_nFileSize} Visibility={details.m_eVisibility} Owner={details.m_ulSteamIDOwner} Truncated={details.m_bTagsTruncated}");
                 Console.WriteLine($"[{label}] Tags='{details.m_rgchTags}'");
                 string desc = details.m_rgchDescription ?? "";
                 Console.WriteLine($"[{label}] DescLen={desc.Length} Head='{desc.Substring(0, Math.Min(120, desc.Length)).Replace("\n", " ")}'");
