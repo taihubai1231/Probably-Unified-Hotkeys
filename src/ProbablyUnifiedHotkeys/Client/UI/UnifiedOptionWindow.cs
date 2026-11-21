@@ -517,6 +517,15 @@ namespace ProbablyUnifiedHotkeys
                     {
                         pendingKeys[hk.RawOptionId] = hk.PendingKey;
                     }
+
+                    bool isUnbind = hk.PendingKey == KeyCode.None;
+                    ComboKeyStore.SetExplicitlyUnbound(hk.Id, isUnbind);
+                    ComboKeyStore.SetExplicitlyUnbound(hk.RawOptionId, isUnbind);
+                    if (hk.RawOptionId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ComboKeyStore.SetExplicitlyUnbound(hk.RawOptionId.Substring(4), isUnbind);
+                    }
+
                     ComboKeyStore.SetSavedCombo(hk.Id, hk.PendingModifiers, hk.PendingKey);
                     comboChanged = true;
                     hk.SnapshotKey = hk.PendingKey;
@@ -575,6 +584,9 @@ namespace ProbablyUnifiedHotkeys
                     {
                         try
                         {
+                            bool isUnbind = hotkey.PendingKey == KeyCode.None;
+                            ComboKeyStore.SetExplicitlyUnbound(hotkey.Id, isUnbind);
+
                             if (hotkey.SetCombo != null)
                             {
                                 hotkey.SetCombo(hotkey.PendingModifiers, hotkey.PendingKey);

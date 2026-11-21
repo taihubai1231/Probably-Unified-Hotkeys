@@ -876,6 +876,7 @@ namespace ProbablyUnifiedHotkeys
             }
             else
             {
+                SetExplicitlyUnbound(entryId, false);
                 SavedCombos[entryId] = (normalized, primaryKey);
             }
         }

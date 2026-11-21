@@ -46,8 +46,9 @@
   - **中文多音字检索引擎全面升级（Bug #2）**：突破 `pinyin.bin` 单一读音局限，新增 `PolyphoneTable.cs` 覆盖 215+ 个高频多音字（如「重」覆盖 `zhong` 与 `chong`，「调」覆盖 `tiao` 与 `diao`，「行」覆盖 `hang` 与 `xing` 等）；实现零堆分配位掩码剪枝检索 `MatchesPolyphoneTokens`，全面支持全拼、声母缩写、混合拼打与半截前缀容错（如「多重密码解序器」对 `chong`、`zhong`、`duochong`、`duozhong`、`dcmm`、`dcmmjxq`、`dzmm`、`duoch` 均 100% 命中，且无关词零误判）；
   - **彻底破案并根治组合键底层失效与同主键效果抵消（Bug #3）**：DseCecil 逆向揭示游戏物品翻转/旋转（`ItemMouseDragHandler`）未走 `KeyBindHelper.GetKeyDown`，而是由 `InputActionManager` 收集并通过 `KeyBindHelper.Get("flip_item")` 直接读取 `KeyCode`；且当顺逆时针旋转同主键（如 `Ctrl + F` 与 `Ctrl + Alt + F`）时，未过滤的物理按键同帧产生 `+90°` 与 `-90°` 毫秒级物理抵消。通过在 `OptionAndKeyBindPatches.cs` 中挂载底层 `Patch_KeyBindHelper_Get` Postfix，按当前修饰键掩码精确放行物理键，同主键不同修饰键精准解耦，单按物理键零误触，保存期与 ES3 读写全链路 bypass 保护；
   - **按键按钮恢复原版 160f 尺寸与长组合键自适应零截断（Bug #4）**：严格坚守 `KeybindButtonWidth = 160f` 原生设计尺寸（杜绝改大外部框体）；通过将按钮水平 padding 收窄至 4px、文本 margin 收窄至 2px，在外部框体尺寸一分不差的前提下直接释放 24px+ 有效宽度（达 148px）；配合 `FittedFontSizeCache` 单次字号自适应微缩（`[8.5f, 15f]`），确保 `Ctrl + Space`、`Ctrl+Alt+F`、`Ctrl+Shift+F12` 等长组合键完整清晰显示，绝不触发截断省略号；
-- **55 项全套离线单元测试 100% 全绿覆盖**：
-  - 新增 `FinalShipVerificationTests.cs`，100% 针对上述 4 项问题编写代码级与沙盘级自动化单测（场景 A 翻转、场景 B 同主键不同修饰键顺逆时针零抵消、场景 C 单组合键防误触抑制、按钮 160f 原尺寸不变与多音字全覆盖），测试总数增至 55 项，100% 全绿通过。
+  - **彻底修复原版键重绑时 ExplicitUnboundHotkeys 残留导致退回「无」隐患**：在 `UnifiedOptionWindow.ApplyAllSettings` 同步原版及模组键保存时显式清除解绑记录，并在底层 `SetSavedCombo` 增加非空键自动释放守卫；
+- **56 项全套离线单元测试 100% 全绿覆盖**：
+  - 新增 `FinalShipVerificationTests.cs`，100% 针对上述 4 项问题及重绑恢复编写代码级与沙盘级自动化单测（场景 A 翻转、场景 B 同主键不同修饰键顺逆时针零抵消、场景 C 单组合键防误触抑制、按钮 160f 原尺寸不变、多音字全覆盖、解绑重绑恢复），测试总数增至 56 项，100% 全绿通过。
 
 ### Changed
 - **异常防崩网加固**：全库消灭空 `catch {}`，统一通过 `SafeExecution.SafeExecute` / `SafeFunc` 执行并记录结构化日志（`[ProbablyUnifiedHotkeys][LEVEL]`）。

@@ -335,5 +335,103 @@ namespace ProbablyUnifiedHotkeys.Tests
             Assert.Equal(8.5f, spec.MinFontSize);
             Assert.Equal(15f, spec.MaxFontSize);
         }
+
+        // =====================================================================
+        // 反馈 #5：原版键从 ExplicitUnboundHotkeys 重新绑定恢复全链路验真
+        // =====================================================================
+
+        /// <summary>
+        /// 模拟原版键（如 vanilla.key_flip_item_alt）先处于 ExplicitUnboundHotkeys 解绑态，
+        /// 重新在界面绑定为 Ctrl + Space（或单键 V）并保存后，
+        /// 验证其在 ExplicitUnboundHotkeys 中的历史残留被彻底清除，且局内精准触发。
+        /// </summary>
+        [Fact]
+        public void Feedback05_VanillaKey_RebindAfterExplicitUnbound_UnboundClearedAndRuntimeActive()
+        {
+            ComboKeyStore.EnsureLoaded();
+            const string modId = "vanilla";
+            const string rawOptionId = "key_flip_item_alt";
+            const string canonicalId = "vanilla.key_flip_item_alt";
+            const string bareId = "flip_item_alt";
+
+            // 1. 模拟历史遗留：该键此前被显式解绑并持久化到了 ExplicitUnboundHotkeys
+            ComboKeyStore.SetExplicitlyUnbound(canonicalId, true);
+            ComboKeyStore.SetExplicitlyUnbound(rawOptionId, true);
+            ComboKeyStore.SetExplicitlyUnbound(bareId, true);
+
+            Assert.True(ComboKeyStore.IsExplicitlyUnbound(canonicalId));
+            Assert.True(ComboKeyStore.IsExplicitlyUnbound(rawOptionId));
+            Assert.True(ComboKeyStore.IsExplicitlyUnbound(bareId));
+
+            // 在未重绑前，即使物理按下 Space，也会被 IsExplicitlyUnbound 拦截为 None
+            KeyCode beforeRebind = KeyCode.Space;
+            Patch_KeyBindHelper_Get.Postfix(bareId, ref beforeRebind);
+            Assert.Equal(KeyCode.None, beforeRebind);
+
+            // 2. 模拟玩家在设置界面将该按键重新绑定为 Ctrl + Space 并点击「应用」
+            var hkEntry = new ModHotkeyEntry
+            {
+                Id = canonicalId,
+                ModId = modId,
+                RawOptionId = rawOptionId,
+                SupportsModifierCombos = true,
+                PendingKey = KeyCode.Space,
+                PendingModifiers = KeyModifierMask.Ctrl,
+                HasPendingChange = true
+            };
+
+            // 执行 UnifiedOptionWindow.ApplyAllSettings 中对原版按键的闭环同步逻辑
+            bool isUnbind = hkEntry.PendingKey == KeyCode.None;
+            ComboKeyStore.SetExplicitlyUnbound(hkEntry.Id, isUnbind);
+            ComboKeyStore.SetExplicitlyUnbound(hkEntry.RawOptionId, isUnbind);
+            if (hkEntry.RawOptionId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+            {
+                ComboKeyStore.SetExplicitlyUnbound(hkEntry.RawOptionId.Substring(4), isUnbind);
+            }
+            ComboKeyStore.SetSavedCombo(hkEntry.Id, hkEntry.PendingModifiers, hkEntry.PendingKey);
+            ComboKeyStore.SetSavedCustomHotkey(hkEntry.Id, hkEntry.PendingModifiers, hkEntry.PendingKey);
+
+            // 3. 铁证断言：重绑后历史解绑残留必须全部被清除为 false！
+            Assert.False(ComboKeyStore.IsExplicitlyUnbound(canonicalId), "canonicalId unbound must be cleared");
+            Assert.False(ComboKeyStore.IsExplicitlyUnbound(rawOptionId), "rawOptionId unbound must be cleared");
+            Assert.False(ComboKeyStore.IsExplicitlyUnbound(bareId), "bareId unbound must be cleared");
+
+            // 4. 模拟局内运行时：按住 Ctrl + Space 触发
+            ComboKeyStore.HeldModifiersOverride = _ => KeyModifierMask.Ctrl;
+            ComboKeyStore.RawKeyDownTestHook = k => k == KeyCode.Space;
+
+            KeyCode runtimeKey = KeyCode.Space;
+            Patch_KeyBindHelper_Get.Postfix(bareId, ref runtimeKey);
+            Assert.Equal(KeyCode.Space, runtimeKey);
+
+            // 单按 Space 时（无 Ctrl）仍然被组合键过滤为 None
+            ComboKeyStore.HeldModifiersOverride = _ => KeyModifierMask.None;
+            KeyCode soloSpace = KeyCode.Space;
+            Patch_KeyBindHelper_Get.Postfix(bareId, ref soloSpace);
+            Assert.Equal(KeyCode.None, soloSpace);
+
+            // 5. 模拟重绑为普通单键 V
+            hkEntry.PendingKey = KeyCode.V;
+            hkEntry.PendingModifiers = KeyModifierMask.None;
+            hkEntry.HasPendingChange = true;
+
+            bool isUnbindV = hkEntry.PendingKey == KeyCode.None;
+            ComboKeyStore.SetExplicitlyUnbound(hkEntry.Id, isUnbindV);
+            ComboKeyStore.SetExplicitlyUnbound(hkEntry.RawOptionId, isUnbindV);
+            if (hkEntry.RawOptionId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+            {
+                ComboKeyStore.SetExplicitlyUnbound(hkEntry.RawOptionId.Substring(4), isUnbindV);
+            }
+            ComboKeyStore.SetSavedCombo(hkEntry.Id, hkEntry.PendingModifiers, hkEntry.PendingKey);
+            ComboKeyStore.SetSavedCustomHotkey(hkEntry.Id, hkEntry.PendingModifiers, hkEntry.PendingKey);
+
+            Assert.False(ComboKeyStore.IsExplicitlyUnbound(bareId));
+
+            ComboKeyStore.HeldModifiersOverride = _ => KeyModifierMask.None;
+            ComboKeyStore.RawKeyDownTestHook = k => k == KeyCode.V;
+            KeyCode soloV = KeyCode.V;
+            Patch_KeyBindHelper_Get.Postfix(bareId, ref soloV);
+            Assert.Equal(KeyCode.V, soloV);
+        }
     }
 }

@@ -43,6 +43,7 @@
   - [29. 预编译拼音单音字典局限与高频多音字词元匹配引擎](#29-预编译拼音单音字典局限与高频多音字词元匹配引擎)
   - [30. 原版 InputActionHandler 绕过 GetKeyDown 直读 KeyCode 与同主键效果抵消](#30-原版-inputactionhandler-绕过-getkeydown-直读-keycode-与同主键效果抵消)
   - [31. 改大按钮外部物理宽度破坏界面原生统一感与收窄内留白自适应准则](#31-改大按钮外部物理宽度破坏界面原生统一感与收窄内留白自适应准则)
+  - [32. 原版键重绑保存时未清除 ExplicitUnboundHotkeys 导致按键退回「无」与局内失效](#32-原版键重绑保存时未清除-explicitunboundhotkeys-导致按键退回无与局内失效)
 
 ---
 
@@ -380,3 +381,24 @@
   3. 将文本 `margin` 设为 `(2, 0, 2, 0)`，在外部尺寸零改变的前提下，为内部文字释放出 **24px+** 的净可用宽度（达 148px）；
   4. 配合 `ButtonFitSpec` 与 `FittedFontSizeCache` 单次微缩自适应（`safeWidth = AvailWidth * 0.94f`，字号钳制在 `[8.5f, 15f]`），确保长组合键完整清晰显示，绝不触发截断省略号。
 - **【严禁反模式 Anti-pattern】**：严禁在未穷尽内部留白压缩与微缩排版前擅自放大原生标准 UI 控件的外部物理包围盒。
+
+### 32. 原版键重绑保存时未清除 ExplicitUnboundHotkeys 导致按键退回「无」与局内失效
+- **【现象 Symptom】**：玩家曾经将某个原版按键（如翻转或视角复位键）设为空（`无`），之后在选项界面重新绑回某个单键或组合键（如 `Ctrl + Space`）并点击应用，界面或局内该键立刻又变回 `无`，按键完全不生效。
+- **【根因 Root Cause】**：
+  1. 历史解绑行为将键名（如 `vanilla.key_flip_item_alt` / `key_flip_item_alt` / `flip_item_alt`）写入了注册表 `ExplicitUnboundHotkeys` 集合中；
+  2. 原版按键保存时不走 `ModOptionScanner` 的 `SetKey` 包装，而是走原版 `OriginalApplySettingDelegate`；
+  3. `UnifiedOptionWindow.ApplyAllSettings` 在写入 `pendingKeys` 时，遗漏了同步调用 `ComboKeyStore.SetExplicitlyUnbound(..., false)`；
+  4. 导致重新绑定非空物理键后，`IsExplicitlyUnbound` 依然命中返回 `true`，运行时和配置读取立即将有效键阻断为 `KeyCode.None`。
+- **【解法 Remedy】**：
+  1. 在 `UnifiedOptionWindow.ApplyAllSettings` 原版按键保存分支与模组按键保存分支中，显式同步执行：
+     ```csharp
+     bool isUnbind = hk.PendingKey == KeyCode.None;
+     ComboKeyStore.SetExplicitlyUnbound(hk.Id, isUnbind);
+     ComboKeyStore.SetExplicitlyUnbound(hk.RawOptionId, isUnbind);
+     if (hk.RawOptionId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+     {
+         ComboKeyStore.SetExplicitlyUnbound(hk.RawOptionId.Substring(4), isUnbind);
+     }
+     ```
+  2. 在底层 `ComboKeyStore.SetSavedCombo` 中增加防脏守卫：当 `primaryKey != KeyCode.None` 时，自动调用 `SetExplicitlyUnbound(entryId, false)`，从持久化根源切断非空键与解绑黑名单并存的矛盾。
+- **【严禁反模式 Anti-pattern】**：严禁在更新键位配置时仅更新键值而遗漏同步清除显式解绑黑名单 `ExplicitUnboundHotkeys`。
