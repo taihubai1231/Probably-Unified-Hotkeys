@@ -112,37 +112,39 @@ namespace ProbablyUnifiedHotkeys
 
         public static void OpenEnhancedUI(GameOptionUIManager manager)
         {
-            UiSessionState.ResetSessionForOpen(manager);
-
-            // 1. 初始化原版环境
-            if (EmporiumOption.Instance != null)
+            UiSessionState.IsBuildingOrOpeningUI = true;
+            try
             {
-                EmporiumOption.Instance.SyncDisplayStateFromScreen();
-            }
-            GameOptionRegistry.EnsureVanilla();
-            GameOptionRegistry.RefreshMonitorInfo();
-            KeyBindHelper.StopCapture();
-
-            var pendingKeys = UiSessionState.PendingKeysField?.GetValue(manager) as Dictionary<string, KeyCode>;
-            pendingKeys?.Clear();
-            var overriddenDropdowns = UiSessionState.OverriddenDropdownsField?.GetValue(manager) as System.Collections.IDictionary;
-            overriddenDropdowns?.Clear();
-            UiSessionState.SetKeyBindStatusDelegate?.Invoke(manager, string.Empty);
-
-            // 2. 加载全量模组配置并分析按键冲突
-            using (ComboKeyStore.EnterBypass())
-            {
-                UiSessionState.ModGroups = ModCatalogCache.GetOrScanGroups(out var scannedHotkeys, out UiSessionState.ScanReport);
-                UiSessionState.AllHotkeys = scannedHotkeys;
-                foreach (var hk in UiSessionState.AllHotkeys)
+                using (ComboKeyStore.EnterBypass())
                 {
-                    if (hk.ModId == "vanilla" && !string.IsNullOrEmpty(hk.RawOptionId))
+                    UiSessionState.ResetSessionForOpen(manager);
+
+                    // 1. 初始化原版环境
+                    if (EmporiumOption.Instance != null)
                     {
-                        UiSessionState.VanillaHotkeyByRawId[hk.RawOptionId] = hk;
+                        EmporiumOption.Instance.SyncDisplayStateFromScreen();
                     }
-                }
-                UiSessionState.Conflicts = ConflictDetector.Analyze(UiSessionState.AllHotkeys);
-            }
+                    GameOptionRegistry.EnsureVanilla();
+                    GameOptionRegistry.RefreshMonitorInfo();
+                    KeyBindHelper.StopCapture();
+
+                    var pendingKeys = UiSessionState.PendingKeysField?.GetValue(manager) as Dictionary<string, KeyCode>;
+                    pendingKeys?.Clear();
+                    var overriddenDropdowns = UiSessionState.OverriddenDropdownsField?.GetValue(manager) as System.Collections.IDictionary;
+                    overriddenDropdowns?.Clear();
+                    UiSessionState.SetKeyBindStatusDelegate?.Invoke(manager, string.Empty);
+
+                    // 2. 加载全量模组配置并分析按键冲突
+                    UiSessionState.ModGroups = ModCatalogCache.GetOrScanGroups(out var scannedHotkeys, out UiSessionState.ScanReport);
+                    UiSessionState.AllHotkeys = scannedHotkeys;
+                    foreach (var hk in UiSessionState.AllHotkeys)
+                    {
+                        if (hk.ModId == "vanilla" && !string.IsNullOrEmpty(hk.RawOptionId))
+                        {
+                            UiSessionState.VanillaHotkeyByRawId[hk.RawOptionId] = hk;
+                        }
+                    }
+                    UiSessionState.Conflicts = ConflictDetector.Analyze(UiSessionState.AllHotkeys);
 
             // 3. 构建原生窗口
             bool isStoreUi = StoreUIManager.Instance != null;
@@ -340,6 +342,12 @@ namespace ProbablyUnifiedHotkeys
             }
             UiSessionState.CaptureOpenBaselineSnapshot();
             UiSessionState.OpenedFrameCount = Time.frameCount;
+                }
+            }
+            finally
+            {
+                UiSessionState.IsBuildingOrOpeningUI = false;
+            }
         }
 
         // =====================================================================
@@ -348,83 +356,92 @@ namespace ProbablyUnifiedHotkeys
 
         internal static void OnVanillaRulesRefreshed()
         {
-            if (UiSessionState.CurrentWindow == null || UiSessionState.IsApplyingSettings || UiSessionState.SuppressRuleConflictRefresh) return;
-            SyncVanillaPendingFromManager();
-            ConflictAggregationView.RefreshConflicts();
+            using (ComboKeyStore.EnterBypass())
+            {
+                if (UiSessionState.CurrentWindow == null || UiSessionState.IsApplyingSettings || UiSessionState.SuppressRuleConflictRefresh) return;
+                SyncVanillaPendingFromManager();
+                ConflictAggregationView.RefreshConflicts();
+            }
         }
 
         internal static void OnVanillaKeyChanged()
         {
-            if (UiSessionState.CurrentWindow == null || UiSessionState.IsApplyingSettings) return;
-            SyncVanillaPendingFromManager();
-            ConflictAggregationView.RefreshConflicts();
+            using (ComboKeyStore.EnterBypass())
+            {
+                if (UiSessionState.CurrentWindow == null || UiSessionState.IsApplyingSettings) return;
+                SyncVanillaPendingFromManager();
+                ConflictAggregationView.RefreshConflicts();
+            }
         }
 
         internal static void SyncVanillaPendingFromManager()
         {
-            if (UiSessionState.CurrentManager == null) return;
-            var pendingKeys = UiSessionState.PendingKeysField?.GetValue(UiSessionState.CurrentManager) as Dictionary<string, KeyCode>;
-            if (pendingKeys == null) return;
-
-            foreach (var hk in UiSessionState.AllHotkeys)
+            using (ComboKeyStore.EnterBypass())
             {
-                if (hk.ModId != "vanilla" || string.IsNullOrEmpty(hk.RawOptionId)) continue;
-                KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
-                KeyModifierMask savedMods = (currentKey == KeyCode.None)
-                    ? KeyModifierMask.None
-                    : (hk.GetExternalModifiers != null
-                        ? hk.GetExternalModifiers.Invoke()
-                        : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
+                if (UiSessionState.CurrentManager == null) return;
+                var pendingKeys = UiSessionState.PendingKeysField?.GetValue(UiSessionState.CurrentManager) as Dictionary<string, KeyCode>;
+                if (pendingKeys == null) return;
 
-                if (pendingKeys.TryGetValue(hk.RawOptionId, out KeyCode pk))
+                foreach (var hk in UiSessionState.AllHotkeys)
                 {
-                    if (hk.HasPendingChange)
+                    if (hk.ModId != "vanilla" || string.IsNullOrEmpty(hk.RawOptionId)) continue;
+                    KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
+                    KeyModifierMask savedMods = (currentKey == KeyCode.None)
+                        ? KeyModifierMask.None
+                        : (hk.GetExternalModifiers != null
+                            ? hk.GetExternalModifiers.Invoke()
+                            : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
+
+                    if (pendingKeys.TryGetValue(hk.RawOptionId, out KeyCode pk))
                     {
-                        // 若用户在此前已由我们增强录键赋予了 PendingModifiers，且 pendingKeys 主键一致，保留已选修饰键
-                        if (hk.PendingKey != pk)
+                        if (hk.HasPendingChange)
                         {
-                            hk.PendingKey = pk;
-                            hk.PendingModifiers = KeyModifierMask.None;
+                            // 若用户在此前已由我们增强录键赋予了 PendingModifiers，且 pendingKeys 主键一致，保留已选修饰键
+                            if (hk.PendingKey != pk)
+                            {
+                                hk.PendingKey = pk;
+                                hk.PendingModifiers = KeyModifierMask.None;
+                            }
                         }
-                    }
-                    else
-                    {
-                        // 原版外部修改或默认同步
-                        if (pk != currentKey)
+                        else
                         {
-                            hk.PendingKey = pk;
+                            // 原版外部修改或默认同步
+                            if (pk != currentKey)
+                            {
+                                hk.PendingKey = pk;
+                                hk.PendingModifiers = KeyModifierMask.None;
+                            }
+                            else
+                            {
+                                // pk 与当前生效键一致且无待保存修改：对齐到当前已持久化修饰键，严禁误刷为 None！
+                                hk.PendingKey = pk;
+                                hk.PendingModifiers = savedMods;
+                            }
+                        }
+
+                        if (hk.PendingKey == KeyCode.None && currentKey == KeyCode.None)
+                        {
+                            hk.HasPendingChange = false;
                             hk.PendingModifiers = KeyModifierMask.None;
                         }
                         else
                         {
-                            // pk 与当前生效键一致且无待保存修改：对齐到当前已持久化修饰键，严禁误刷为 None！
-                            hk.PendingKey = pk;
-                            hk.PendingModifiers = savedMods;
+                            hk.HasPendingChange = (hk.PendingKey != currentKey || hk.PendingModifiers != savedMods);
                         }
                     }
-
-                    if (hk.PendingKey == KeyCode.None && currentKey == KeyCode.None)
-                    {
-                        hk.HasPendingChange = false;
-                        hk.PendingModifiers = KeyModifierMask.None;
-                    }
                     else
                     {
-                        hk.HasPendingChange = (hk.PendingKey != currentKey || hk.PendingModifiers != savedMods);
-                    }
-                }
-                else
-                {
-                    // pendingKeys 中无此项：若用户仅修改了修饰键（如 C -> Ctrl+C），主键未变，此时应回填 pendingKeys 确保原版触发保存
-                    if (hk.HasPendingChange && hk.PendingKey == currentKey && hk.PendingModifiers != savedMods)
-                    {
-                        pendingKeys[hk.RawOptionId] = currentKey;
-                    }
-                    else
-                    {
-                        hk.HasPendingChange = false;
-                        hk.PendingModifiers = KeyModifierMask.None;
-                        hk.PendingKey = KeyCode.None;
+                        // pendingKeys 中无此项：若用户仅修改了修饰键（如 C -> Ctrl+C），主键未变，此时应回填 pendingKeys 确保原版触发保存
+                        if (hk.HasPendingChange && hk.PendingKey == currentKey && hk.PendingModifiers != savedMods)
+                        {
+                            pendingKeys[hk.RawOptionId] = currentKey;
+                        }
+                        else
+                        {
+                            hk.HasPendingChange = false;
+                            hk.PendingModifiers = KeyModifierMask.None;
+                            hk.PendingKey = KeyCode.None;
+                        }
                     }
                 }
             }
@@ -432,32 +449,35 @@ namespace ProbablyUnifiedHotkeys
 
         internal static void SyncVanillaKeyButtonColors()
         {
-            if (UiSessionState.CurrentWindow == null) return;
-
-            foreach (var hk in UiSessionState.AllHotkeys)
+            using (ComboKeyStore.EnterBypass())
             {
-                if (hk.ModId != "vanilla" || string.IsNullOrEmpty(hk.RawOptionId)) continue;
+                if (UiSessionState.CurrentWindow == null) return;
 
-                var ui = UiSessionState.GetOrCreateHotkeyUi(hk);
-                var labelEl = ui.LabelElement ?? UiSessionState.CurrentWindow.Get("label_" + hk.RawOptionId);
-                if (labelEl != null)
+                foreach (var hk in UiSessionState.AllHotkeys)
                 {
-                    ui.LabelElement = labelEl;
-                    UiLayoutAndFontHelper.SetTextIfChanged(labelEl, UiLayoutAndFontHelper.BuildHotkeyLabelText(hk));
-                }
+                    if (hk.ModId != "vanilla" || string.IsNullOrEmpty(hk.RawOptionId)) continue;
 
-                var uiEl = ui.ButtonElement ?? UiSessionState.CurrentWindow.Get(hk.RawOptionId);
-                if (uiEl != null && UiSessionState.CapturingEntry != hk)
-                {
-                    ui.ButtonElement = uiEl;
-                    UiLayoutAndFontHelper.SetButtonTextFast(uiEl, UiLayoutAndFontHelper.FormatHotkeyComboText(hk));
-                    UiLayoutAndFontHelper.ApplySingleButtonColor(uiEl, hk.EffectiveCombo);
-                }
+                    var ui = UiSessionState.GetOrCreateHotkeyUi(hk);
+                    var labelEl = ui.LabelElement ?? UiSessionState.CurrentWindow.Get("label_" + hk.RawOptionId);
+                    if (labelEl != null)
+                    {
+                        ui.LabelElement = labelEl;
+                        UiLayoutAndFontHelper.SetTextIfChanged(labelEl, UiLayoutAndFontHelper.BuildHotkeyLabelText(hk));
+                    }
 
-                if (ui.ConflictButtonElement != null && UiSessionState.CapturingEntry != hk)
-                {
-                    UiLayoutAndFontHelper.SetButtonTextFast(ui.ConflictButtonElement, UiLayoutAndFontHelper.FormatHotkeyComboText(hk));
-                    UiLayoutAndFontHelper.ApplySingleButtonColor(ui.ConflictButtonElement, hk.EffectiveCombo);
+                    var uiEl = ui.ButtonElement ?? UiSessionState.CurrentWindow.Get(hk.RawOptionId);
+                    if (uiEl != null && UiSessionState.CapturingEntry != hk)
+                    {
+                        ui.ButtonElement = uiEl;
+                        UiLayoutAndFontHelper.SetButtonTextFast(uiEl, UiLayoutAndFontHelper.FormatHotkeyComboText(hk));
+                        UiLayoutAndFontHelper.ApplySingleButtonColor(uiEl, hk.EffectiveCombo);
+                    }
+
+                    if (ui.ConflictButtonElement != null && UiSessionState.CapturingEntry != hk)
+                    {
+                        UiLayoutAndFontHelper.SetButtonTextFast(ui.ConflictButtonElement, UiLayoutAndFontHelper.FormatHotkeyComboText(hk));
+                        UiLayoutAndFontHelper.ApplySingleButtonColor(ui.ConflictButtonElement, hk.EffectiveCombo);
+                    }
                 }
             }
         }

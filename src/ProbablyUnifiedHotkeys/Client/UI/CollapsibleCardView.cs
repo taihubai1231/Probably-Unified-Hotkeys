@@ -106,133 +106,136 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static void BuildVanillaSectionCard(CustomUIBuilder builder, GameOptionUIManager manager, GameOptionRegistry.Section section)
         {
-            if (!GameOptionRegistry.IsVanillaSection(section.id)) return;
-            if (!string.IsNullOrEmpty(section.source) &&
-                !string.Equals(section.source, "vanilla", StringComparison.OrdinalIgnoreCase))
+            using (ComboKeyStore.EnterBypass())
             {
-                return;
-            }
-
-            if (section.entries == null || section.entries.Count == 0) return;
-
-            var filteredEntries = new List<GameOptionRegistry.Entry>();
-            int hkCount = 0;
-            int genCount = 0;
-            for (int i = 0; i < section.entries.Count; i++)
-            {
-                var entry = section.entries[i];
-                if (!ModOptionScanner.IsPureVanillaEntry(section, entry)) continue;
-                filteredEntries.Add(entry);
-                if (entry.kind == GameOptionRegistry.Kind.KeyBind) hkCount++;
-                else genCount++;
-            }
-
-            if (filteredEntries.Count == 0) return;
-
-            bool isExpanded = UiSessionState.VanillaExpandedStates.TryGetValue(section.id, out bool savedState) ? savedState : false;
-            UiSessionState.VanillaExpandedStates[section.id] = isExpanded;
-
-            var card = new VanillaSectionCard
-            {
-                SectionId = section.id,
-                DisplayName = SafeSectionText(section.label, section.id),
-                Section = section,
-                IsExpanded = isExpanded,
-                HotkeyCount = hkCount,
-                GeneralCount = genCount
-            };
-            card.ResetToDefaultsAction = () => ResetVanillaSectionToDefaults(manager, card);
-
-            string noteId = UiSessionState.NoteIdDelegate != null ? UiSessionState.NoteIdDelegate(section) : ("note_" + section.id);
-            BuildCardHeaderRow(
-                builder,
-                card,
-                "fold_vanilla_" + section.id,
-                "reset_vanilla_" + section.id,
-                "section_" + section.id,
-                card.DisplayName,
-                hkCount,
-                genCount,
-                isExpanded,
-                () => OnManualFoldVanillaCard(card),
-                card.ResetToDefaultsAction,
-                section.note != null
-                    ? (Action<CustomUIBuilder>)(b => b.AddWarning(SafeSectionText(section.note, string.Empty), noteId))
-                    : null,
-                out GameObject headerRow,
-                out CustomUIElement foldBtn
-            );
-            card.HeaderRowObject = headerRow;
-            card.FoldArrowElement = foldBtn;
-
-            // 构建折叠内容容器：顶部细分隔线 + 与模组卡片完全一致的 24px/16px 内缩进列
-            builder.BeginColumn(2f, TextAnchor.UpperLeft);
-            card.ContentContainerObject = builder.CurrentContainer.gameObject;
-            UiLayoutAndFontHelper.ConfigureStretchColumnObject(card.ContentContainerObject);
-            builder.AddSeparator(null, 1);
-
-            builder.BeginColumn(4f, TextAnchor.UpperLeft);
-            var entriesColumnRt = builder.CurrentContainer;
-            UiLayoutAndFontHelper.ConfigureStretchColumnObject(entriesColumnRt.gameObject);
-            var entriesLayout = entriesColumnRt.GetComponent<VerticalLayoutGroup>();
-            if (entriesLayout != null)
-            {
-                entriesLayout.padding = new RectOffset(24, 16, 2, 6);
-            }
-
-            for (int e = 0; e < filteredEntries.Count; e++)
-            {
-                var entry = filteredEntries[e];
-                int childBefore = entriesColumnRt.childCount;
-                UiSessionState.BuildEntryDelegate?.Invoke(manager, builder, entry);
-
-                var vanillaLabelEl = builder.Handle?.Get("label_" + entry.id) ?? UiSessionState.CurrentWindow?.Get("label_" + entry.id);
-                if (vanillaLabelEl != null)
+                if (!GameOptionRegistry.IsVanillaSection(section.id)) return;
+                if (!string.IsNullOrEmpty(section.source) &&
+                    !string.Equals(section.source, "vanilla", StringComparison.OrdinalIgnoreCase))
                 {
-                    UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(vanillaLabelEl, vanillaLabelEl.text != null ? vanillaLabelEl.text.text : SafeSectionText(entry.label, entry.id), minWidth: 180f);
-                }
-                var vanillaCtrlEl = builder.Handle?.Get(entry.id) ?? UiSessionState.CurrentWindow?.Get(entry.id);
-                if (vanillaCtrlEl?.input != null && vanillaCtrlEl.root != null)
-                {
-                    var vLe = vanillaCtrlEl.root.GetComponent<LayoutElement>() ?? vanillaCtrlEl.root.AddComponent<LayoutElement>();
-                    vLe.layoutPriority = 100;
+                    return;
                 }
 
-                ModHotkeyEntry? linked = null;
-                if (entry.kind == GameOptionRegistry.Kind.KeyBind)
+                if (section.entries == null || section.entries.Count == 0) return;
+
+                var filteredEntries = new List<GameOptionRegistry.Entry>();
+                int hkCount = 0;
+                int genCount = 0;
+                for (int i = 0; i < section.entries.Count; i++)
                 {
-                    if (UiSessionState.VanillaHotkeyByRawId.TryGetValue(entry.id, out linked) && linked != null)
-                    {
-                        var hkUi = UiSessionState.GetOrCreateHotkeyUi(linked);
-                        hkUi.LabelElement = vanillaLabelEl;
-                        hkUi.ButtonElement = vanillaCtrlEl;
-                    }
+                    var entry = section.entries[i];
+                    if (!ModOptionScanner.IsPureVanillaEntry(section, entry)) continue;
+                    filteredEntries.Add(entry);
+                    if (entry.kind == GameOptionRegistry.Kind.KeyBind) hkCount++;
+                    else genCount++;
                 }
 
-                var item = new VanillaOptionItem
+                if (filteredEntries.Count == 0) return;
+
+                bool isExpanded = UiSessionState.VanillaExpandedStates.TryGetValue(section.id, out bool savedState) ? savedState : false;
+                UiSessionState.VanillaExpandedStates[section.id] = isExpanded;
+
+                var card = new VanillaSectionCard
                 {
-                    Entry = entry,
-                    DisplayName = SafeSectionText(entry.label, entry.id),
-                    IsKeyBind = entry.kind == GameOptionRegistry.Kind.KeyBind,
-                    LinkedHotkey = linked
+                    SectionId = section.id,
+                    DisplayName = SafeSectionText(section.label, section.id),
+                    Section = section,
+                    IsExpanded = isExpanded,
+                    HotkeyCount = hkCount,
+                    GeneralCount = genCount
                 };
-                for (int i = childBefore; i < entriesColumnRt.childCount; i++)
+                card.ResetToDefaultsAction = () => ResetVanillaSectionToDefaults(manager, card);
+
+                string noteId = UiSessionState.NoteIdDelegate != null ? UiSessionState.NoteIdDelegate(section) : ("note_" + section.id);
+                BuildCardHeaderRow(
+                    builder,
+                    card,
+                    "fold_vanilla_" + section.id,
+                    "reset_vanilla_" + section.id,
+                    "section_" + section.id,
+                    card.DisplayName,
+                    hkCount,
+                    genCount,
+                    isExpanded,
+                    () => OnManualFoldVanillaCard(card),
+                    card.ResetToDefaultsAction,
+                    section.note != null
+                        ? (Action<CustomUIBuilder>)(b => b.AddWarning(SafeSectionText(section.note, string.Empty), noteId))
+                        : null,
+                    out GameObject headerRow,
+                    out CustomUIElement foldBtn
+                );
+                card.HeaderRowObject = headerRow;
+                card.FoldArrowElement = foldBtn;
+
+                // 构建折叠内容容器：顶部细分隔线 + 与模组卡片完全一致的 24px/16px 内缩进列
+                builder.BeginColumn(2f, TextAnchor.UpperLeft);
+                card.ContentContainerObject = builder.CurrentContainer.gameObject;
+                UiLayoutAndFontHelper.ConfigureStretchColumnObject(card.ContentContainerObject);
+                builder.AddSeparator(null, 1);
+
+                builder.BeginColumn(4f, TextAnchor.UpperLeft);
+                var entriesColumnRt = builder.CurrentContainer;
+                UiLayoutAndFontHelper.ConfigureStretchColumnObject(entriesColumnRt.gameObject);
+                var entriesLayout = entriesColumnRt.GetComponent<VerticalLayoutGroup>();
+                if (entriesLayout != null)
                 {
-                    var rowGo = entriesColumnRt.GetChild(i).gameObject;
-                    UiLayoutAndFontHelper.ConfigureStretchRowObject(rowGo, 32f);
-                    item.RowObjects.Add(rowGo);
+                    entriesLayout.padding = new RectOffset(24, 16, 2, 6);
                 }
-                card.Entries.Add(item);
+
+                for (int e = 0; e < filteredEntries.Count; e++)
+                {
+                    var entry = filteredEntries[e];
+                    int childBefore = entriesColumnRt.childCount;
+                    UiSessionState.BuildEntryDelegate?.Invoke(manager, builder, entry);
+
+                    var vanillaLabelEl = builder.Handle?.Get("label_" + entry.id) ?? UiSessionState.CurrentWindow?.Get("label_" + entry.id);
+                    if (vanillaLabelEl != null)
+                    {
+                        UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(vanillaLabelEl, vanillaLabelEl.text != null ? vanillaLabelEl.text.text : SafeSectionText(entry.label, entry.id), minWidth: 180f);
+                    }
+                    var vanillaCtrlEl = builder.Handle?.Get(entry.id) ?? UiSessionState.CurrentWindow?.Get(entry.id);
+                    if (vanillaCtrlEl?.input != null && vanillaCtrlEl.root != null)
+                    {
+                        var vLe = vanillaCtrlEl.root.GetComponent<LayoutElement>() ?? vanillaCtrlEl.root.AddComponent<LayoutElement>();
+                        vLe.layoutPriority = 100;
+                    }
+
+                    ModHotkeyEntry? linked = null;
+                    if (entry.kind == GameOptionRegistry.Kind.KeyBind)
+                    {
+                        if (UiSessionState.VanillaHotkeyByRawId.TryGetValue(entry.id, out linked) && linked != null)
+                        {
+                            var hkUi = UiSessionState.GetOrCreateHotkeyUi(linked);
+                            hkUi.LabelElement = vanillaLabelEl;
+                            hkUi.ButtonElement = vanillaCtrlEl;
+                        }
+                    }
+
+                    var item = new VanillaOptionItem
+                    {
+                        Entry = entry,
+                        DisplayName = SafeSectionText(entry.label, entry.id),
+                        IsKeyBind = entry.kind == GameOptionRegistry.Kind.KeyBind,
+                        LinkedHotkey = linked
+                    };
+                    for (int i = childBefore; i < entriesColumnRt.childCount; i++)
+                    {
+                        var rowGo = entriesColumnRt.GetChild(i).gameObject;
+                        UiLayoutAndFontHelper.ConfigureStretchRowObject(rowGo, 32f);
+                        item.RowObjects.Add(rowGo);
+                    }
+                    card.Entries.Add(item);
+                }
+
+                builder.End(); // entriesColumnRt
+                builder.End(); // ContentContainerObject
+
+                builder.AddSeparator(null, 2);
+                card.OuterSeparatorObject = GetLastChildGameObject(builder.CurrentContainer);
+
+                card.SetExpanded(isExpanded);
+                UiSessionState.VanillaCards.Add(card);
             }
-
-            builder.End(); // entriesColumnRt
-            builder.End(); // ContentContainerObject
-
-            builder.AddSeparator(null, 2);
-            card.OuterSeparatorObject = GetLastChildGameObject(builder.CurrentContainer);
-
-            card.SetExpanded(isExpanded);
-            UiSessionState.VanillaCards.Add(card);
         }
 
         /// <summary>

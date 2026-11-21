@@ -245,7 +245,7 @@ namespace ProbablyUnifiedHotkeys
         {
             ModCatalogCache.SessionResetRequested += ClearModelUiBindings;
             ModFeatureConfig.FeatureConfigChanged += OnFeatureConfigChanged;
-            ComboKeyStore.ExternalBypassPredicate = () => IsEnhancedWindowOpen || IsCapturingAnyKey;
+            ComboKeyStore.ExternalBypassPredicate = () => IsEnhancedWindowOpen || IsCapturingAnyKey || IsBuildingOrOpeningUI || IsApplyingSettings;
         }
 
         private static void OnFeatureConfigChanged()
@@ -357,6 +357,7 @@ namespace ProbablyUnifiedHotkeys
         internal static bool SuppressSameEntryRestart = false;
         internal static int SuppressRestartReleaseFrame = -1;
         internal static bool IsApplyingSettings = false;
+        internal static bool IsBuildingOrOpeningUI = false;
         internal static int SuppressEscapeUntilFrame = -1;
         internal static bool IsExplicitWindowClosing = false;
         internal static bool InEnhancedRefreshRules = false;
@@ -610,7 +611,7 @@ namespace ProbablyUnifiedHotkeys
             CurrentWindow = null;
             CurrentWindowElements = null;
             HasUserInteractedInSession = false;
-            ComboKeyStore.ExternalBypassPredicate = () => IsEnhancedWindowOpen || IsCapturingAnyKey;
+            ComboKeyStore.ExternalBypassPredicate = () => IsEnhancedWindowOpen || IsCapturingAnyKey || IsBuildingOrOpeningUI || IsApplyingSettings;
             IsConflictViewActive = false;
             IsDiagnosticViewActive = false;
             ConflictViewDirty = true;

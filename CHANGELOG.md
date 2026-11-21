@@ -47,14 +47,22 @@
   - **彻底破案并根治组合键底层失效与同主键效果抵消（Bug #3）**：DseCecil 逆向揭示游戏物品翻转/旋转（`ItemMouseDragHandler`）未走 `KeyBindHelper.GetKeyDown`，而是由 `InputActionManager` 收集并通过 `KeyBindHelper.Get("flip_item")` 直接读取 `KeyCode`；且当顺逆时针旋转同主键（如 `Ctrl + F` 与 `Ctrl + Alt + F`）时，未过滤的物理按键同帧产生 `+90°` 与 `-90°` 毫秒级物理抵消。通过在 `OptionAndKeyBindPatches.cs` 中挂载底层 `Patch_KeyBindHelper_Get` Postfix，按当前修饰键掩码精确放行物理键，同主键不同修饰键精准解耦，单按物理键零误触，保存期与 ES3 读写全链路 bypass 保护；
   - **按键按钮恢复原版 160f 尺寸与长组合键自适应零截断（Bug #4）**：严格坚守 `KeybindButtonWidth = 160f` 原生设计尺寸（杜绝改大外部框体）；通过将按钮水平 padding 收窄至 4px、文本 margin 收窄至 2px，在外部框体尺寸一分不差的前提下直接释放 24px+ 有效宽度（达 148px）；配合 `FittedFontSizeCache` 单次字号自适应微缩（`[8.5f, 15f]`），确保 `Ctrl + Space`、`Ctrl+Alt+F`、`Ctrl+Shift+F12` 等长组合键完整清晰显示，绝不触发截断省略号；
   - **彻底修复原版键重绑时 ExplicitUnboundHotkeys 残留导致退回「无」隐患**：在 `UnifiedOptionWindow.ApplyAllSettings` 同步原版及模组键保存时显式清除解绑记录，并在底层 `SetSavedCombo` 增加非空键自动释放守卫；
-- **56 项全套离线单元测试 100% 全绿覆盖**：
-  - 新增 `FinalShipVerificationTests.cs`，100% 针对上述 4 项问题及重绑恢复编写代码级与沙盘级自动化单测（场景 A 翻转、场景 B 同主键不同修饰键顺逆时针零抵消、场景 C 单组合键防误触抑制、按钮 160f 原尺寸不变、多音字全覆盖、解绑重绑恢复），测试总数增至 56 项，100% 全绿通过。
+- **59 项全套离线单元测试 100% 全绿覆盖**：
+  - 新增与扩充 `FinalShipVerificationTests.cs`，100% 针对 4 大实机复现顽疾、解绑重绑恢复、局内重开选项页离线装配期 bypass 保障、封面秒载防串图与退回主菜单零等待编写代码级与沙盘级自动化单测（场景 A 翻转、场景 B 同主键不同修饰键顺逆时针零抵消、场景 C 单组合键防误触抑制、按钮 160f 原尺寸不变、多音字全覆盖、解绑重绑恢复、局内选项重开组合键防「无」、封面本地秒载防串图、退回主菜单状态重置），测试总数增至 59 项，100% 全绿通过。
 
 ### Changed
 - **异常防崩网加固**：全库消灭空 `catch {}`，统一通过 `SafeExecution.SafeExecute` / `SafeFunc` 执行并记录结构化日志（`[ProbablyUnifiedHotkeys][LEVEL]`）。
-- **0 权限默认纯净契约**：默认构建注入 `DisableDllKeyProbe=true` 编译宏，`manifest.xml` 保持空 `<Capabilities />`，确保静态扫描达到 `0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`（1,411 个扫描方法全部通过），面向官方 2026-12-10 安全白名单门禁。
+- **0 权限默认纯净契约**：默认构建注入 `DisableDllKeyProbe=true` 编译宏，`manifest.xml` 保持空 `<Capabilities />`，确保静态扫描达到 `0 Capabilities / 0 HardFlags / 0 Deprecated / Refused=False`（1,428 个扫描方法全部通过），面向官方 2026-12-10 安全白名单门禁。
 
 ### Fixed
+- **彻底根除局内重开选项中心离线装配期组合键误显为「无」（反馈 #1）**：
+  - 在 `ModOptionScanner.cs` 中对所有 `GetKey` / `SetKey` / `ParseKey` 委托强制注入 `using (ComboKeyStore.EnterBypass())`，保证配置读取永远返回真实物理键；
+  - 在 `UiSessionState` 引入全局状态 `IsBuildingOrOpeningUI` 并纳入 `ExternalBypassPredicate`，在离线批量装配期彻底阻断 `Patch_KeyBindHelper_Get` 的运行时过滤穿透；在回到局内关闭选项页后，裸按 Space 依然精准被拦截为 None，按住 Ctrl 时精确放行 Space。
+- **彻底根除改造件列表无封面模组亮上一个模组封面的「串图」Bug 与 CDN 超时卡顿（反馈 #2）**：
+  - 挂钩 `Patch_ModUIManager_GetPreview` 优先查表跨场景持久缓存 `PersistentPreviewCache`，未命中时通过游戏原生委托调用 `GetLocalPreview` 本地秒解工坊 `preview.png`（1~2ms），写入持久缓存并直接返回，彻底消除国内网络环境下 Steam CDN 超时卡顿；
+  - 在 `ApplyPreview.Prefix` 切换模组时先调用 `previewElem.SetSprite(null)` 清空上一个模组的残留图像；彻底删除旧代码中对其他模组强行设置 `previewPanel.SetVisible(true)` 的代码，完全交由原版逻辑按有效性安全显隐；本模组专属去封面与 42px 零拉伸严密保留。
+- **彻底消除退回主菜单时原版 1.0 秒人为协程空等阻塞（反馈 #3）**：
+  - 新增 `Patch_EscapeUIManager_OnMainMenu.Prefix`，安全上报遥测后 **100% 完整执行原版状态重置**（`NewGameData.Instance.isLoadFromMainMenu = true; PlayerStore.Instance.Reset(); EmporiumEntry.ResetData(); PlayerStore.ResetData(); StoreStation.ResetData();`），零秒等待直接加载 `EmporiumMenu`，物理消除 1,000ms 空等，且绝不触碰任何存档保存逻辑；主菜单预热延后 5 帧在空闲帧分步执行。
 - **彻底根除原版卡片标题栏被方案预设提示污染**：切断预设逻辑对 `SetKeyBindStatusDelegate` 的误调，反馈严格隔离在卡片内部状态栏与底栏。
 - **彻底根除扫描与开窗未开启 `EnterBypass` 导致的组合键退化单键与假脏弹窗**：在配置扫描与开窗最外层强制包裹 `using (ComboKeyStore.EnterBypass())`，重构 `SyncVanillaPendingFromManager` 修饰键同步算法，收窄 `ExplicitUnbound` 作用域至全量规范 ID。
 - **彻底根除搜索框打字时按 Esc 误关闭窗口与误弹未保存弹窗**：扩展 `IOptionUiBridge.IsSearchInputFocused` 独立释放聚焦。

@@ -434,7 +434,10 @@ namespace ProbablyUnifiedHotkeys
                 {
                     if (!InitialKeySnapshots.TryGetValue(hk.Id, out KeyCode initKey))
                     {
-                        initKey = hk.GetKey != null ? hk.GetKey() : KeyCode.None;
+                        using (ComboKeyStore.EnterBypass())
+                        {
+                            initKey = hk.GetKey != null ? hk.GetKey() : KeyCode.None;
+                        }
                         InitialKeySnapshots[hk.Id] = initKey;
                     }
                     if (!InitialModifierSnapshots.TryGetValue(hk.Id, out KeyModifierMask initMods))
@@ -1276,7 +1279,11 @@ namespace ProbablyUnifiedHotkeys
                         }
                         catch { }
 
-                        KeyCode currentRawKey = rawGetKey();
+                        KeyCode currentRawKey;
+                        using (ComboKeyStore.EnterBypass())
+                        {
+                            currentRawKey = rawGetKey();
+                        }
                         KeyModifierMask currentSavedMods = (currentRawKey == KeyCode.None)
                             ? KeyModifierMask.None
                             : ComboKeyStore.GetSavedModifiers(canonicalHkId, currentRawKey);
@@ -1300,7 +1307,10 @@ namespace ProbablyUnifiedHotkeys
                                 {
                                     return KeyCode.None;
                                 }
-                                return rawGetKey();
+                                using (ComboKeyStore.EnterBypass())
+                                {
+                                    return rawGetKey();
+                                }
                             },
                             SetKey = (k) =>
                             {
@@ -1316,7 +1326,10 @@ namespace ProbablyUnifiedHotkeys
                                         ComboKeyStore.SetExplicitlyUnbound(canonicalHkId, false);
                                         ComboKeyStore.SetExplicitlyUnbound(rawOptId, false);
                                     }
-                                    rawSetKey?.Invoke(k);
+                                    using (ComboKeyStore.EnterBypass())
+                                    {
+                                        rawSetKey?.Invoke(k);
+                                    }
                                 }
                                 catch (Exception ex)
                                 {
@@ -1716,7 +1729,10 @@ namespace ProbablyUnifiedHotkeys
                     {
                         return KeyCode.None;
                     }
-                    return ParseKey(entry.BoxedValue);
+                    using (ComboKeyStore.EnterBypass())
+                    {
+                        return ParseKey(entry.BoxedValue);
+                    }
                 },
                 SetKey = (newKey) =>
                 {
@@ -2136,7 +2152,10 @@ namespace ProbablyUnifiedHotkeys
                                     {
                                         return KeyCode.None;
                                     }
-                                    return rawGetKey();
+                                    using (ComboKeyStore.EnterBypass())
+                                    {
+                                        return rawGetKey();
+                                    }
                                 },
                                 SetKey = (k) =>
                                 {
@@ -2150,7 +2169,10 @@ namespace ProbablyUnifiedHotkeys
                                         {
                                             ComboKeyStore.SetExplicitlyUnbound(hkId, false);
                                         }
-                                        rawSetKey?.Invoke(k);
+                                        using (ComboKeyStore.EnterBypass())
+                                        {
+                                            rawSetKey?.Invoke(k);
+                                        }
                                     }
                                     catch (Exception ex)
                                     {

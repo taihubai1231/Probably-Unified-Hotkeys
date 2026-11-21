@@ -44,6 +44,9 @@
   - [30. 原版 InputActionHandler 绕过 GetKeyDown 直读 KeyCode 与同主键效果抵消](#30-原版-inputactionhandler-绕过-getkeydown-直读-keycode-与同主键效果抵消)
   - [31. 改大按钮外部物理宽度破坏界面原生统一感与收窄内留白自适应准则](#31-改大按钮外部物理宽度破坏界面原生统一感与收窄内留白自适应准则)
   - [32. 原版键重绑保存时未清除 ExplicitUnboundHotkeys 导致按键退回「无」与局内失效](#32-原版键重绑保存时未清除-explicitunboundhotkeys-导致按键退回无与局内失效)
+  - [33. 离线构建期 `ComboKeyStore.IsBypassed == false` 穿透过滤导致局内重开选项页组合键误显为「无」](#33-离线构建期-combokeystoreisbypassed--false-穿透过滤导致局内重开选项页组合键误显为无)
+  - [34. 改造件封面强制 `SetVisible(true)` 导致未配封面模组串图与网络超时卡死](#34-改造件封面强制-setvisibletrue-导致未配封面模组串图与网络超时卡死)
+  - [35. 原版退回主菜单 `MainMenuWithAnalytics` 强制 1.0 秒协程空等阻塞与切场卡顿](#35-原版退回主菜单-mainmenuwithanalytics-强制-10-秒协程空等阻塞与切场卡顿)
 
 ---
 
@@ -402,3 +405,40 @@
      ```
   2. 在底层 `ComboKeyStore.SetSavedCombo` 中增加防脏守卫：当 `primaryKey != KeyCode.None` 时，自动调用 `SetExplicitlyUnbound(entryId, false)`，从持久化根源切断非空键与解绑黑名单并存的矛盾。
 - **【严禁反模式 Anti-pattern】**：严禁在更新键位配置时仅更新键值而遗漏同步清除显式解绑黑名单 `ExplicitUnboundHotkeys`。
+
+### 33. 离线构建期 `ComboKeyStore.IsBypassed == false` 穿透过滤导致局内重开选项页组合键误显为「无」
+- **【现象 Symptom】**：玩家在局内将「翻转物品 (`flip_item`)」绑定为 `Ctrl + Space` 并点击应用。关闭选项页后，按 `Ctrl + Space` 能正常翻转，单按 `Space` 不误触；但若再次按 Esc 打开统一选项中心，`flip_item` 按钮上的文本却错误显示为「无」（灰色或红色空按键状态），但在后台其实按键并未丢失。
+- **【根因 Root Cause】**：
+  1. `UnifiedOptionWindow.OpenEnhancedUI(manager)` 在开头执行 `ResetSessionForOpen(manager)`，将 `CurrentWindow` 置为 `null`；
+  2. 随后将 `windowRoot.SetActive(false)` 进行离线批量装配，直至最底部 `builder.Show()` 执行前，`CurrentWindow.IsVisible` 恒为 `false`（`IsEnhancedWindowOpen` 恒为 `false`）；且直至 `WindowField.SetValue(manager, ...)` 执行前，`GameOptionUIManager.Instance.IsOpen` 亦为 `false`；
+  3. 旧版仅在局部几个操作套了 `EnterBypass()`，导致中间执行的原版卡片装配（`CollapsibleCardView.BuildVanillaSectionCard` -> `rawGetKey()` -> `KeyBindHelper.Get`）、`StyleVanillaKeyButtons()`、`SyncVanillaPendingFromManager()` 与 `ConflictAggregationView.RefreshConflicts()` 时，`ComboKeyStore.IsBypassed` 恒为 `false`；
+  4. 此时玩家并没有物理按住 `Ctrl` 等修饰键，`Patch_KeyBindHelper_Get` Postfix 误将 UI 查询当成局内运行时按键消费，直接把返回值过滤成了 `KeyCode.None`，导致 UI 表现层将其格式化为「无」！
+- **【解法 Remedy】**：实施分层铁壁防御：
+  1. **模型读取层永久强制旁路 (`ModOptionScanner.cs`)**：`ModHotkeyEntry.GetKey` 与 `SetKey` 是配置定义与模型持久化入口，语义永远代表“该项配置保存的真实物理键是什么”，在 `GetVanillaKeybinds`、`CreateHotkeyFromConfigEntry`、`ScanWorkshopGameOptionSections` 及快照抓取中，全链路委托内部强制包裹 `using (ComboKeyStore.EnterBypass())`；
+  2. **UI 全生命周期无死角旁路保障 (`UiSessionState.cs` + `UnifiedOptionWindow.cs`)**：在 `UiSessionState` 新增 `internal static bool IsBuildingOrOpeningUI`；在 `OpenEnhancedUI` 最外层使用 `try/finally` 与 `using (ComboKeyStore.EnterBypass())` 全量包裹；将 `ComboKeyStore.ExternalBypassPredicate` 统一更新为 `() => IsEnhancedWindowOpen || IsCapturingAnyKey || IsBuildingOrOpeningUI || IsApplyingSettings`；并在 `SyncVanillaKeyButtonColors`、`BuildVanillaSectionCard` 等操作内部均加上 `using (ComboKeyStore.EnterBypass())` 兜底。
+- **【严禁反模式 Anti-pattern】**：严禁假定 `IsEnhancedWindowOpen` 能覆盖 UI 离线装配与构建阶段；严禁在配置定义读取委托中裸调 `rawGetKey()` 而不开启 `EnterBypass()`。
+
+### 34. 改造件封面强制 `SetVisible(true)` 导致未配封面模组串图与网络超时卡死
+- **【现象 Symptom】**：
+  1. 在游戏「改造件 (Mods)」列表中切换模组时，没有封面的模组界面残留了上一个模组的封面（严重“串图”）；
+  2. 点击工坊模组时发生长达数秒的界面冻结与卡顿，控制台日志频繁报错 `[ModUI] Could not download the Workshop preview ... Data Processing Error`。
+- **【根因 Root Cause】**：
+  1. 原版 `ModUIManager.GetPreview` 优先调用 `ModWorkshop.TryGetPreviewUrl` 尝试从 Steam CDN 异步网络下载预览大图，并立即返回 `null`。在国内网络环境下，CDN 下载极易超时或失败，失败后才回退到本地磁盘解码 `GetLocalPreview`（读取模组目录下的 `preview.png`），导致玩家每点击一个订阅模组都经历漫长阻塞与报错；且原版 `ModUIManager` 的 `previewCache` 字典跨场景销毁未持久化复用；
+  2. 旧补丁在 `Patch_ModUIManager_ApplyPreview.Prefix` 与 `Patch_ModUIManager_ShowMod.Postfix` 中，切换至非本模组时无脑执行了 `previewPanel.SetVisible(true)`，强行覆盖了原版根据图片是否为空控制显隐的安全逻辑；此时 `Image.sprite` 依然残留着上一个模组的封面，直接导致无封面模组亮出上一模组的封面（串图）！
+- **【解法 Remedy】**：
+  1. 挂钩 `Patch_ModUIManager_GetPreview` 优先秒查跨场景静态字典 `PersistentPreviewCache`，未命中时直接通过委托调用游戏原生的 `GetLocalPreview(mod)` 读取本地已下载好的 `preview.png`（耗时仅 1~2ms），写入持久缓存并直接返回，彻底跳过容易超时的网络下载链路；
+  2. 在 `ApplyPreview.Prefix` 切换模组时显式执行 `previewElem.SetSprite((Sprite?)null)` 清空残影；
+  3. 彻底删除 `Prefix` 与 `ShowMod.Postfix` 中对其他模组强设 `previewPanel.SetVisible(true)` 的代码，完全交由原版逻辑根据图片是否有效自主控制显隐；
+  4. 本模组专属去封面优化依然严密保留（`previewPanel.SetVisible(false)`，且按钮保持 42px 零拉伸）；
+  5. `ModUIPrewarmRunner` 在主菜单闲置帧按每帧 2 个模组轻量分步预热本地未缓存封面。
+- **【严禁反模式 Anti-pattern】**：严禁在 UI 切换控件状态时强行覆盖原版有效的空值防御显隐逻辑；严禁在主线程发起容易超时的网络下载或重复反序列化。
+
+### 35. 原版退回主菜单 `MainMenuWithAnalytics` 强制 1.0 秒协程空等阻塞与切场卡顿
+- **【现象 Symptom】**：玩家在局内点击“退回主菜单”按钮时，游戏明显定格并空等超过 1 秒钟才开始加载场景。
+- **【根因 Root Cause】**：
+  1. 反编译 `EscapeUIManager.MainMenuWithAnalytics` 揭示核心真相：原版代码在调用 `EmporiumAnalytics.TrackLeaveToMainMenu()` 后，若 `EmporiumOption.Instance.consentAnalytics` 为 `true`（绝大多数玩家的默认状态），无条件执行 `yield return new WaitForSecondsRealtime(1.0f);` 强制死等整整 1 秒钟；
+  2. 且切回主菜单首帧若在 `Awake` / `Start` 中同步执行重型面板与对象池预热，极易造成场景切换瞬间的画面顿挫。
+- **【解法 Remedy】**：
+  1. 新增 `Patch_EscapeUIManager_OnMainMenu.Prefix`，在 `EnableFastQuit || EnablePerformancePatches` 开启时接管回调。安全上报遥测后，**100% 完整执行原版退出主菜单的全部状态重置逻辑**（`NewGameData.Instance.isLoadFromMainMenu = true; PlayerStore.Instance.Reset(); EmporiumEntry.ResetData(); PlayerStore.ResetData(); StoreStation.ResetData();`），零秒等待直接调起 `SceneManager.LoadScene("EmporiumMenu")`，物理消除 1,000ms 强制空等；
+  2. 将此前在 `ModUIManager.Awake` 与 `CustomUIManager.Start` 中同步执行的预热彻底解耦，统一交由 `ModUIPrewarmRunner` 延后 5 帧在主菜单稳定渲染后的空闲帧分步执行，消除切场进主菜单时的瞬间定格。
+- **【严禁反模式 Anti-pattern】**：严禁在优化切场与退回主菜单时跳过游戏自身的单例状态重置逻辑，严禁触碰或跳过任何存档保存逻辑。

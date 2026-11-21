@@ -36,7 +36,9 @@ namespace ProbablyUnifiedHotkeys
 
             ComboKeyStore.ExternalBypassPredicate = () =>
                 (OptionUiHost.Active?.IsEnhancedWindowOpen ?? false) ||
-                (OptionUiHost.Active?.IsCapturingModHotkey ?? false);
+                (OptionUiHost.Active?.IsCapturingModHotkey ?? false) ||
+                UiSessionState.IsBuildingOrOpeningUI ||
+                UiSessionState.IsApplyingSettings;
 
             ComboKeyStore.EnsureLoaded();
             I18n.EnsureRegistered();

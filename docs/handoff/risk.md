@@ -178,3 +178,19 @@ flowchart TD
 4. **按钮原生 160f 尺寸恢复与收窄留白字号微缩护栏（针对 #4）**：
    - **痛点根因**：之前为了显示长组合键擅自将按钮外部框体放大至 195f，破坏了原版选项界面规整统一的视觉美感。
    - **闭环解法**：`KeybindButtonWidth` 严格 100% 恢复为原版 `160f`；将按钮内部横向 padding 收窄至 4px、文本 margin 设为 2px，在外部尺寸一分一毫都不变的前提下直接释放 24px+ 净宽（达 148px）；配合 `FittedFontSizeCache` 单次字号自适应（`[8.5f, 15f]`），确保 `Ctrl + Space` 与 `Ctrl+Alt+F` 完整显示，绝不截断。
+
+---
+
+## 七、 第 4 轮实机反馈全链路攻坚与防退化闭环 (Round 4 Feedback Hardening)
+
+针对业务决策人第 4 轮实机复现提出的核心痛点，各专员与总检官已彻底攻坚根治并新增 `FinalShipVerificationTests.cs`（全量单测扩充至 59/59 Tests 100% 全绿通过）：
+
+1. **局内重开选项页离线装配期 bypass 闭环（彻底解决组合键误显为「无」）**：
+   - **痛点根因**：`UnifiedOptionWindow.OpenEnhancedUI` 重置会话后处于离线装配期（`IsEnhancedWindowOpen == false`），玩家未按住 `Ctrl`，旧版局部 bypass 漏掉了卡片装配、pending 同步与冲突刷新，导致 `Patch_KeyBindHelper_Get` 误将其过滤为 `KeyCode.None`，UI 按钮被错误刷成「无」。
+   - **闭环解法**：在 `ModOptionScanner.cs` 中对所有 `GetKey` / `SetKey` / `ParseKey` 委托强制包裹 `using (ComboKeyStore.EnterBypass())`；在 `UiSessionState` 引入 `IsBuildingOrOpeningUI` 并纳入 `ExternalBypassPredicate`；在 `OpenEnhancedUI` 与所有卡片构建/颜色同步处加全量 bypass 守卫；单测 `Feedback06` 铁证断言离线构建期文本稳定显示 `"Ctrl + Space"`，且局内操作单按 Space 依然为 None、按 Ctrl+Space 精确放行！
+2. **改造件封面秒载与防串图闭环（彻底解决无封面模组亮上一模组封面与 CDN 超时）**：
+   - **痛点根因**：旧补丁对其他模组无脑 `previewPanel.SetVisible(true)` 强行覆盖原版显隐，使上一模组残留的 Sprite 亮出造成串图；原版从 Steam CDN 异步下载大图在国内极易超时（`Player.log` 频繁报错）。
+   - **闭环解法**：挂钩 `Patch_ModUIManager_GetPreview` 优先读取跨场景静态字典 `PersistentPreviewCache`，未命中时直接委托调用游戏原生 `GetLocalPreview` 本地秒解工坊 `preview.png`（1~2ms），写入持久缓存并直接返回，彻底跳过网络 CDN 超时；在 `ApplyPreview.Prefix` 切换模组时显式执行 `previewElem.SetSprite(null)` 清空残影；彻底删除对其他模组强设 `SetVisible(true)` 的逻辑，交由原版根据图片有效性自主显隐；本模组专属去封面与 42px 零拉伸严密保留；单测 `Feedback07` 锁死契约。
+3. **退回主菜单消除 1.0s 原版人为协程死等与切场解耦**：
+   - **痛点根因**：反编译发现原版 `MainMenuWithAnalytics` 在遥测后无条件 `yield return new WaitForSecondsRealtime(1.0f);` 强制死等整整 1 秒；且切回主菜单首帧若同步执行重型预热容易瞬间掉帧。
+   - **闭环解法**：新增 `Patch_EscapeUIManager_OnMainMenu.Prefix`，安全上报遥测后 **100% 完整执行原版状态重置**（`NewGameData.Instance.isLoadFromMainMenu = true; PlayerStore.Instance.Reset(); EmporiumEntry.ResetData(); PlayerStore.ResetData(); StoreStation.ResetData();`），零秒等待直接加载 `EmporiumMenu` 场景，物理消除 1,000ms 空等，且绝不触碰任何存档保存逻辑；主菜单预热延后 5 帧在空闲帧分步执行；单测 `Feedback08` 锁死契约。

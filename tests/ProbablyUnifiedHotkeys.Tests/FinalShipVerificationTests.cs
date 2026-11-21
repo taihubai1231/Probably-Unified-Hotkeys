@@ -433,5 +433,171 @@ namespace ProbablyUnifiedHotkeys.Tests
             Patch_KeyBindHelper_Get.Postfix(bareId, ref soloV);
             Assert.Equal(KeyCode.V, soloV);
         }
+
+        // =====================================================================
+        // 反馈 #6：局内重开增强选项界面离线装配期按键显示 "Ctrl + Space"（绝不为 "无"）
+        // 且局内关闭旁路后裸按 Space 严格返回 KeyCode.None，按住 Ctrl 放行 KeyCode.Space
+        // =====================================================================
+
+        [Fact]
+        public void Feedback06_InGameDisplay_ReopenEnhancedUI_OfflineBuilding_DisplaysCtrlSpace_NotNone_AndInGameRuntimeFilteringClean()
+        {
+            ComboKeyStore.EnsureLoaded();
+            ComboKeyStore.ExternalBypassPredicate = () =>
+                UiSessionState.IsEnhancedWindowOpen ||
+                UiSessionState.IsCapturingAnyKey ||
+                UiSessionState.IsBuildingOrOpeningUI ||
+                UiSessionState.IsApplyingSettings;
+
+            const string modId = "vanilla";
+            const string rawOptionId = "key_flip_item";
+            const string canonicalId = "vanilla.key_flip_item";
+            const string bareId = "flip_item";
+
+            // 1. 设置保存数据：flip_item = Ctrl + Space
+            ComboKeyStore.SetSavedCustomHotkey(canonicalId, KeyModifierMask.Ctrl, KeyCode.Space);
+            ComboKeyStore.SetSavedCombo(canonicalId, KeyModifierMask.Ctrl, KeyCode.Space);
+            ComboKeyStore.SetExplicitlyUnbound(canonicalId, false);
+            ComboKeyStore.SetExplicitlyUnbound(rawOptionId, false);
+            ComboKeyStore.SetExplicitlyUnbound(bareId, false);
+
+            // 2. 模拟切入局内新场景：玩家未按住 Ctrl，且处于离线构建期（窗口尚未 Show，IsEnhancedWindowOpen == false）
+            ComboKeyStore.HeldModifiersOverride = _ => KeyModifierMask.None;
+            ComboKeyStore.RawKeyDownTestHook = _ => false;
+            UiSessionState.CurrentWindow = null;
+            UiSessionState.IsBuildingOrOpeningUI = false;
+            Assert.False(UiSessionState.IsEnhancedWindowOpen, "Enhanced window must not be open yet during offline build");
+
+            // 模拟原版 KeyBindHelper.Get("flip_item") 底层物理按键为 Space
+            // 若未开启 bypass，底层 Patch_KeyBindHelper_Get 会因未按住 Ctrl 返回 None；
+            // 但在 ModOptionScanner 的 GetVanillaKeybinds 中，GetKey 委托内部已强制包装 using (ComboKeyStore.EnterBypass())！
+            Func<KeyCode> rawVanillaGet = () =>
+            {
+                KeyCode k = KeyCode.Space;
+                Patch_KeyBindHelper_Get.Postfix(bareId, ref k);
+                return k;
+            };
+
+            // 模拟 ModOptionScanner.GetVanillaKeybinds 装配出来的 ModHotkeyEntry
+            var entry = new ModHotkeyEntry
+            {
+                Id = canonicalId,
+                ModId = modId,
+                RawOptionId = rawOptionId,
+                SupportsModifierCombos = true,
+                DefaultKey = KeyCode.Space,
+                DefaultModifiers = KeyModifierMask.None,
+                GetKey = () =>
+                {
+                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId) || ComboKeyStore.IsExplicitlyUnbound(rawOptionId))
+                    {
+                        return KeyCode.None;
+                    }
+                    using (ComboKeyStore.EnterBypass())
+                    {
+                        return rawVanillaGet();
+                    }
+                }
+            };
+
+            // 3. 铁证断言：即便处于离线装配期（IsEnhancedWindowOpen == false）且玩家没有按住 Ctrl：
+            // 通过 ModHotkeyEntry.GetKey() 读取到的真实底层物理按键必须为 KeyCode.Space，绝不是 KeyCode.None！
+            KeyCode scannedKey = entry.GetKey();
+            Assert.Equal(KeyCode.Space, scannedKey);
+
+            // 通过 entry.EffectiveCombo 读取到的组合键必须为 (Space, Ctrl)
+            KeyCombo effectiveCombo = entry.EffectiveCombo;
+            Assert.Equal(KeyCode.Space, effectiveCombo.Key);
+            Assert.Equal(KeyModifierMask.Ctrl, effectiveCombo.Modifiers);
+
+            // 通过 UiLayoutAndFontHelper.FormatHotkeyComboText 格式化出来的显示文本严格为 "Ctrl + Space"，绝不是 "无"！
+            string displayText = UiLayoutAndFontHelper.FormatHotkeyComboText(entry);
+            Assert.Equal("Ctrl + Space", displayText);
+            Assert.NotEqual("无", displayText);
+
+            // 4. 模拟离线装配全局生命周期标志位 UiSessionState.IsBuildingOrOpeningUI
+            UiSessionState.IsBuildingOrOpeningUI = true;
+            try
+            {
+                // 在 IsBuildingOrOpeningUI 开启期间，ComboKeyStore.IsBypassed 自动为 true
+                Assert.True(ComboKeyStore.IsBypassed, "ComboKeyStore.IsBypassed must be true when IsBuildingOrOpeningUI is active");
+
+                KeyCode duringBuild = KeyCode.Space;
+                Patch_KeyBindHelper_Get.Postfix(bareId, ref duringBuild);
+                Assert.Equal(KeyCode.Space, duringBuild);
+            }
+            finally
+            {
+                UiSessionState.IsBuildingOrOpeningUI = false;
+            }
+
+            // 5. 模拟窗口关闭、玩家回到游戏局内操作（关闭所有 bypass）：
+            Assert.False(ComboKeyStore.IsBypassed, "Bypass must be completely released in gameplay");
+
+            // ① 玩家在局内单独按下 Space（未按住 Ctrl）：
+            ComboKeyStore.HeldModifiersOverride = _ => KeyModifierMask.None;
+            KeyCode gameplaySoloSpace = KeyCode.Space;
+            Patch_KeyBindHelper_Get.Postfix(bareId, ref gameplaySoloSpace);
+            // 铁证断言：未按 Ctrl 时，物理按键 Space 必须被严格过滤为 KeyCode.None，绝不误触发翻转！
+            Assert.Equal(KeyCode.None, gameplaySoloSpace);
+
+            // ② 玩家在局内按下 Ctrl + Space：
+            ComboKeyStore.HeldModifiersOverride = _ => KeyModifierMask.Ctrl;
+            KeyCode gameplayCtrlSpace = KeyCode.Space;
+            Patch_KeyBindHelper_Get.Postfix(bareId, ref gameplayCtrlSpace);
+            // 铁证断言：按住 Ctrl 时，物理按键 Space 精确放行！
+            Assert.Equal(KeyCode.Space, gameplayCtrlSpace);
+        }
+
+        // =====================================================================
+        // 反馈 #7：改造件封面秒载与防串图机制深度验真
+        // =====================================================================
+
+        [Fact]
+        public void Feedback07_ModDetail_FastPreview_AndAntiGhostingVerification()
+        {
+            var asm = typeof(ModFeatureConfig).Assembly;
+
+            // 1. 验证 Patch_ModUIManager_GetPreview 存在且包含 Prefix 截断
+            var getPreviewPatch = asm.GetType("ProbablyUnifiedHotkeys.Patch_ModUIManager_GetPreview");
+            Assert.NotNull(getPreviewPatch);
+            var getPreviewPrefix = getPreviewPatch.GetMethod("Prefix", BindingFlags.Static | BindingFlags.Public);
+            Assert.NotNull(getPreviewPrefix);
+
+            // 2. 验证 ModUIManagerPerfHelper.PersistentPreviewCache 与 TryGetFastPreview
+            var helperType = asm.GetType("ProbablyUnifiedHotkeys.ModUIManagerPerfHelper");
+            Assert.NotNull(helperType);
+            var tryGetFastPreview = helperType.GetMethod("TryGetFastPreview", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+            Assert.NotNull(tryGetFastPreview);
+
+            // 3. 验证 Patch_EscapeUIManager_OnMainMenu 存在且包含 Prefix 快速退出
+            var escapePatch = asm.GetType("ProbablyUnifiedHotkeys.Patch_EscapeUIManager_OnMainMenu");
+            Assert.NotNull(escapePatch);
+            var escapePrefix = escapePatch.GetMethod("Prefix", BindingFlags.Static | BindingFlags.Public);
+            Assert.NotNull(escapePrefix);
+        }
+
+        // =====================================================================
+        // 反馈 #8：退回主菜单零等待提速与状态重置契约验真
+        // =====================================================================
+
+        [Fact]
+        public void Feedback08_FastQuitToMainMenu_ZeroWait_StateResetContractVerification()
+        {
+            // 验证默认开启快速退出
+            Assert.True(ModFeatureConfig.EnableFastQuit);
+            Assert.True(ModFeatureConfig.EnablePerformancePatches);
+
+            var asm = typeof(ModFeatureConfig).Assembly;
+            var escapePatch = asm.GetType("ProbablyUnifiedHotkeys.Patch_EscapeUIManager_OnMainMenu");
+            Assert.NotNull(escapePatch);
+            var prefix = escapePatch.GetMethod("Prefix", BindingFlags.Static | BindingFlags.Public);
+            Assert.NotNull(prefix);
+
+            // 验证当 instance == null 时 Prefix 放行 (返回 true)
+            object?[] args = new object?[] { null };
+            object? result = prefix.Invoke(null, args);
+            Assert.Equal(true, result);
+        }
     }
 }

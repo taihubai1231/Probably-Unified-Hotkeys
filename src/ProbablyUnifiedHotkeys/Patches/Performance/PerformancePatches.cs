@@ -128,6 +128,62 @@ namespace ProbablyUnifiedHotkeys
         }
     }
 
+    [HarmonyPatch(typeof(EscapeUIManager), nameof(EscapeUIManager.OnMainMenu))]
+    public static class Patch_EscapeUIManager_OnMainMenu
+    {
+        private static readonly FieldInfo? IsPendingTransitionField =
+            AccessTools.Field(typeof(EscapeUIManager), "isPendingTransition");
+
+        public static bool Prefix(EscapeUIManager __instance)
+        {
+            if (!ModFeatureConfig.EnableFastQuit && !ModFeatureConfig.EnablePerformancePatches)
+            {
+                return true;
+            }
+            if (__instance == null)
+            {
+                return true;
+            }
+
+            if (IsPendingTransitionField != null && (bool)(IsPendingTransitionField.GetValue(__instance) ?? false))
+            {
+                return false;
+            }
+            IsPendingTransitionField?.SetValue(__instance, true);
+
+            __instance.OnAnyClick();
+
+            try
+            {
+                EmporiumAnalytics.TrackLeaveToMainMenu();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[Patch_EscapeUIManager_OnMainMenu] TrackLeaveToMainMenu warning: {ex.Message}");
+            }
+
+            // 零等待执行原版重置与场景切换，消除原版 MainMenuWithAnalytics 中 1.0s 无效 WaitForSecondsRealtime 阻塞！
+            try
+            {
+                if (NewGameData.Instance != null)
+                {
+                    NewGameData.Instance.isLoadFromMainMenu = true;
+                }
+                PlayerStore.Instance?.Reset();
+                EmporiumEntry.ResetData();
+                PlayerStore.ResetData();
+                StoreStation.ResetData();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[Patch_EscapeUIManager_OnMainMenu] Reset game state warning: {ex.Message}");
+            }
+
+            UnityEngine.SceneManagement.SceneManager.LoadScene("EmporiumMenu", UnityEngine.SceneManagement.LoadSceneMode.Single);
+            return false;
+        }
+    }
+
     // =========================================================================
     // 2. 主菜单闲置单线程分帧预热（零 Thread / Task / 外部 StartCoroutine）
     // =========================================================================
@@ -318,10 +374,94 @@ namespace ProbablyUnifiedHotkeys
 
         private static readonly FieldInfo? PreviewCacheField = AccessTools.Field(typeof(ModUIManager), "previewCache");
         private static readonly Dictionary<string, Sprite> PersistentPreviewCache = new Dictionary<string, Sprite>(StringComparer.Ordinal);
+        private static readonly Func<ModUIManager, LoadedMod, Sprite?>? GetLocalPreviewFn =
+            CreateMethodDelegate<Func<ModUIManager, LoadedMod, Sprite?>>("GetLocalPreview", new Type[] { typeof(LoadedMod) });
+        private static int _warmupModIndex = 0;
         private static ModUIManager? _lastPopulatedManager;
         private static string? _lastPopulatedEnvSignature;
         private static bool _hasCompletedFullPopulate = false;
         private static readonly System.Text.StringBuilder PopulateSigBuilder = new System.Text.StringBuilder(1024);
+
+        internal static bool IsPreviewWarmupComplete(int totalCount) => _warmupModIndex >= totalCount;
+
+        internal static void WarmupNextLocalPreviews(ModUIManager manager, int count = 2)
+        {
+            if (manager == null || GetLocalPreviewFn == null || ModLoader.Mods == null) return;
+            List<LoadedMod> mods = ModLoader.Mods;
+            int processed = 0;
+            while (_warmupModIndex < mods.Count && processed < count)
+            {
+                LoadedMod m = mods[_warmupModIndex++];
+                if (m?.Manifest != null && !string.IsNullOrEmpty(m.Manifest.ID))
+                {
+                    string id = m.Manifest.ID;
+                    if (!PersistentPreviewCache.ContainsKey(id))
+                    {
+                        try
+                        {
+                            Sprite? local = GetLocalPreviewFn(manager, m);
+                            if (local != null)
+                            {
+                                PersistentPreviewCache[id] = local;
+                            }
+                        }
+                        catch
+                        {
+                            // ignore preview warmup errors
+                        }
+                    }
+                }
+                processed++;
+            }
+        }
+
+        internal static bool TryGetFastPreview(ModUIManager manager, LoadedMod? mod, out Sprite? sprite)
+        {
+            sprite = null;
+            if (mod?.Manifest == null || string.IsNullOrEmpty(mod.Manifest.ID)) return false;
+            string id = mod.Manifest.ID;
+
+            // 1. 优先从跨场景/会话全局持久缓存中命中（0ms 内存秒出）
+            if (PersistentPreviewCache.TryGetValue(id, out Sprite? cached) && cached != null)
+            {
+                sprite = cached;
+                return true;
+            }
+
+            // 2. 查原生 ModUIManager.previewCache 字典
+            Dictionary<string, Sprite>? nativeCache = PreviewCacheField?.GetValue(manager) as Dictionary<string, Sprite>;
+            if (nativeCache != null && nativeCache.TryGetValue(id, out Sprite? nativeCached) && nativeCached != null)
+            {
+                PersistentPreviewCache[id] = nativeCached;
+                sprite = nativeCached;
+                return true;
+            }
+
+            // 3. 极速从本地 Mod 目录 preview.png 载入（零网络请求、零挂起，1-2ms 快速解码）
+            if (GetLocalPreviewFn != null)
+            {
+                try
+                {
+                    Sprite? local = GetLocalPreviewFn(manager, mod);
+                    if (local != null)
+                    {
+                        PersistentPreviewCache[id] = local;
+                        if (nativeCache != null)
+                        {
+                            nativeCache[id] = local;
+                        }
+                        sprite = local;
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"[ModUIManagerPerfHelper] GetLocalPreview failed for {id}: {ex.Message}");
+                }
+            }
+
+            return false;
+        }
 
         internal static void EnsurePreviewCached(ModUIManager manager, LoadedMod? mod)
         {
@@ -508,6 +648,7 @@ namespace ProbablyUnifiedHotkeys
             _lastPopulatedManager = null;
             _lastPopulatedEnvSignature = null;
             _hasCompletedFullPopulate = false;
+            _warmupModIndex = 0;
         }
 
         internal static void MarkNotEmpty(ModUIManager manager)
@@ -1117,14 +1258,8 @@ namespace ProbablyUnifiedHotkeys
             if (!ModFeatureConfig.EnablePerformancePatches || __instance == null) return;
             try
             {
-                if (CustomUIManager.Instance != null && __instance.panel != null && !__instance.panel.activeSelf && __instance.content != null)
-                {
-                    ModUIManagerPerfHelper.PrewarmPanelInstance(__instance);
-                }
-                else
-                {
-                    ModUIPrewarmRunner.Attach(__instance);
-                }
+                // 统一交由 ModUIPrewarmRunner 延后至主菜单渲染完毕后的空闲帧分步执行，杜绝 Awake 首帧卡顿
+                ModUIPrewarmRunner.Attach(__instance);
             }
             catch (Exception ex)
             {
@@ -1137,6 +1272,7 @@ namespace ProbablyUnifiedHotkeys
     {
         private ModUIManager? _manager;
         private int _framesWaited = 0;
+        private bool _prewarmed = false;
 
         internal static void Attach(ModUIManager manager)
         {
@@ -1148,12 +1284,19 @@ namespace ProbablyUnifiedHotkeys
             }
             runner._manager = manager;
             runner._framesWaited = 0;
+            runner._prewarmed = false;
         }
 
         private void Update()
         {
             _framesWaited++;
-            if (_manager == null || _manager.panel == null || _manager.panel.activeSelf || _manager.content == null || CustomUIManager.Instance == null)
+            // 闲置等待：让出主菜单前 5 帧，让场景和首屏 UI 丝滑呈现
+            if (_framesWaited < 5)
+            {
+                return;
+            }
+
+            if (_manager == null || _manager.panel == null || _manager.content == null || CustomUIManager.Instance == null)
             {
                 if (_framesWaited > 60 || (_manager != null && _manager.panel != null && _manager.panel.activeSelf))
                 {
@@ -1162,15 +1305,35 @@ namespace ProbablyUnifiedHotkeys
                 return;
             }
 
+            if (!_prewarmed)
+            {
+                _prewarmed = true;
+                try
+                {
+                    ModUIManagerPerfHelper.PrewarmPanelInstance(_manager);
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"[ModUIPrewarmRunner] Prewarm deferred warning: {ex.Message}");
+                }
+                return;
+            }
+
+            // 预建 UI 骨架后，每空闲帧轻量解码 2 个未缓存模组的本地封面进 PersistentPreviewCache
             try
             {
-                ModUIManagerPerfHelper.PrewarmPanelInstance(_manager);
+                ModUIManagerPerfHelper.WarmupNextLocalPreviews(_manager, 2);
             }
-            catch (Exception ex)
+            catch
             {
-                ModLogger.Debug($"[ModUIPrewarmRunner] Prewarm deferred warning: {ex.Message}");
+                // ignore preview warmup errors
             }
-            finally
+
+            if (ModLoader.Mods != null && ModUIManagerPerfHelper.IsPreviewWarmupComplete(ModLoader.Mods.Count))
+            {
+                Destroy(this);
+            }
+            else if (_framesWaited > 120)
             {
                 Destroy(this);
             }
@@ -1188,7 +1351,7 @@ namespace ProbablyUnifiedHotkeys
                 ModUIManager? mgr = ModUIManager.Instance;
                 if (mgr != null && mgr.panel != null && !mgr.panel.activeSelf && mgr.content != null)
                 {
-                    ModUIManagerPerfHelper.PrewarmPanelInstance(mgr);
+                    ModUIPrewarmRunner.Attach(mgr);
                 }
             }
             catch (Exception ex)
@@ -1243,6 +1406,26 @@ namespace ProbablyUnifiedHotkeys
         }
     }
 
+    [HarmonyPatch(typeof(ModUIManager), "GetPreview")]
+    public static class Patch_ModUIManager_GetPreview
+    {
+        public static bool Prefix(ModUIManager __instance, LoadedMod? mod, ref Sprite? __result)
+        {
+            if (!ModFeatureConfig.EnablePerformancePatches || __instance == null || mod?.Manifest == null || string.IsNullOrEmpty(mod.Manifest.ID))
+            {
+                return true;
+            }
+
+            if (ModUIManagerPerfHelper.TryGetFastPreview(__instance, mod, out Sprite? sprite))
+            {
+                __result = sprite;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
     [HarmonyPatch(typeof(ModUIManager), "ApplyPreview")]
     public static class Patch_ModUIManager_ApplyPreview
     {
@@ -1254,11 +1437,17 @@ namespace ProbablyUnifiedHotkeys
                 ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
             }
 
+            CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
+            CustomUIElement? previewPanel = handle?.Get("preview_panel");
+            CustomUIElement? previewElem = handle?.Get("preview");
+
             // 本模组专属去封面优化（老板诉求 #3）：隐藏封面预览面板 preview_panel，玩家无需滚动即可直接清晰通读顶部文字介绍
             if (mod?.Manifest != null && string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))
             {
-                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
-                CustomUIElement? previewPanel = handle?.Get("preview_panel");
+                if (previewElem != null)
+                {
+                    previewElem.SetSprite((Sprite?)null);
+                }
                 if (previewPanel != null)
                 {
                     previewPanel.SetVisible(false);
@@ -1272,16 +1461,11 @@ namespace ProbablyUnifiedHotkeys
             }
             else
             {
-                // 切到别的模组走原版恢复
-                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
-                CustomUIElement? previewPanel = handle?.Get("preview_panel");
-                if (previewPanel != null && previewPanel.Rect != null && !previewPanel.Rect.gameObject.activeSelf)
+                // 重要防串图：在加载/显示新模组封面之前，先清空旧模组残留在 preview 控件上的 Sprite！
+                // 严禁在此处无脑 SetVisible(true)！应由后续原版 ApplyPreview 根据 GetPreview 结果自主决定显隐！
+                if (previewElem != null)
                 {
-                    previewPanel.SetVisible(true);
-                    if (previewPanel.Rect.parent is RectTransform parentRt)
-                    {
-                        LayoutRebuilder.MarkLayoutForRebuild(parentRt);
-                    }
+                    previewElem.SetSprite((Sprite?)null);
                 }
             }
 
@@ -1324,20 +1508,8 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
             }
-            else
-            {
-                // 切到别的模组走原版恢复
-                CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
-                CustomUIElement? previewPanel = handle?.Get("preview_panel");
-                if (previewPanel != null && previewPanel.Rect != null && !previewPanel.Rect.gameObject.activeSelf)
-                {
-                    previewPanel.SetVisible(true);
-                    if (previewPanel.Rect.parent is RectTransform parentRt)
-                    {
-                        LayoutRebuilder.MarkLayoutForRebuild(parentRt);
-                    }
-                }
-            }
+            // 切换到其他模组时，绝对不要在此处强行 previewPanel.SetVisible(true)！
+            // 原版 ApplyPreview 会根据 GetPreview 结果正确调用 SetVisible(true) 或 SetVisible(false)。
 
             ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
         }
