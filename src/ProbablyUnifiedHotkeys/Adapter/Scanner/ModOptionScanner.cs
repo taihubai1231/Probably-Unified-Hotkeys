@@ -75,6 +75,83 @@ namespace ProbablyUnifiedHotkeys
         private static readonly Dictionary<string, int> InitialIndexSnapshots = new Dictionary<string, int>(StringComparer.Ordinal);
         private static readonly Dictionary<string, string> InitialStringSnapshots = new Dictionary<string, string>(StringComparer.Ordinal);
 
+        private static readonly HashSet<string> LoggedDegradedMods = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        internal static void MarkDegradedEntry(string? modId, string? entryKey, string context, Exception ex)
+        {
+            ModCatalogCache.HasDegradedEntries = true;
+            string safeModId = !string.IsNullOrEmpty(modId) ? modId! : "unknown_mod";
+            string logKey = safeModId + ":" + context;
+            lock (LoggedDegradedMods)
+            {
+                if (LoggedDegradedMods.Add(logKey))
+                {
+                    ModLogger.Warn($"Degraded entry in mod '{safeModId}' (entry: '{entryKey}', context: '{context}'): {ex.Message}");
+                }
+                else
+                {
+                    ModLogger.Debug($"Degraded entry in mod '{safeModId}' (entry: '{entryKey}', context: '{context}'): {ex.Message}");
+                }
+            }
+        }
+
+        public static string SafeInvokeString(Func<string>? getter, string fallback, string? modId = null, string? entryKey = null, string context = "StringGetter")
+        {
+            if (getter == null) return fallback;
+            try
+            {
+                string? result = getter();
+                return result ?? fallback;
+            }
+            catch (Exception ex)
+            {
+                MarkDegradedEntry(modId, entryKey, context, ex);
+                return fallback;
+            }
+        }
+
+        public static object? SafeGetBoxedValue(ConfigEntry? entry, string? modId = null)
+        {
+            if (entry == null) return null;
+            try
+            {
+                return entry.BoxedValue;
+            }
+            catch (Exception ex)
+            {
+                MarkDegradedEntry(modId, entry.Key, "BoxedValue", ex);
+                return null;
+            }
+        }
+
+        public static object? SafeGetBoxedDefault(ConfigEntry? entry, string? modId = null)
+        {
+            if (entry == null) return null;
+            try
+            {
+                return entry.BoxedDefault;
+            }
+            catch (Exception ex)
+            {
+                MarkDegradedEntry(modId, entry.Key, "BoxedDefault", ex);
+                return null;
+            }
+        }
+
+        public static string[]? SafeGetChoices(ConfigEntry? entry, string? modId = null)
+        {
+            if (entry == null) return null;
+            try
+            {
+                return entry.Choices;
+            }
+            catch (Exception ex)
+            {
+                MarkDegradedEntry(modId, entry.Key, "Choices", ex);
+                return null;
+            }
+        }
+
         private static bool IsLegacySelfModId(string? modId)
         {
             return string.Equals(modId, "allow_unbind_key", StringComparison.OrdinalIgnoreCase);
@@ -145,6 +222,15 @@ namespace ProbablyUnifiedHotkeys
                 ?? CheckDelegateExternalAssembly(entry.overrideOptions);
         }
 
+        private static readonly HashSet<string> VanillaKeybindWhitelist = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "rotate_cw", "rotate_ccw", "flip_item", "reset_orientation", "trash_item",
+            "quick_move_inventory", "quick_move_showcase", "quick_move_storage",
+            "open_options", "control_hints", "advance_dialogue", "pin_mode",
+            "sort_menu", "call_next_customer", "menu_back", "secondary_click",
+            "flip_item_alt"
+        };
+
         /// <summary>
         /// 判断一个 GameOptionRegistry 条目是否为纯粹的官方原版设置项
         /// </summary>
@@ -170,8 +256,28 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
 
+            // 原版按键白名单校验：防第三方模组通过 KeyBindHelper.Define 伪装成原版闭包注入
+            if (entry.kind == GameOptionRegistry.Kind.KeyBind ||
+                string.Equals(section.id, GameOptionRegistry.SECTION_KEYBIND, StringComparison.OrdinalIgnoreCase))
+            {
+                string keyId = entry.id ?? string.Empty;
+                if (keyId.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+                {
+                    keyId = keyId.Substring(4);
+                }
+                bool isVanillaKey = VanillaKeybindWhitelist.Contains(keyId) ||
+                                    keyId.StartsWith("toolbox_slot_", StringComparison.OrdinalIgnoreCase);
+                if (!isVanillaKey)
+                {
+                    return false;
+                }
+            }
+
             return true;
         }
+
+        internal static bool IsPureVanillaEntryPublic(GameOptionRegistry.Section sec, GameOptionRegistry.Entry entry)
+            => IsPureVanillaEntry(sec, entry);
 
         public static void SetEntryBoxed(ConfigEntry entry, object value)
         {
@@ -179,7 +285,10 @@ namespace ProbablyUnifiedHotkeys
             {
                 if (ApplyBoxedDelegate != null) ApplyBoxedDelegate(entry, value);
                 else ApplyBoxedMethod?.Invoke(entry, new object[] { value });
-                entry.Config?.Save();
+                if (!PrefsStorage.UseInMemoryPrefsForTests)
+                {
+                    entry.Config?.Save();
+                }
             }
             catch (Exception ex)
             {
@@ -195,7 +304,10 @@ namespace ProbablyUnifiedHotkeys
                 {
                     if (ApplyBoxedDelegate != null) ApplyBoxedDelegate(entry, entry.BoxedDefault);
                     else ApplyBoxedMethod?.Invoke(entry, new object[] { entry.BoxedDefault });
+                    if (!PrefsStorage.UseInMemoryPrefsForTests)
+                {
                     entry.Config?.Save();
+                }
                 }
             }
             catch (Exception ex)
@@ -246,6 +358,12 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static List<ModOptionGroup> ScanAll(out List<ModHotkeyEntry> allHotkeysForConflict, out ModScanReport scanReport)
         {
+            ModCatalogCache.HasDegradedEntries = false;
+            lock (LoggedDegradedMods)
+            {
+                LoggedDegradedMods.Clear();
+            }
+
             ComboKeyStore.EnsureLoaded();
             using var _bypass = ComboKeyStore.EnterBypass();
             var groups = new List<ModOptionGroup>();
@@ -284,34 +402,41 @@ namespace ProbablyUnifiedHotkeys
                 foreach (var mod in loadedMods)
                 {
                     if (mod == null || mod.Manifest == null) continue;
-                    string modId = mod.Manifest.ID;
-                    if (IsLegacySelfModId(modId)) continue;
-
-                    bool isEnabled = IsLoadedModActive(mod, modId);
-                    if (isEnabled)
+                    try
                     {
-                        enabledLoadedMods.Add(mod);
-                        if (!string.IsNullOrEmpty(modId) && !enabledModById.ContainsKey(modId))
+                        string modId = mod.Manifest.ID;
+                        if (IsLegacySelfModId(modId)) continue;
+
+                        bool isEnabled = IsLoadedModActive(mod, modId);
+                        if (isEnabled)
                         {
-                            enabledModById[modId] = mod;
+                            enabledLoadedMods.Add(mod);
+                            if (!string.IsNullOrEmpty(modId) && !enabledModById.ContainsKey(modId))
+                            {
+                                enabledModById[modId] = mod;
+                            }
                         }
+
+                        ModConfig? config = ModConfig.Find(modId);
+                        if (config == null || !config.HasEntries) continue;
+
+                        consumedConfigIds.Add(modId);
+                        string displayName = string.IsNullOrEmpty(mod.Manifest.Name) ? modId : mod.Manifest.Name;
+                        var group = GetOrCreateGroup(groups, modId, displayName);
+                        ScanModConfigIntoGroup(
+                            group,
+                            config,
+                            matchedConfigsByGroupId,
+                            candidatesByGroupId,
+                            managedStringIds,
+                            managedIntIds,
+                            mod
+                        );
                     }
-
-                    ModConfig? config = ModConfig.Find(modId);
-                    if (config == null || !config.HasEntries) continue;
-
-                    consumedConfigIds.Add(modId);
-                    string displayName = string.IsNullOrEmpty(mod.Manifest.Name) ? modId : mod.Manifest.Name;
-                    var group = GetOrCreateGroup(groups, modId, displayName);
-                    ScanModConfigIntoGroup(
-                        group,
-                        config,
-                        matchedConfigsByGroupId,
-                        candidatesByGroupId,
-                        managedStringIds,
-                        managedIntIds,
-                        mod
-                    );
+                    catch (Exception ex)
+                    {
+                        MarkDegradedEntry(mod.Manifest?.ID, null, "ScanAll.LoadedMod", ex);
+                    }
                 }
             }
 
@@ -321,52 +446,59 @@ namespace ProbablyUnifiedHotkeys
             {
                 foreach (var kvp in allConfigs)
                 {
-                    string cfgId = kvp.Key;
-                    ModConfig config = kvp.Value;
-                    if (string.IsNullOrEmpty(cfgId) || config == null || !config.HasEntries) continue;
-                    if (IsLegacySelfModId(cfgId) || consumedConfigIds.Contains(cfgId)) continue;
-
-                    consumedConfigIds.Add(cfgId);
-
-                    LoadedMod? ownerMod = TryMatchWildConfigToLoadedMod(cfgId, enabledLoadedMods, matchedConfigsByGroupId);
-                    if (ownerMod != null && ownerMod.Manifest != null)
+                    try
                     {
-                        string ownerId = ownerMod.Manifest.ID;
-                        string displayName = string.IsNullOrEmpty(ownerMod.Manifest.Name) ? ownerId : ownerMod.Manifest.Name;
-                        var group = GetOrCreateGroup(groups, ownerId, displayName);
-                        if (!string.Equals(group.ModId, cfgId, StringComparison.OrdinalIgnoreCase) &&
-                            !group.ExtraNotifyModIds.Any(id => string.Equals(id, cfgId, StringComparison.OrdinalIgnoreCase)))
+                        string cfgId = kvp.Key;
+                        ModConfig config = kvp.Value;
+                        if (string.IsNullOrEmpty(cfgId) || config == null || !config.HasEntries) continue;
+                        if (IsLegacySelfModId(cfgId) || consumedConfigIds.Contains(cfgId)) continue;
+
+                        consumedConfigIds.Add(cfgId);
+
+                        LoadedMod? ownerMod = TryMatchWildConfigToLoadedMod(cfgId, enabledLoadedMods, matchedConfigsByGroupId);
+                        if (ownerMod != null && ownerMod.Manifest != null)
                         {
-                            group.ExtraNotifyModIds.Add(cfgId);
+                            string ownerId = ownerMod.Manifest.ID;
+                            string displayName = string.IsNullOrEmpty(ownerMod.Manifest.Name) ? ownerId : ownerMod.Manifest.Name;
+                            var group = GetOrCreateGroup(groups, ownerId, displayName);
+                            if (!string.Equals(group.ModId, cfgId, StringComparison.OrdinalIgnoreCase) &&
+                                !group.ExtraNotifyModIds.Any(id => string.Equals(id, cfgId, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                group.ExtraNotifyModIds.Add(cfgId);
+                            }
+                            ScanModConfigIntoGroup(
+                                group,
+                                config,
+                                matchedConfigsByGroupId,
+                                candidatesByGroupId,
+                                managedStringIds,
+                                managedIntIds,
+                                ownerMod
+                            );
                         }
-                        ScanModConfigIntoGroup(
-                            group,
-                            config,
-                            matchedConfigsByGroupId,
-                            candidatesByGroupId,
-                            managedStringIds,
-                            managedIntIds,
-                            ownerMod
-                        );
+                        else
+                        {
+                            bool isSelfCfg = string.Equals(cfgId, BilingualText.ModId, StringComparison.OrdinalIgnoreCase);
+                            string fallbackName = isSelfCfg ? BilingualText.OwnDisplayName : cfgId;
+                            var group = GetOrCreateGroup(groups, cfgId, fallbackName);
+                            if (!isSelfCfg)
+                            {
+                                unmatchedWildConfigs.Add(config);
+                            }
+                            ScanModConfigIntoGroup(
+                                group,
+                                config,
+                                matchedConfigsByGroupId,
+                                candidatesByGroupId,
+                                managedStringIds,
+                                managedIntIds,
+                                null
+                            );
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        bool isSelfCfg = string.Equals(cfgId, BilingualText.ModId, StringComparison.OrdinalIgnoreCase);
-                        string fallbackName = isSelfCfg ? BilingualText.OwnDisplayName : cfgId;
-                        var group = GetOrCreateGroup(groups, cfgId, fallbackName);
-                        if (!isSelfCfg)
-                        {
-                            unmatchedWildConfigs.Add(config);
-                        }
-                        ScanModConfigIntoGroup(
-                            group,
-                            config,
-                            matchedConfigsByGroupId,
-                            candidatesByGroupId,
-                            managedStringIds,
-                            managedIntIds,
-                            null
-                        );
+                        MarkDegradedEntry(kvp.Key, null, "ScanAll.WildConfig", ex);
                     }
                 }
             }
@@ -385,7 +517,14 @@ namespace ProbablyUnifiedHotkeys
             }
 
             var extraAdapterGroups = new List<ModOptionGroup>();
-            KnownModAdapters.TryAdaptKnownMods(extraAdapterGroups, handledAdapterIds);
+            try
+            {
+                KnownModAdapters.TryAdaptKnownMods(extraAdapterGroups, handledAdapterIds);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"KnownModAdapters.TryAdaptKnownMods failed: {ex.Message}");
+            }
 
             foreach (var extra in extraAdapterGroups)
             {
@@ -415,8 +554,15 @@ namespace ProbablyUnifiedHotkeys
             }
 
             // 3B. 对已走 ModConfig 但存在额外硬编码快捷键或运行时状态同步需求的模组执行补充适配
-            var enabledModIdSet = new HashSet<string>(enabledModById.Keys, StringComparer.OrdinalIgnoreCase);
-            KnownModAdapters.ApplySupplementalModAdaptations(groups, enabledModIdSet, adapterMatchedModIds);
+            try
+            {
+                var enabledModIdSet = new HashSet<string>(enabledModById.Keys, StringComparer.OrdinalIgnoreCase);
+                KnownModAdapters.ApplySupplementalModAdaptations(groups, enabledModIdSet, adapterMatchedModIds);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"KnownModAdapters.ApplySupplementalModAdaptations failed: {ex.Message}");
+            }
 
             // 3C. 自动探测（DseCecil 静态 IL + ModData / 模组文件配置）补充无官方接口模组热键并接入运行时改键接管
             var probedByModId = ProbeReadOnlyHotkeysIntoGroups(enabledLoadedMods, groups);
@@ -430,137 +576,181 @@ namespace ProbablyUnifiedHotkeys
             // 4. 为所有卡片记录启动快照并绑定全覆盖“恢复”操作（确保每张模组卡片都有恢复按钮）
             foreach (var group in groups)
             {
-                foreach (var hk in group.Hotkeys)
+                try
                 {
-                    if (!InitialKeySnapshots.TryGetValue(hk.Id, out KeyCode initKey))
+                    foreach (var hk in group.Hotkeys)
                     {
-                        using (ComboKeyStore.EnterBypass())
+                        try
                         {
-                            initKey = hk.GetKey != null ? hk.GetKey() : KeyCode.None;
+                            if (!InitialKeySnapshots.TryGetValue(hk.Id, out KeyCode initKey))
+                            {
+                                using (ComboKeyStore.EnterBypass())
+                                {
+                                    initKey = hk.GetKey != null ? hk.GetKey() : KeyCode.None;
+                                }
+                                InitialKeySnapshots[hk.Id] = initKey;
+                            }
+                            if (!InitialModifierSnapshots.TryGetValue(hk.Id, out KeyModifierMask initMods))
+                            {
+                                initMods = hk.GetExternalModifiers != null
+                                    ? hk.GetExternalModifiers()
+                                    : ComboKeyStore.GetSavedModifiers(hk.Id, initKey);
+                                InitialModifierSnapshots[hk.Id] = initMods;
+                            }
+                            hk.SnapshotKey = initKey;
+                            hk.SnapshotModifiers = initMods;
                         }
-                        InitialKeySnapshots[hk.Id] = initKey;
+                        catch (Exception ex)
+                        {
+                            MarkDegradedEntry(group.ModId, hk.Id, "Snapshot.Hotkey", ex);
+                        }
                     }
-                    if (!InitialModifierSnapshots.TryGetValue(hk.Id, out KeyModifierMask initMods))
-                    {
-                        initMods = hk.GetExternalModifiers != null
-                            ? hk.GetExternalModifiers()
-                            : ComboKeyStore.GetSavedModifiers(hk.Id, initKey);
-                        InitialModifierSnapshots[hk.Id] = initMods;
-                    }
-                    hk.SnapshotKey = initKey;
-                    hk.SnapshotModifiers = initMods;
-                }
 
-                foreach (var gen in group.GeneralSettings)
-                {
-                    if (gen.Kind == OptionKind.Toggle)
+                    foreach (var gen in group.GeneralSettings)
                     {
-                        if (!InitialBoolSnapshots.TryGetValue(gen.Id, out bool initBool))
+                        try
                         {
-                            initBool = gen.GetBool != null && gen.GetBool();
-                            InitialBoolSnapshots[gen.Id] = initBool;
+                            if (gen.Kind == OptionKind.Toggle)
+                            {
+                                if (!InitialBoolSnapshots.TryGetValue(gen.Id, out bool initBool))
+                                {
+                                    initBool = gen.GetBool != null && gen.GetBool();
+                                    InitialBoolSnapshots[gen.Id] = initBool;
+                                }
+                                gen.SnapshotBool = initBool;
+                            }
+                            else if (gen.Kind == OptionKind.Slider)
+                            {
+                                if (!InitialFloatSnapshots.TryGetValue(gen.Id, out float initFloat))
+                                {
+                                    initFloat = gen.GetFloat != null ? gen.GetFloat() : gen.Min;
+                                    InitialFloatSnapshots[gen.Id] = initFloat;
+                                }
+                                gen.SnapshotFloat = initFloat;
+                            }
+                            else if (gen.Kind == OptionKind.Dropdown)
+                            {
+                                if (!InitialIndexSnapshots.TryGetValue(gen.Id, out int initIndex))
+                                {
+                                    initIndex = gen.GetIndex != null ? gen.GetIndex() : 0;
+                                    InitialIndexSnapshots[gen.Id] = initIndex;
+                                }
+                                gen.SnapshotIndex = initIndex;
+                            }
+                            else if (gen.Kind == OptionKind.Input && !gen.IsReadOnlyInfo)
+                            {
+                                if (!InitialStringSnapshots.TryGetValue(gen.Id, out string? initStr))
+                                {
+                                    initStr = gen.GetString != null ? (gen.GetString() ?? string.Empty) : string.Empty;
+                                    InitialStringSnapshots[gen.Id] = initStr;
+                                }
+                                gen.SnapshotString = initStr;
+                            }
                         }
-                        gen.SnapshotBool = initBool;
-                    }
-                    else if (gen.Kind == OptionKind.Slider)
-                    {
-                        if (!InitialFloatSnapshots.TryGetValue(gen.Id, out float initFloat))
+                        catch (Exception ex)
                         {
-                            initFloat = gen.GetFloat != null ? gen.GetFloat() : gen.Min;
-                            InitialFloatSnapshots[gen.Id] = initFloat;
+                            MarkDegradedEntry(group.ModId, gen.Id, "Snapshot.General", ex);
                         }
-                        gen.SnapshotFloat = initFloat;
                     }
-                    else if (gen.Kind == OptionKind.Dropdown)
-                    {
-                        if (!InitialIndexSnapshots.TryGetValue(gen.Id, out int initIndex))
-                        {
-                            initIndex = gen.GetIndex != null ? gen.GetIndex() : 0;
-                            InitialIndexSnapshots[gen.Id] = initIndex;
-                        }
-                        gen.SnapshotIndex = initIndex;
-                    }
-                    else if (gen.Kind == OptionKind.Input && !gen.IsReadOnlyInfo)
-                    {
-                        if (!InitialStringSnapshots.TryGetValue(gen.Id, out string? initStr))
-                        {
-                            initStr = gen.GetString != null ? (gen.GetString() ?? string.Empty) : string.Empty;
-                            InitialStringSnapshots[gen.Id] = initStr;
-                        }
-                        gen.SnapshotString = initStr;
-                    }
-                }
 
-                List<ModConfig>? groupConfigs = null;
-                if (matchedConfigsByGroupId.TryGetValue(group.ModId, out var foundCfgs) && foundCfgs.Count > 0)
+                    List<ModConfig>? groupConfigs = null;
+                    if (matchedConfigsByGroupId.TryGetValue(group.ModId, out var foundCfgs) && foundCfgs.Count > 0)
+                    {
+                        groupConfigs = foundCfgs;
+                    }
+                    else
+                    {
+                        ModConfig? fallbackCfg = ModConfig.Find(group.ModId);
+                        if (fallbackCfg != null && fallbackCfg.HasEntries)
+                        {
+                            groupConfigs = new List<ModConfig>(1) { fallbackCfg };
+                        }
+                    }
+
+                    var capturedGroup = group;
+                    capturedGroup.ResetToDefaultsAction = () =>
+                    {
+                        try
+                        {
+                            if (groupConfigs != null)
+                            {
+                                foreach (var cfg in groupConfigs)
+                                {
+                                    if (cfg != null && cfg.HasEntries)
+                                    {
+                                        cfg.ResetToDefaults();
+                                        cfg.Save();
+                                    }
+                                }
+                            }
+
+                            foreach (var hk in capturedGroup.Hotkeys)
+                            {
+                                hk.HasPendingChange = false;
+                                hk.PendingModifiers = hk.ResetTargetModifiers;
+                                hk.PendingKey = hk.ResetTargetKey;
+                                ComboKeyStore.SetExplicitlyUnbound(hk.Id, hk.ResetTargetKey == KeyCode.None);
+                                if (hk.SetCombo != null)
+                                {
+                                    hk.SetCombo(hk.ResetTargetModifiers, hk.ResetTargetKey);
+                                    ComboKeyStore.SetSavedCombo(hk.Id, KeyModifierMask.None, KeyCode.None);
+                                }
+                                else
+                                {
+                                    hk.SetKey?.Invoke(hk.ResetTargetKey);
+                                    ComboKeyStore.SetSavedCombo(hk.Id, hk.ResetTargetModifiers, hk.ResetTargetKey);
+                                }
+                            }
+                            ComboKeyStore.Save();
+
+                            bool hasAnyConfig = groupConfigs != null && groupConfigs.Count > 0;
+                            foreach (var gen in capturedGroup.GeneralSettings)
+                            {
+                                gen.PendingBool = null;
+                                gen.PendingFloat = null;
+                                gen.PendingIndex = null;
+                                gen.PendingString = null;
+                                if (!hasAnyConfig || gen.ResetToDefault == null)
+                                {
+                                    gen.ResetToSnapshot();
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Warn($"ResetToDefaultsAction exception for group '{capturedGroup.ModId}': {ex.Message}");
+                        }
+                    };
+                }
+                catch (Exception ex)
                 {
-                    groupConfigs = foundCfgs;
+                    ModLogger.Warn($"Snapshot processing error for group '{group.ModId}': {ex.Message}");
+                }
+            }
+
+            // 5B. 计算各模组的加载序号与最近启用序号（零权限合规维护）
+            var enabledModIdList = enabledLoadedMods.Select(m => m.Manifest?.ID ?? string.Empty).Where(id => !string.IsNullOrEmpty(id));
+            var recentRanks = ComboKeyStore.UpdateAndGetRecentEnabledRanks(enabledModIdList);
+            for (int i = 0; i < groups.Count; i++)
+            {
+                var g = groups[i];
+                if (recentRanks.TryGetValue(g.ModId, out int r))
+                {
+                    g.RecentEnabledRank = r;
+                }
+                if (loadedMods != null)
+                {
+                    int lmIdx = loadedMods.FindIndex(m => m?.Manifest != null && string.Equals(m.Manifest.ID, g.ModId, StringComparison.OrdinalIgnoreCase));
+                    g.LoadOrderIndex = lmIdx >= 0 ? lmIdx : (1000 + i);
                 }
                 else
                 {
-                    ModConfig? fallbackCfg = ModConfig.Find(group.ModId);
-                    if (fallbackCfg != null && fallbackCfg.HasEntries)
-                    {
-                        groupConfigs = new List<ModConfig>(1) { fallbackCfg };
-                    }
+                    g.LoadOrderIndex = i;
                 }
-
-                var capturedGroup = group;
-                capturedGroup.ResetToDefaultsAction = () =>
-                {
-                    if (groupConfigs != null)
-                    {
-                        foreach (var cfg in groupConfigs)
-                        {
-                            if (cfg != null && cfg.HasEntries)
-                            {
-                                cfg.ResetToDefaults();
-                                cfg.Save();
-                            }
-                        }
-                    }
-
-                    foreach (var hk in capturedGroup.Hotkeys)
-                    {
-                        hk.HasPendingChange = false;
-                        hk.PendingModifiers = hk.ResetTargetModifiers;
-                        hk.PendingKey = hk.ResetTargetKey;
-                        ComboKeyStore.SetExplicitlyUnbound(hk.Id, hk.ResetTargetKey == KeyCode.None);
-                        if (hk.SetCombo != null)
-                        {
-                            hk.SetCombo(hk.ResetTargetModifiers, hk.ResetTargetKey);
-                            ComboKeyStore.SetSavedCombo(hk.Id, KeyModifierMask.None, KeyCode.None);
-                        }
-                        else
-                        {
-                            hk.SetKey?.Invoke(hk.ResetTargetKey);
-                            ComboKeyStore.SetSavedCombo(hk.Id, hk.ResetTargetModifiers, hk.ResetTargetKey);
-                        }
-                    }
-                    ComboKeyStore.Save();
-
-                    bool hasAnyConfig = groupConfigs != null && groupConfigs.Count > 0;
-                    foreach (var gen in capturedGroup.GeneralSettings)
-                    {
-                        gen.PendingBool = null;
-                        gen.PendingFloat = null;
-                        gen.PendingIndex = null;
-                        gen.PendingString = null;
-                        if (!hasAnyConfig || gen.ResetToDefault == null)
-                        {
-                            gen.ResetToSnapshot();
-                        }
-                    }
-                };
             }
 
-            // 6. 按拼音首字母排序
-            groups.Sort((a, b) =>
-            {
-                int cmp = string.Compare(a.PinyinSortKey, b.PinyinSortKey, StringComparison.OrdinalIgnoreCase);
-                if (cmp != 0) return cmp;
-                return string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
-            });
+            // 6. 执行模组卡片排序（支持多维模式与拖拽自由排序，并严格支持置顶本模组卡片协同）
+            ComboKeyStore.SortModOptionGroups(groups, ModFeatureConfig.CardSortMode);
 
             // 7. 汇总全量快捷键用于全局冲突检测与组合键运行时路由表（原版 + 所有可改模组 + 探测接管热键）
             allHotkeysForConflict = new List<ModHotkeyEntry>();
@@ -570,6 +760,7 @@ namespace ProbablyUnifiedHotkeys
                 allHotkeysForConflict.AddRange(g.Hotkeys);
             }
             ComboKeyStore.RebuildRuntimeLookup(allHotkeysForConflict);
+            ComboKeyStore.RebuildConflictingOwnership(allHotkeysForConflict);
             foreach (var g in groups)
             {
                 if (g.ReadOnlyProbedHotkeys.Count > 0)
@@ -780,101 +971,186 @@ namespace ProbablyUnifiedHotkeys
             foreach (var entry in config.Entries)
             {
                 if (entry == null) continue;
-                string entryKey = entry.Key;
-                string label = entry.Label?.Invoke() ?? entryKey;
-                string tooltip = entry.Tooltip?.Invoke() ?? string.Empty;
-                string rawSection = entry.Section ?? string.Empty;
-                string sectionLabel = FormatModSectionLabel(rawSection, ownerMod, group.ModId);
-                string canonicalId = GetCanonicalConfigId(group.ModId, entry);
-                bool isForced = ComboKeyStore.IsForcedHotkey(canonicalId);
-
-                if (!isForced && IsInternalHiddenConfigEntry(group.ModId, entryKey))
+                try
                 {
-                    continue;
-                }
+                    string entryKey = entry.Key ?? string.Empty;
+                    if (string.IsNullOrEmpty(entryKey)) continue;
 
-                bool isHotkey = false;
-                bool isGeneral = false;
-                bool dropped = false;
-
-                if (IsHotkeyEntry(entry, canonicalId))
-                {
-                    var hotkey = CreateHotkeyFromConfigEntry(group, entry, canonicalId, label, tooltip, rawSection, sectionLabel);
-                    if (hotkey != null)
+                    // 若为本模组自身配置且为未启用的 ConflictScanner 缓存项，则直接跳过不生成
+                    if (string.Equals(group.ModId, BilingualText.ModId, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(entryKey, ModFeatureConfig.KeyEnableConflictScannerCache, StringComparison.Ordinal) &&
+                        !ModFeatureConfig.IsConflictScannerModEnabled())
                     {
-                        if (!ContainsHotkey(group, hotkey.Id, hotkey.DisplayName))
-                        {
-                            group.Hotkeys.Add(hotkey);
-                        }
-                        isHotkey = true;
-                        if (entry.ValueType == typeof(string))
-                        {
-                            managedStringIds.Add(canonicalId);
-                        }
-                        else if (entry.ValueType == typeof(int))
-                        {
-                            managedIntIds.Add(canonicalId);
-                        }
+                        continue;
                     }
-                }
-                else
-                {
-                    var general = CreateGeneralFromConfigEntry(group, entry, label, tooltip, rawSection, sectionLabel);
-                    if (general != null)
+
+                    string? invokedLabel = null;
+                    bool labelThrew = false;
+                    try
                     {
-                        if (!ContainsGeneral(group, general.Id, general.DisplayName))
+                        invokedLabel = entry.Label?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        labelThrew = true;
+                        MarkDegradedEntry(group.ModId, entryKey, "Entry.Label", ex);
+                    }
+
+                    string label;
+                    if (labelThrew || string.IsNullOrEmpty(invokedLabel) || string.Equals(invokedLabel, entryKey, StringComparison.Ordinal))
+                    {
+                        if (SectionLocalizer.TryResolveConfigLabelFromModLocalization(ownerMod, entryKey, out var locLabel) && !string.IsNullOrWhiteSpace(locLabel))
                         {
-                            group.GeneralSettings.Add(general);
+                            label = locLabel;
                         }
-                        isGeneral = true;
+                        else
+                        {
+                            label = !string.IsNullOrEmpty(invokedLabel) ? invokedLabel! : entryKey;
+                        }
                     }
                     else
                     {
-                        dropped = true;
+                        label = invokedLabel!;
+                    }
+
+                    string? invokedTip = null;
+                    try
+                    {
+                        invokedTip = entry.Tooltip?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        MarkDegradedEntry(group.ModId, entryKey, "Entry.Tooltip", ex);
+                    }
+
+                    string tooltip;
+                    if (string.IsNullOrEmpty(invokedTip))
+                    {
+                        if (SectionLocalizer.TryResolveConfigTooltipFromModLocalization(ownerMod, entryKey, out var locTip) && !string.IsNullOrWhiteSpace(locTip))
+                        {
+                            tooltip = locTip;
+                        }
+                        else
+                        {
+                            tooltip = string.Empty;
+                        }
+                    }
+                    else
+                    {
+                        tooltip = invokedTip!;
+                    }
+
+                    string rawSection = string.Empty;
+                    try
+                    {
+                        rawSection = entry.Section ?? string.Empty;
+                    }
+                    catch (Exception ex)
+                    {
+                        MarkDegradedEntry(group.ModId, entryKey, "Entry.Section", ex);
+                    }
+
+                    string sectionLabel = FormatModSectionLabel(rawSection, ownerMod, group.ModId);
+                    string canonicalId = GetCanonicalConfigId(group.ModId, entry);
+                    bool isForced = ComboKeyStore.IsForcedHotkey(canonicalId);
+
+                    if (!isForced && IsInternalHiddenConfigEntry(group.ModId, entryKey))
+                    {
+                        continue;
+                    }
+
+                    bool isHotkey = false;
+                    bool isGeneral = false;
+                    bool dropped = false;
+
+                    if (IsHotkeyEntry(entry, canonicalId))
+                    {
+                        var hotkey = CreateHotkeyFromConfigEntry(group, entry, canonicalId, label, tooltip, rawSection, sectionLabel);
+                        if (hotkey != null)
+                        {
+                            if (!ContainsHotkey(group, hotkey.Id, hotkey.DisplayName))
+                            {
+                                group.Hotkeys.Add(hotkey);
+                            }
+                            isHotkey = true;
+                            if (entry.ValueType == typeof(string))
+                            {
+                                managedStringIds.Add(canonicalId);
+                            }
+                            else if (entry.ValueType == typeof(int))
+                            {
+                                managedIntIds.Add(canonicalId);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var general = CreateGeneralFromConfigEntry(group, entry, label, tooltip, rawSection, sectionLabel);
+                        if (general != null)
+                        {
+                            if (!ContainsGeneral(group, general.Id, general.DisplayName))
+                            {
+                                group.GeneralSettings.Add(general);
+                            }
+                            isGeneral = true;
+                        }
+                        else
+                        {
+                            dropped = true;
+                        }
+                    }
+
+                    // 收集潜在可转为按键的候选/被丢弃/已强转条目（用于诊断面板人工纠偏）
+                    bool isOwnLanguageEntry = string.Equals(group.ModId, BilingualText.ModId, StringComparison.OrdinalIgnoreCase) &&
+                                              string.Equals(entryKey, BilingualText.LanguageConfigKey, StringComparison.Ordinal);
+                    bool isReadOnlyTip = IsReadOnlyInfoConfigEntry(group.ModId, entryKey);
+                    bool isDefinitelyTextSetting = !isForced && IsDefinitelyTextInputSetting(entryKey, label, entry);
+
+                    object? boxedVal = SafeGetBoxedValue(entry, group.ModId);
+                    object? boxedDef = SafeGetBoxedDefault(entry, group.ModId);
+                    string[]? choices = SafeGetChoices(entry, group.ModId);
+
+                    bool isPromotableType = !isOwnLanguageEntry &&
+                                            !isReadOnlyTip &&
+                                            !isDefinitelyTextSetting &&
+                                            (entry.ValueType == typeof(string) ||
+                                             (entry.ValueType == typeof(int) && !entry.HasRange && (choices == null || choices.Length == 0)));
+
+                    if (isForced || dropped || (isPromotableType && isGeneral))
+                    {
+                        bool isIgnored = !isForced && ComboKeyStore.IsIgnoredCandidate(canonicalId);
+                        bool suspicious = isForced || dropped;
+                        if (!suspicious && entry.ValueType == typeof(int))
+                        {
+                            suspicious = (IsLikelyKeyCodeInt(boxedVal) || IsLikelyKeyCodeInt(boxedDef)) &&
+                                         !HasNonHotkeyIntToken(entryKey, label);
+                        }
+
+                        candList.Add(new DiagnosticCandidateEntry
+                        {
+                            CanonicalId = canonicalId,
+                            ConfigModId = config.ModId ?? group.ModId,
+                            OwnerModId = group.ModId,
+                            ModDisplayName = group.DisplayName,
+                            EntryKey = entryKey,
+                            Label = label,
+                            Tooltip = tooltip,
+                            ValueTypeName = entry.ValueType?.Name ?? "Unknown",
+                            CurrentValuePreview = FormatValuePreview(boxedVal),
+                            DefaultValuePreview = FormatValuePreview(boxedDef),
+                            IsForcedHotkey = isForced,
+                            IsCurrentlyHotkey = isHotkey,
+                            IsCurrentlyGeneral = isGeneral,
+                            WasDroppedFromMainUI = dropped,
+                            CanPromoteToHotkey = isPromotableType || entry.ValueType == typeof(KeyCode),
+                            IsSuspiciousCandidate = suspicious,
+                            IsIgnoredCandidate = isIgnored
+                        });
                     }
                 }
-
-                // 收集潜在可转为按键的候选/被丢弃/已强转条目（用于诊断面板人工纠偏）
-                bool isOwnLanguageEntry = string.Equals(group.ModId, BilingualText.ModId, StringComparison.OrdinalIgnoreCase) &&
-                                          string.Equals(entryKey, BilingualText.LanguageConfigKey, StringComparison.Ordinal);
-                bool isReadOnlyTip = IsReadOnlyInfoConfigEntry(group.ModId, entryKey);
-                bool isDefinitelyTextSetting = !isForced && IsDefinitelyTextInputSetting(entryKey, label, entry);
-                bool isPromotableType = !isOwnLanguageEntry &&
-                                        !isReadOnlyTip &&
-                                        !isDefinitelyTextSetting &&
-                                        (entry.ValueType == typeof(string) ||
-                                         (entry.ValueType == typeof(int) && !entry.HasRange && (entry.Choices == null || entry.Choices.Length == 0)));
-
-                if (isForced || dropped || (isPromotableType && isGeneral))
+                catch (Exception ex)
                 {
-                    bool isIgnored = !isForced && ComboKeyStore.IsIgnoredCandidate(canonicalId);
-                    bool suspicious = isForced || dropped;
-                    if (!suspicious && entry.ValueType == typeof(int))
-                    {
-                        suspicious = (IsLikelyKeyCodeInt(entry.BoxedValue) || IsLikelyKeyCodeInt(entry.BoxedDefault)) &&
-                                     !HasNonHotkeyIntToken(entryKey, label);
-                    }
-
-                    candList.Add(new DiagnosticCandidateEntry
-                    {
-                        CanonicalId = canonicalId,
-                        ConfigModId = config.ModId ?? group.ModId,
-                        OwnerModId = group.ModId,
-                        ModDisplayName = group.DisplayName,
-                        EntryKey = entryKey,
-                        Label = label,
-                        Tooltip = tooltip,
-                        ValueTypeName = entry.ValueType?.Name ?? "Unknown",
-                        CurrentValuePreview = FormatValuePreview(entry.BoxedValue),
-                        DefaultValuePreview = FormatValuePreview(entry.BoxedDefault),
-                        IsForcedHotkey = isForced,
-                        IsCurrentlyHotkey = isHotkey,
-                        IsCurrentlyGeneral = isGeneral,
-                        WasDroppedFromMainUI = dropped,
-                        CanPromoteToHotkey = isPromotableType || entry.ValueType == typeof(KeyCode),
-                        IsSuspiciousCandidate = suspicious,
-                        IsIgnoredCandidate = isIgnored
-                    });
+                    MarkDegradedEntry(group.ModId, entry?.Key, "ScanModConfigIntoGroup.Entry", ex);
                 }
             }
         }
@@ -1259,84 +1535,106 @@ namespace ProbablyUnifiedHotkeys
                     foreach (var entry in section.entries)
                     {
                         if (entry == null || entry.kind != GameOptionRegistry.Kind.KeyBind) continue;
-                        if (!IsPureVanillaEntry(section, entry)) continue;
-
-                        string label = entry.label?.Invoke() ?? entry.id;
-                        string tooltip = entry.tooltip?.Invoke() ?? string.Empty;
-                        string canonicalHkId = "vanilla." + entry.id;
-                        string rawOptId = entry.id;
-                        var rawGetKey = entry.getKey ?? (() => KeyCode.None);
-                        var rawSetKey = entry.setKey;
-
-                        string bindingId = rawOptId.StartsWith("key_", StringComparison.OrdinalIgnoreCase) ? rawOptId.Substring(4) : rawOptId;
-                        KeyCode defKey = KeyCode.None;
                         try
                         {
-                            if (KeyBindHelper.Find(bindingId) != null)
+                            if (!IsPureVanillaEntry(section, entry)) continue;
+
+                            string label = SafeInvokeString(entry.label, entry.id, "vanilla", entry.id, "VanillaKeybind.Label");
+                            string tooltip = SafeInvokeString(entry.tooltip, string.Empty, "vanilla", entry.id, "VanillaKeybind.Tooltip");
+                            string canonicalHkId = "vanilla." + entry.id;
+                            string rawOptId = entry.id;
+                            var rawGetKey = entry.getKey ?? (() => KeyCode.None);
+                            var rawSetKey = entry.setKey;
+
+                            string bindingId = rawOptId.StartsWith("key_", StringComparison.OrdinalIgnoreCase) ? rawOptId.Substring(4) : rawOptId;
+                            KeyCode defKey = KeyCode.None;
+                            try
                             {
-                                defKey = KeyBindHelper.GetDefault(bindingId);
+                                if (KeyBindHelper.Find(bindingId) != null)
+                                {
+                                    defKey = KeyBindHelper.GetDefault(bindingId);
+                                }
                             }
-                        }
-                        catch { }
+                            catch { }
 
-                        KeyCode currentRawKey;
-                        using (ComboKeyStore.EnterBypass())
-                        {
-                            currentRawKey = rawGetKey();
-                        }
-                        KeyModifierMask currentSavedMods = (currentRawKey == KeyCode.None)
-                            ? KeyModifierMask.None
-                            : ComboKeyStore.GetSavedModifiers(canonicalHkId, currentRawKey);
-
-                        list.Add(new ModHotkeyEntry
-                        {
-                            Id = canonicalHkId,
-                            RawOptionId = rawOptId,
-                            ModId = "vanilla",
-                            ModDisplayName = BilingualText.Get("原版官方", "Vanilla"),
-                            DisplayName = label,
-                            Tooltip = tooltip,
-                            DefaultKey = defKey != KeyCode.None ? defKey : currentRawKey,
-                            DefaultModifiers = KeyModifierMask.None,
-                            HasExplicitDefault = defKey != KeyCode.None,
-                            SnapshotKey = currentRawKey,
-                            SnapshotModifiers = currentSavedMods,
-                            GetKey = () =>
-                            {
-                                if (ComboKeyStore.IsExplicitlyUnbound(canonicalHkId) || ComboKeyStore.IsExplicitlyUnbound(rawOptId))
-                                {
-                                    return KeyCode.None;
-                                }
-                                using (ComboKeyStore.EnterBypass())
-                                {
-                                    return rawGetKey();
-                                }
-                            },
-                            SetKey = (k) =>
+                            KeyCode currentRawKey;
+                            using (ComboKeyStore.EnterBypass())
                             {
                                 try
                                 {
-                                    if (k == KeyCode.None)
-                                    {
-                                        ComboKeyStore.SetExplicitlyUnbound(canonicalHkId, true);
-                                        ComboKeyStore.SetExplicitlyUnbound(rawOptId, true);
-                                    }
-                                    else
-                                    {
-                                        ComboKeyStore.SetExplicitlyUnbound(canonicalHkId, false);
-                                        ComboKeyStore.SetExplicitlyUnbound(rawOptId, false);
-                                    }
-                                    using (ComboKeyStore.EnterBypass())
-                                    {
-                                        rawSetKey?.Invoke(k);
-                                    }
+                                    currentRawKey = rawGetKey();
                                 }
-                                catch (Exception ex)
+                                catch
                                 {
-                                    ModLogger.Warn($"Error in vanilla keybind SetKey ({rawOptId}): {ex.Message}");
+                                    currentRawKey = KeyCode.None;
                                 }
                             }
-                        });
+                            KeyModifierMask currentSavedMods = (currentRawKey == KeyCode.None)
+                                ? KeyModifierMask.None
+                                : ComboKeyStore.GetSavedModifiers(canonicalHkId, currentRawKey);
+
+                            list.Add(new ModHotkeyEntry
+                            {
+                                Id = canonicalHkId,
+                                RawOptionId = rawOptId,
+                                ModId = "vanilla",
+                                ModDisplayName = BilingualText.Get("原版官方", "Vanilla"),
+                                DisplayName = label,
+                                Tooltip = tooltip,
+                                DefaultKey = defKey != KeyCode.None ? defKey : currentRawKey,
+                                DefaultModifiers = KeyModifierMask.None,
+                                HasExplicitDefault = defKey != KeyCode.None,
+                                SnapshotKey = currentRawKey,
+                                SnapshotModifiers = currentSavedMods,
+                                GetKey = () =>
+                                {
+                                    try
+                                    {
+                                        if (ComboKeyStore.IsExplicitlyUnbound(canonicalHkId) || ComboKeyStore.IsExplicitlyUnbound(rawOptId))
+                                        {
+                                            return KeyCode.None;
+                                        }
+                                        using (ComboKeyStore.EnterBypass())
+                                        {
+                                            return rawGetKey();
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        ModLogger.Warn($"Error in vanilla keybind GetKey ({rawOptId}): {ex.Message}");
+                                        return KeyCode.None;
+                                    }
+                                },
+                                SetKey = (k) =>
+                                {
+                                    try
+                                    {
+                                        if (k == KeyCode.None)
+                                        {
+                                            ComboKeyStore.SetExplicitlyUnbound(canonicalHkId, true);
+                                            ComboKeyStore.SetExplicitlyUnbound(rawOptId, true);
+                                        }
+                                        else
+                                        {
+                                            ComboKeyStore.SetExplicitlyUnbound(canonicalHkId, false);
+                                            ComboKeyStore.SetExplicitlyUnbound(rawOptId, false);
+                                        }
+                                        using (ComboKeyStore.EnterBypass())
+                                        {
+                                            rawSetKey?.Invoke(k);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        ModLogger.Warn($"Error in vanilla keybind SetKey ({rawOptId}): {ex.Message}");
+                                    }
+                                }
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Warn($"Error parsing vanilla keybind entry '{entry.id}': {ex.Message}");
+                        }
                     }
                 }
             }
@@ -1551,7 +1849,7 @@ namespace ProbablyUnifiedHotkeys
             }
 
             string key = entry.Key ?? string.Empty;
-            string label = entry.Label?.Invoke() ?? string.Empty;
+            string label = SafeInvokeString(entry.Label, string.Empty, null, key, "IsHotkeyEntry.Label");
 
             if (ContainsNonHotkeyExclusion(key, label))
             {
@@ -1700,16 +1998,44 @@ namespace ProbablyUnifiedHotkeys
 
             KeyCode ParseKey(object? boxed)
             {
-                return TryParseComboString(boxed, out _, out var parsed) ? parsed : KeyCode.None;
+                try
+                {
+                    return TryParseComboString(boxed, out _, out var parsed) ? parsed : KeyCode.None;
+                }
+                catch
+                {
+                    return KeyCode.None;
+                }
             }
 
             KeyModifierMask ParseModifiers(object? boxed)
             {
-                return TryParseComboString(boxed, out var mods, out _) ? mods : KeyModifierMask.None;
+                try
+                {
+                    return TryParseComboString(boxed, out var mods, out _) ? mods : KeyModifierMask.None;
+                }
+                catch
+                {
+                    return KeyModifierMask.None;
+                }
             }
 
-            KeyCode defaultKey = ParseKey(entry.BoxedDefault);
-            KeyModifierMask defaultMods = usesComboString ? ParseModifiers(entry.BoxedDefault) : KeyModifierMask.None;
+            KeyCode defaultKey = KeyCode.None;
+            try
+            {
+                defaultKey = ParseKey(SafeGetBoxedDefault(entry, group.ModId));
+            }
+            catch { }
+
+            KeyModifierMask defaultMods = KeyModifierMask.None;
+            if (usesComboString)
+            {
+                try
+                {
+                    defaultMods = ParseModifiers(SafeGetBoxedDefault(entry, group.ModId));
+                }
+                catch { }
+            }
 
             var hk = new ModHotkeyEntry
             {
@@ -1725,13 +2051,21 @@ namespace ProbablyUnifiedHotkeys
                 HasExplicitDefault = entry.BoxedDefault != null,
                 GetKey = () =>
                 {
-                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId))
+                    try
                     {
-                        return KeyCode.None;
+                        if (ComboKeyStore.IsExplicitlyUnbound(canonicalId))
+                        {
+                            return KeyCode.None;
+                        }
+                        using (ComboKeyStore.EnterBypass())
+                        {
+                            return ParseKey(SafeGetBoxedValue(entry, group.ModId));
+                        }
                     }
-                    using (ComboKeyStore.EnterBypass())
+                    catch (Exception ex)
                     {
-                        return ParseKey(entry.BoxedValue);
+                        MarkDegradedEntry(group.ModId, entry.Key, "Hotkey.GetKey", ex);
+                        return KeyCode.None;
                     }
                 },
                 SetKey = (newKey) =>
@@ -1771,11 +2105,19 @@ namespace ProbablyUnifiedHotkeys
             {
                 hk.GetExternalModifiers = () =>
                 {
-                    if (ComboKeyStore.IsExplicitlyUnbound(canonicalId))
+                    try
                     {
+                        if (ComboKeyStore.IsExplicitlyUnbound(canonicalId))
+                        {
+                            return KeyModifierMask.None;
+                        }
+                        return ParseModifiers(SafeGetBoxedValue(entry, group.ModId));
+                    }
+                    catch (Exception ex)
+                    {
+                        MarkDegradedEntry(group.ModId, entry.Key, "Hotkey.GetExternalModifiers", ex);
                         return KeyModifierMask.None;
                     }
-                    return ParseModifiers(entry.BoxedValue);
                 };
                 hk.SetCombo = (newMods, newKey) =>
                 {
@@ -1891,50 +2233,104 @@ namespace ProbablyUnifiedHotkeys
                 SectionLabel = sectionLabel,
                 DisplayName = label,
                 Tooltip = tooltip,
-                ResetToDefault = () => ResetEntryToDefault(entry)
+                ResetToDefault = () =>
+                {
+                    try
+                    {
+                        ResetEntryToDefault(entry);
+                    }
+                    catch (Exception ex)
+                    {
+                        MarkDegradedEntry(group.ModId, entry.Key, "General.ResetToDefault", ex);
+                    }
+                }
             };
+
+            string[]? choices = SafeGetChoices(entry, group.ModId);
 
             if (entry.ValueType == typeof(bool))
             {
                 item.Kind = OptionKind.Toggle;
-                item.GetBool = () => (bool)(entry.BoxedValue ?? false);
+                item.GetBool = () =>
+                {
+                    try
+                    {
+                        object? val = SafeGetBoxedValue(entry, group.ModId);
+                        return (bool)(val ?? false);
+                    }
+                    catch (Exception ex)
+                    {
+                        MarkDegradedEntry(group.ModId, entry.Key, "General.GetBool", ex);
+                        return false;
+                    }
+                };
                 item.SetBool = (val) => SetEntryBoxed(entry, val);
             }
-            else if (entry.Choices != null && entry.Choices.Length > 0)
+            else if (choices != null && choices.Length > 0)
             {
                 item.Kind = OptionKind.Dropdown;
                 if (string.Equals(group.ModId, BilingualText.ModId, StringComparison.OrdinalIgnoreCase) &&
                     string.Equals(entry.Key, BilingualText.LanguageConfigKey, StringComparison.Ordinal))
                 {
                     item.GetChoices = () => BilingualText.GetLanguageChoices();
-                    item.GetIndex = () => I18n.LanguageToIndex(entry.BoxedValue);
+                    item.GetIndex = () => I18n.LanguageToIndex(SafeGetBoxedValue(entry, group.ModId));
                     item.SetIndex = (idx) => SetEntryBoxed(entry, I18n.IndexToChoiceValue(idx));
+                }
+                else if (string.Equals(group.ModId, BilingualText.ModId, StringComparison.OrdinalIgnoreCase) &&
+                         string.Equals(entry.Key, ModFeatureConfig.KeyOptionDisplayLocation, StringComparison.Ordinal))
+                {
+                    item.GetChoices = () => ModFeatureConfig.GetDisplayLocationChoices();
+                    item.GetIndex = () => ModFeatureConfig.DisplayLocationToIndex(SafeGetBoxedValue(entry, group.ModId));
+                    item.SetIndex = (idx) => SetEntryBoxed(entry, ModFeatureConfig.IndexToDisplayLocationValue(idx));
                 }
                 else
                 {
-                    item.GetChoices = () => entry.Choices.ToList();
+                    item.GetChoices = () =>
+                    {
+                        try
+                        {
+                            string[]? c = SafeGetChoices(entry, group.ModId);
+                            return c != null ? c.ToList() : new List<string>(0);
+                        }
+                        catch (Exception ex)
+                        {
+                            MarkDegradedEntry(group.ModId, entry.Key, "General.GetChoices", ex);
+                            return new List<string>(0);
+                        }
+                    };
                     item.GetIndex = () =>
                     {
-                        string cur = entry.BoxedValue?.ToString() ?? string.Empty;
-                        int idx = Array.IndexOf(entry.Choices, cur);
-                        if (idx < 0 && entry.Choices.Length > 0)
+                        try
                         {
-                            for (int i = 0; i < entry.Choices.Length; i++)
+                            string[]? c = SafeGetChoices(entry, group.ModId);
+                            if (c == null || c.Length == 0) return 0;
+                            string cur = SafeGetBoxedValue(entry, group.ModId)?.ToString() ?? string.Empty;
+                            int idx = Array.IndexOf(c, cur);
+                            if (idx < 0)
                             {
-                                if (string.Equals(entry.Choices[i], cur, StringComparison.OrdinalIgnoreCase))
+                                for (int i = 0; i < c.Length; i++)
                                 {
-                                    idx = i;
-                                    break;
+                                    if (string.Equals(c[i], cur, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        idx = i;
+                                        break;
+                                    }
                                 }
                             }
+                            return idx >= 0 ? idx : 0;
                         }
-                        return idx >= 0 ? idx : 0;
+                        catch (Exception ex)
+                        {
+                            MarkDegradedEntry(group.ModId, entry.Key, "General.GetIndex", ex);
+                            return 0;
+                        }
                     };
                     item.SetIndex = (idx) =>
                     {
-                        if (idx >= 0 && idx < entry.Choices.Length)
+                        string[]? c = SafeGetChoices(entry, group.ModId);
+                        if (c != null && idx >= 0 && idx < c.Length)
                         {
-                            string choiceStr = entry.Choices[idx];
+                            string choiceStr = c[idx];
                             if (entry.ValueType != null && entry.ValueType.IsEnum)
                             {
                                 try
@@ -1964,7 +2360,19 @@ namespace ProbablyUnifiedHotkeys
                 item.Min = entry.Min;
                 item.Max = entry.Max > entry.Min ? entry.Max : (entry.Min + 100f);
                 item.WholeNumbers = entry.ValueType == typeof(int);
-                item.GetFloat = () => Convert.ToSingle(entry.BoxedValue ?? 0f);
+                item.GetFloat = () =>
+                {
+                    try
+                    {
+                        object? val = SafeGetBoxedValue(entry, group.ModId);
+                        return Convert.ToSingle(val ?? 0f);
+                    }
+                    catch (Exception ex)
+                    {
+                        MarkDegradedEntry(group.ModId, entry.Key, "General.GetFloat", ex);
+                        return item.Min;
+                    }
+                };
                 item.SetFloat = (val) =>
                 {
                     if (entry.ValueType == typeof(int))
@@ -1991,8 +2399,32 @@ namespace ProbablyUnifiedHotkeys
                 }
                 else
                 {
-                    item.GetString = () => FormatEntryBoxedToString(entry, entry.BoxedValue);
-                    item.SetString = (val) => SetEntryFromInputString(entry, val);
+                    item.GetString = () =>
+                    {
+                        try
+                        {
+                            object? val = SafeGetBoxedValue(entry, group.ModId);
+                            return FormatEntryBoxedToString(entry, val);
+                        }
+                        catch (Exception ex)
+                        {
+                            MarkDegradedEntry(group.ModId, entry.Key, "General.GetString", ex);
+                            return string.Empty;
+                        }
+                    };
+                    if (string.Equals(group.ModId, BilingualText.ModId, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(entry.Key, ModFeatureConfig.KeySearchDebounceMs, StringComparison.Ordinal))
+                    {
+                        item.SetString = (val) =>
+                        {
+                            int clamped = ModFeatureConfig.ParseAndClampDebounceMs(val);
+                            SetEntryBoxed(entry, clamped.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        };
+                    }
+                    else
+                    {
+                        item.SetString = (val) => SetEntryFromInputString(entry, val);
+                    }
                 }
             }
             else
@@ -2046,182 +2478,267 @@ namespace ProbablyUnifiedHotkeys
                 foreach (var sec in sections)
                 {
                     if (sec == null || sec.entries == null) continue;
-                    bool isVanillaSec = GameOptionRegistry.IsVanillaSection(sec.id);
-
-                    foreach (var entry in sec.entries)
+                    try
                     {
-                        if (entry == null) continue;
-                        if (IsPureVanillaEntry(sec, entry)) continue;
-
-                        string rawSource = !string.IsNullOrEmpty(entry.source)
-                            ? entry.source
-                            : (!isVanillaSec && !string.IsNullOrEmpty(sec.source) ? sec.source : string.Empty);
-
-                        string source = rawSource;
-                        string disp = string.Empty;
-
-                        if (!string.IsNullOrEmpty(source))
-                        {
-                            if (IsSelfModId(source)) continue;
-                            if (modById != null && modById.TryGetValue(source, out var m) && m?.Manifest != null)
-                            {
-                                if (!string.IsNullOrEmpty(m.Manifest.Name)) disp = m.Manifest.Name!;
-                            }
-                            else if (modByAsm != null)
-                            {
-                                // 若 source 写错或与 Manifest.ID 不一致，通过入口委托归属程序集找回真实模组
-                                Assembly? extAsm = GetEntryExternalAssembly(entry);
-                                if (extAsm == SelfAssembly) continue;
-                                if (extAsm != null && modByAsm.TryGetValue(extAsm, out var asmMod) && asmMod?.Manifest != null)
-                                {
-                                    source = asmMod.Manifest.ID ?? source;
-                                    if (!string.IsNullOrEmpty(asmMod.Manifest.Name)) disp = asmMod.Manifest.Name!;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            Assembly? extAsm = GetEntryExternalAssembly(entry);
-                            if (extAsm == SelfAssembly) continue;
-
-                            if (extAsm != null && modByAsm != null && modByAsm.TryGetValue(extAsm, out var m) && m?.Manifest != null)
-                            {
-                                source = m.Manifest.ID ?? string.Empty;
-                                disp = m.Manifest.Name ?? string.Empty;
-                            }
-
-                            if (string.IsNullOrEmpty(source) && extAsm != null)
-                            {
-                                source = extAsm.GetName().Name ?? "external_mod";
-                            }
-                            if (string.IsNullOrEmpty(source))
-                            {
-                                source = (!isVanillaSec ? sec.id : null) ?? "external_mod";
-                            }
-                        }
-
-                        if (IsSelfModId(source)) continue;
-
-                        if (string.IsNullOrEmpty(disp))
-                        {
-                            string? secTitle = !isVanillaSec ? sec.label?.Invoke() : null;
-                            disp = !string.IsNullOrEmpty(secTitle) ? secTitle! : source;
-                        }
-
-                        source ??= "external_mod";
-                        disp ??= source;
-
-                        var group = GetOrCreateGroup(groups, source, disp);
-                        if (!string.IsNullOrEmpty(rawSource) &&
-                            !string.Equals(rawSource, group.ModId, StringComparison.OrdinalIgnoreCase) &&
-                            !group.ExtraNotifyModIds.Any(id => string.Equals(id, rawSource, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            group.ExtraNotifyModIds.Add(rawSource);
-                        }
-                        registryMatchedModIds?.Add(group.ModId);
-                        string label = entry.label?.Invoke() ?? entry.id;
-                        string tooltip = entry.tooltip?.Invoke() ?? string.Empty;
+                        bool isVanillaSec = GameOptionRegistry.IsVanillaSection(sec.id);
                         string rawSecId = !isVanillaSec ? (sec.id ?? string.Empty) : string.Empty;
-                        string rawSecTitle = !isVanillaSec ? (sec.label?.Invoke() ?? string.Empty) : string.Empty;
-                        LoadedMod? regOwnerMod = null;
-                        if (modById != null && !string.IsNullOrEmpty(group.ModId))
-                        {
-                            modById.TryGetValue(group.ModId, out regOwnerMod);
-                        }
-                        string secLabel = FormatModSectionLabel(!string.IsNullOrEmpty(rawSecTitle) ? rawSecTitle : rawSecId, regOwnerMod, group.ModId);
+                        string rawSecTitle = !isVanillaSec ? SafeInvokeString(sec.label, string.Empty, sec.source, sec.id, "Registry.SectionLabel") : string.Empty;
 
-                        if (entry.kind == GameOptionRegistry.Kind.KeyBind)
+                        foreach (var entry in sec.entries)
                         {
-                            if (ContainsHotkey(group, entry.id, label)) continue;
-                            var rawGetKey = entry.getKey ?? (() => KeyCode.None);
-                            var rawSetKey = entry.setKey;
-                            string hkId = entry.id;
-                            group.Hotkeys.Add(new ModHotkeyEntry
+                            if (entry == null) continue;
+                            try
                             {
-                                Id = hkId,
-                                RawOptionId = entry.id,
-                                ModId = group.ModId,
-                                ModDisplayName = group.DisplayName,
-                                Section = rawSecId,
-                                SectionLabel = secLabel,
-                                DisplayName = label,
-                                Tooltip = tooltip,
-                                GetKey = () =>
+                                if (IsPureVanillaEntry(sec, entry)) continue;
+
+                                string rawSource = !string.IsNullOrEmpty(entry.source)
+                                    ? entry.source
+                                    : (!isVanillaSec && !string.IsNullOrEmpty(sec.source) ? sec.source : string.Empty);
+
+                                string source = rawSource;
+                                string disp = string.Empty;
+
+                                if (!string.IsNullOrEmpty(source))
                                 {
-                                    if (ComboKeyStore.IsExplicitlyUnbound(hkId))
+                                    if (IsSelfModId(source)) continue;
+                                    if (modById != null && modById.TryGetValue(source, out var m) && m?.Manifest != null)
                                     {
-                                        return KeyCode.None;
+                                        if (!string.IsNullOrEmpty(m.Manifest.Name)) disp = m.Manifest.Name!;
                                     }
-                                    using (ComboKeyStore.EnterBypass())
+                                    else if (modByAsm != null)
                                     {
-                                        return rawGetKey();
-                                    }
-                                },
-                                SetKey = (k) =>
-                                {
-                                    try
-                                    {
-                                        if (k == KeyCode.None)
+                                        // 若 source 写错或与 Manifest.ID 不一致，通过入口委托归属程序集找回真实模组
+                                        Assembly? extAsm = GetEntryExternalAssembly(entry);
+                                        if (extAsm == SelfAssembly) continue;
+                                        if (extAsm != null && modByAsm.TryGetValue(extAsm, out var asmMod) && asmMod?.Manifest != null)
                                         {
-                                            ComboKeyStore.SetExplicitlyUnbound(hkId, true);
+                                            source = asmMod.Manifest.ID ?? source;
+                                            if (!string.IsNullOrEmpty(asmMod.Manifest.Name)) disp = asmMod.Manifest.Name!;
                                         }
-                                        else
-                                        {
-                                            ComboKeyStore.SetExplicitlyUnbound(hkId, false);
-                                        }
-                                        using (ComboKeyStore.EnterBypass())
-                                        {
-                                            rawSetKey?.Invoke(k);
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        ModLogger.Warn($"Error in GameOptionRegistry SetKey ({hkId}): {ex.Message}");
                                     }
                                 }
-                            });
-                        }
-                        else if (entry.kind == GameOptionRegistry.Kind.Toggle ||
-                                 entry.kind == GameOptionRegistry.Kind.Slider ||
-                                 entry.kind == GameOptionRegistry.Kind.Dropdown)
-                        {
-                            if (ContainsGeneral(group, entry.id, label)) continue;
-                            var gen = new ModGeneralEntry
-                            {
-                                Id = entry.id,
-                                ModId = group.ModId,
-                                Section = rawSecId,
-                                SectionLabel = secLabel,
-                                DisplayName = label,
-                                Tooltip = tooltip
-                            };
+                                else
+                                {
+                                    Assembly? extAsm = GetEntryExternalAssembly(entry);
+                                    if (extAsm == SelfAssembly) continue;
 
-                            if (entry.kind == GameOptionRegistry.Kind.Toggle)
-                            {
-                                gen.Kind = OptionKind.Toggle;
-                                gen.GetBool = entry.getBool;
-                                gen.SetBool = entry.setBool;
-                            }
-                            else if (entry.kind == GameOptionRegistry.Kind.Slider)
-                            {
-                                gen.Kind = OptionKind.Slider;
-                                gen.GetFloat = entry.getFloat;
-                                gen.SetFloat = entry.setFloat;
-                                gen.Min = entry.min;
-                                gen.Max = entry.max;
-                                gen.WholeNumbers = entry.wholeNumbers;
-                                gen.ValueFormatter = entry.valueText;
-                            }
-                            else if (entry.kind == GameOptionRegistry.Kind.Dropdown)
-                            {
-                                gen.Kind = OptionKind.Dropdown;
-                                gen.GetIndex = entry.getIndex;
-                                gen.SetIndex = entry.setIndex;
-                                gen.GetChoices = entry.options;
-                            }
+                                    if (extAsm != null && modByAsm != null && modByAsm.TryGetValue(extAsm, out var m) && m?.Manifest != null)
+                                    {
+                                        source = m.Manifest.ID ?? string.Empty;
+                                        disp = m.Manifest.Name ?? string.Empty;
+                                    }
 
-                            group.GeneralSettings.Add(gen);
+                                    if (string.IsNullOrEmpty(source) && extAsm != null)
+                                    {
+                                        source = extAsm.GetName().Name ?? "external_mod";
+                                    }
+                                    if (string.IsNullOrEmpty(source))
+                                    {
+                                        source = (!isVanillaSec ? sec.id : null) ?? "external_mod";
+                                    }
+                                }
+
+                                if (IsSelfModId(source)) continue;
+
+                                if (string.IsNullOrEmpty(disp))
+                                {
+                                    string? secTitle = !isVanillaSec ? SafeInvokeString(sec.label, string.Empty, source, sec.id, "Registry.SectionTitle") : null;
+                                    disp = !string.IsNullOrEmpty(secTitle) ? secTitle! : source;
+                                }
+
+                                source ??= "external_mod";
+                                disp ??= source;
+
+                                var group = GetOrCreateGroup(groups, source, disp);
+                                if (!string.IsNullOrEmpty(rawSource) &&
+                                    !string.Equals(rawSource, group.ModId, StringComparison.OrdinalIgnoreCase) &&
+                                    !group.ExtraNotifyModIds.Any(id => string.Equals(id, rawSource, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    group.ExtraNotifyModIds.Add(rawSource);
+                                }
+                                registryMatchedModIds?.Add(group.ModId);
+                                string label = SafeInvokeString(entry.label, entry.id, source, entry.id, "Registry.EntryLabel");
+                                string tooltip = SafeInvokeString(entry.tooltip, string.Empty, source, entry.id, "Registry.EntryTooltip");
+                                LoadedMod? regOwnerMod = null;
+                                if (modById != null && !string.IsNullOrEmpty(group.ModId))
+                                {
+                                    modById.TryGetValue(group.ModId, out regOwnerMod);
+                                }
+                                string secLabel = FormatModSectionLabel(!string.IsNullOrEmpty(rawSecTitle) ? rawSecTitle : rawSecId, regOwnerMod, group.ModId);
+
+                                if (entry.kind == GameOptionRegistry.Kind.KeyBind)
+                                {
+                                    if (ContainsHotkey(group, entry.id, label)) continue;
+                                    var rawGetKey = entry.getKey ?? (() => KeyCode.None);
+                                    var rawSetKey = entry.setKey;
+                                    string hkId = entry.id;
+                                    group.Hotkeys.Add(new ModHotkeyEntry
+                                    {
+                                        Id = hkId,
+                                        RawOptionId = entry.id,
+                                        ModId = group.ModId,
+                                        ModDisplayName = group.DisplayName,
+                                        Section = rawSecId,
+                                        SectionLabel = secLabel,
+                                        DisplayName = label,
+                                        Tooltip = tooltip,
+                                        GetKey = () =>
+                                        {
+                                            try
+                                            {
+                                                if (ComboKeyStore.IsExplicitlyUnbound(hkId))
+                                                {
+                                                    return KeyCode.None;
+                                                }
+                                                using (ComboKeyStore.EnterBypass())
+                                                {
+                                                    return rawGetKey();
+                                                }
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                ModLogger.Warn($"Error in GameOptionRegistry GetKey ({hkId}): {ex.Message}");
+                                                return KeyCode.None;
+                                            }
+                                        },
+                                        SetKey = (k) =>
+                                        {
+                                            try
+                                            {
+                                                if (k == KeyCode.None)
+                                                {
+                                                    ComboKeyStore.SetExplicitlyUnbound(hkId, true);
+                                                }
+                                                else
+                                                {
+                                                    ComboKeyStore.SetExplicitlyUnbound(hkId, false);
+                                                }
+                                                using (ComboKeyStore.EnterBypass())
+                                                {
+                                                    rawSetKey?.Invoke(k);
+                                                }
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                ModLogger.Warn($"Error in GameOptionRegistry SetKey ({hkId}): {ex.Message}");
+                                            }
+                                        }
+                                    });
+                                }
+                                else if (entry.kind == GameOptionRegistry.Kind.Toggle ||
+                                         entry.kind == GameOptionRegistry.Kind.Slider ||
+                                         entry.kind == GameOptionRegistry.Kind.Dropdown)
+                                {
+                                    if (ContainsGeneral(group, entry.id, label)) continue;
+                                    var gen = new ModGeneralEntry
+                                    {
+                                        Id = entry.id,
+                                        ModId = group.ModId,
+                                        Section = rawSecId,
+                                        SectionLabel = secLabel,
+                                        DisplayName = label,
+                                        Tooltip = tooltip
+                                    };
+
+                                    if (entry.kind == GameOptionRegistry.Kind.Toggle)
+                                    {
+                                        gen.Kind = OptionKind.Toggle;
+                                        var rawGetBool = entry.getBool;
+                                        gen.GetBool = () =>
+                                        {
+                                            try
+                                            {
+                                                return rawGetBool != null && rawGetBool();
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                MarkDegradedEntry(group.ModId, entry.id, "Registry.GetBool", ex);
+                                                return false;
+                                            }
+                                        };
+                                        var rawSetBool = entry.setBool;
+                                        gen.SetBool = (val) =>
+                                        {
+                                            try { rawSetBool?.Invoke(val); }
+                                            catch (Exception ex) { ModLogger.Warn($"Error in registry SetBool ({entry.id}): {ex.Message}"); }
+                                        };
+                                    }
+                                    else if (entry.kind == GameOptionRegistry.Kind.Slider)
+                                    {
+                                        gen.Kind = OptionKind.Slider;
+                                        var rawGetFloat = entry.getFloat;
+                                        gen.GetFloat = () =>
+                                        {
+                                            try
+                                            {
+                                                return rawGetFloat != null ? rawGetFloat() : entry.min;
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                MarkDegradedEntry(group.ModId, entry.id, "Registry.GetFloat", ex);
+                                                return entry.min;
+                                            }
+                                        };
+                                        var rawSetFloat = entry.setFloat;
+                                        gen.SetFloat = (val) =>
+                                        {
+                                            try { rawSetFloat?.Invoke(val); }
+                                            catch (Exception ex) { ModLogger.Warn($"Error in registry SetFloat ({entry.id}): {ex.Message}"); }
+                                        };
+                                        gen.Min = entry.min;
+                                        gen.Max = entry.max;
+                                        gen.WholeNumbers = entry.wholeNumbers;
+                                        gen.ValueFormatter = entry.valueText;
+                                    }
+                                    else if (entry.kind == GameOptionRegistry.Kind.Dropdown)
+                                    {
+                                        gen.Kind = OptionKind.Dropdown;
+                                        var rawGetIndex = entry.getIndex;
+                                        gen.GetIndex = () =>
+                                        {
+                                            try
+                                            {
+                                                return rawGetIndex != null ? rawGetIndex() : 0;
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                MarkDegradedEntry(group.ModId, entry.id, "Registry.GetIndex", ex);
+                                                return 0;
+                                            }
+                                        };
+                                        var rawSetIndex = entry.setIndex;
+                                        gen.SetIndex = (idx) =>
+                                        {
+                                            try { rawSetIndex?.Invoke(idx); }
+                                            catch (Exception ex) { ModLogger.Warn($"Error in registry SetIndex ({entry.id}): {ex.Message}"); }
+                                        };
+                                        var rawOptions = entry.options;
+                                        gen.GetChoices = () =>
+                                        {
+                                            try
+                                            {
+                                                return rawOptions != null ? rawOptions() : new List<string>(0);
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                MarkDegradedEntry(group.ModId, entry.id, "Registry.GetChoices", ex);
+                                                return new List<string>(0);
+                                            }
+                                        };
+                                    }
+
+                                    group.GeneralSettings.Add(gen);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                ModLogger.Warn($"Error scanning GameOptionRegistry entry in section '{sec.id}': {ex.Message}");
+                            }
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"Error scanning GameOptionRegistry section '{sec?.id}': {ex.Message}");
                     }
                 }
             }

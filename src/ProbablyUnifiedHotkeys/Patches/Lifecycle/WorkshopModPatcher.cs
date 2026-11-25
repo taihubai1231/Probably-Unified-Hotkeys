@@ -260,7 +260,7 @@ namespace ProbablyUnifiedHotkeys
             ComboKeyStore.EnsureLoaded();
             string? modId = __instance.Config?.ModId;
             string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
-            if (ComboKeyStore.IsExplicitlyUnbound(fullId))
+            if (ComboKeyStore.IsExplicitlyUnbound(fullId) || ComboKeyStore.IsSecondaryConflictingHotkeySuppressed(fullId))
             {
                 __result = KeyCode.None;
                 return;
@@ -275,7 +275,7 @@ namespace ProbablyUnifiedHotkeys
             ComboKeyStore.EnsureLoaded();
             string? modId = __instance.Config?.ModId;
             string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
-            if (ComboKeyStore.IsExplicitlyUnbound(fullId))
+            if (ComboKeyStore.IsExplicitlyUnbound(fullId) || ComboKeyStore.IsSecondaryConflictingHotkeySuppressed(fullId))
             {
                 __result = "None";
                 return;
@@ -313,7 +313,7 @@ namespace ProbablyUnifiedHotkeys
             ComboKeyStore.EnsureLoaded();
             string? modId = __instance.Config?.ModId;
             string fullId = string.IsNullOrEmpty(modId) ? __instance.Key : $"{modId}.{__instance.Key}";
-            if (ComboKeyStore.IsExplicitlyUnbound(fullId))
+            if (ComboKeyStore.IsExplicitlyUnbound(fullId) || ComboKeyStore.IsSecondaryConflictingHotkeySuppressed(fullId))
             {
                 __result = 0;
                 return;

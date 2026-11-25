@@ -136,7 +136,7 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool Prefix(EscapeUIManager __instance)
         {
-            if (!ModFeatureConfig.EnableFastQuit && !ModFeatureConfig.EnablePerformancePatches)
+            if (!ModFeatureConfig.EnableFastMainMenu)
             {
                 return true;
             }
@@ -202,7 +202,7 @@ namespace ProbablyUnifiedHotkeys
                 ModLogger.Warn($"[Patch_MainMenuUIController_Start] Failed to sync external hotkeys on boot: {ex.Message}");
             }
 
-            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            if (!ModFeatureConfig.EnableIdleWarmup) return;
             IdleWarmupRunner.Schedule();
         }
     }
@@ -257,6 +257,10 @@ namespace ProbablyUnifiedHotkeys
                         // 第 2 步：预热模组设置目录缓存（含适配类型反射缓存）并同步非标准模组热键
                         KnownModAdapters.SyncExternalNonConfigHotkeysOnBoot();
                         ModCatalogCache.Prewarm();
+                        if (ModFeatureConfig.EnableModsPreviewCache)
+                        {
+                            ModUIManagerPerfHelper.PrewarmWorkshopDetails();
+                        }
                         _stage = 2;
                         return;
 
@@ -315,6 +319,7 @@ namespace ProbablyUnifiedHotkeys
                 RowWarningIconField = AccessTools.Field(rowType, "warningIcon");
                 RowWarningTooltipField = AccessTools.Field(rowType, "warningTooltip");
             }
+            ModFeatureConfig.HideOwnCoverToggled += RefreshOwnModCoverImmediate;
         }
 
         private static readonly FieldInfo? RowsField = AccessTools.Field(typeof(ModUIManager), "rows");
@@ -428,13 +433,24 @@ namespace ProbablyUnifiedHotkeys
                 return true;
             }
 
-            // 2. 查原生 ModUIManager.previewCache 字典
+            // 2. 查原生 ModUIManager.previewCache 字典；若存的是 null 占位，先移除该占位允许原版重试
             Dictionary<string, Sprite>? nativeCache = PreviewCacheField?.GetValue(manager) as Dictionary<string, Sprite>;
-            if (nativeCache != null && nativeCache.TryGetValue(id, out Sprite? nativeCached) && nativeCached != null)
+            if (nativeCache != null)
             {
-                PersistentPreviewCache[id] = nativeCached;
-                sprite = nativeCached;
-                return true;
+                if (nativeCache.TryGetValue(id, out Sprite? nativeCached))
+                {
+                    if (nativeCached != null)
+                    {
+                        PersistentPreviewCache[id] = nativeCached;
+                        sprite = nativeCached;
+                        return true;
+                    }
+                    else
+                    {
+                        // 原版之前写入了 null 占位，移除它以允许原版 GetPreview 再次向 Steam 尝试拉取
+                        nativeCache.Remove(id);
+                    }
+                }
             }
 
             // 3. 极速从本地 Mod 目录 preview.png 载入（零网络请求、零挂起，1-2ms 快速解码）
@@ -463,6 +479,33 @@ namespace ProbablyUnifiedHotkeys
             return false;
         }
 
+        internal static void PrewarmWorkshopDetails()
+        {
+            try
+            {
+                if (ModWorkshop.IsAvailable && ModLoader.Mods != null)
+                {
+                    var idsToRequest = new List<ulong>();
+                    for (int i = 0; i < ModLoader.Mods.Count; i++)
+                    {
+                        var m = ModLoader.Mods[i];
+                        if (m != null && m.WorkshopId > 0 && !PersistentPreviewCache.ContainsKey(m.Manifest?.ID ?? string.Empty))
+                        {
+                            idsToRequest.Add(m.WorkshopId);
+                        }
+                    }
+                    if (idsToRequest.Count > 0)
+                    {
+                        ModWorkshop.RequestDetails(idsToRequest);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[ModUIManagerPerfHelper.PrewarmWorkshopDetails] warning: {ex.Message}");
+            }
+        }
+
         internal static void EnsurePreviewCached(ModUIManager manager, LoadedMod? mod)
         {
             if (mod?.Manifest == null || string.IsNullOrEmpty(mod.Manifest.ID)) return;
@@ -476,6 +519,46 @@ namespace ProbablyUnifiedHotkeys
                 else if (PersistentPreviewCache.TryGetValue(id, out Sprite? saved) && saved != null)
                 {
                     cache[id] = saved;
+                }
+            }
+        }
+
+        internal static void SyncLoadedPreviewToPersistentCache(ModUIManager manager, LoadedMod? mod)
+        {
+            if (manager == null) return;
+            string? id = mod?.Manifest?.ID;
+
+            if (!string.IsNullOrEmpty(id) && !string.Equals(id, ModFeatureConfig.ModId, StringComparison.OrdinalIgnoreCase))
+            {
+                if (PreviewCacheField?.GetValue(manager) is Dictionary<string, Sprite> cache &&
+                    cache.TryGetValue(id!, out Sprite? sprite) && sprite != null)
+                {
+                    PersistentPreviewCache[id!] = sprite;
+                    return;
+                }
+
+                CustomUIWindow? handle = GetHandle(manager);
+                CustomUIElement? previewElem = handle?.Get("preview");
+                Sprite? elemSprite = previewElem?.image?.sprite;
+                if (elemSprite != null)
+                {
+                    PersistentPreviewCache[id!] = elemSprite;
+                    return;
+                }
+            }
+
+            if (PreviewCacheField?.GetValue(manager) is Dictionary<string, Sprite> fullCache)
+            {
+                foreach (var kvp in fullCache)
+                {
+                    if (!string.IsNullOrEmpty(kvp.Key) && kvp.Value != null &&
+                        !string.Equals(kvp.Key, ModFeatureConfig.ModId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!PersistentPreviewCache.ContainsKey(kvp.Key))
+                        {
+                            PersistentPreviewCache[kvp.Key] = kvp.Value;
+                        }
+                    }
                 }
             }
         }
@@ -586,6 +669,87 @@ namespace ProbablyUnifiedHotkeys
                     scrollLe.flexibleHeight = 1f;
                     scrollLe.flexibleWidth = 1f;
                 }
+            }
+        }
+
+        internal static void RefreshOwnModCoverImmediate()
+        {
+            try
+            {
+                ModUIManager? mgr = ModUIManager.Instance ?? UnityEngine.Object.FindObjectOfType<ModUIManager>();
+                if (mgr == null) return;
+
+                FieldInfo? selField = AccessTools.Field(typeof(ModUIManager), "selectedModID");
+                string? selectedId = selField?.GetValue(mgr) as string;
+                if (!string.Equals(selectedId, ModFeatureConfig.ModId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                CustomUIWindow? handle = GetHandle(mgr);
+                if (handle == null || !handle.IsAlive) return;
+
+                CustomUIElement? previewPanel = handle.Get("preview_panel");
+                CustomUIElement? previewElem = handle.Get("preview");
+                RectTransform? parentRt = previewPanel?.Rect?.parent as RectTransform;
+
+                if (ModFeatureConfig.HideOwnCoverInModsPanel)
+                {
+                    if (previewElem != null)
+                    {
+                        previewElem.SetSprite((Sprite?)null);
+                    }
+                    if (previewPanel != null)
+                    {
+                        previewPanel.SetVisible(false);
+                    }
+                    if (parentRt != null)
+                    {
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(parentRt);
+                    }
+                    LockDetailButtonSizes(mgr);
+                }
+                else
+                {
+                    LoadedMod? ownMod = null;
+                    var mods = ModLoader.Mods;
+                    if (mods != null)
+                    {
+                        for (int i = 0; i < mods.Count; i++)
+                        {
+                            var m = mods[i];
+                            if (m?.Manifest != null && string.Equals(m.Manifest.ID, ModFeatureConfig.ModId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                ownMod = m;
+                                break;
+                            }
+                        }
+                    }
+
+                    Sprite? sprite = null;
+                    if (ownMod != null)
+                    {
+                        TryGetFastPreview(mgr, ownMod, out sprite);
+                    }
+
+                    if (previewElem != null)
+                    {
+                        previewElem.SetSprite(sprite);
+                    }
+                    if (previewPanel != null)
+                    {
+                        previewPanel.SetVisible(sprite != null);
+                    }
+                    if (parentRt != null)
+                    {
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(parentRt);
+                    }
+                    LockDetailButtonSizes(mgr);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[ModUIManagerPerfHelper.RefreshOwnModCoverImmediate] error: {ex.Message}");
             }
         }
 
@@ -1255,7 +1419,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static void Postfix(ModUIManager __instance)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches || __instance == null) return;
+            if (!ModFeatureConfig.EnableIdleWarmup || __instance == null) return;
             try
             {
                 // 统一交由 ModUIPrewarmRunner 延后至主菜单渲染完毕后的空闲帧分步执行，杜绝 Awake 首帧卡顿
@@ -1322,18 +1486,17 @@ namespace ProbablyUnifiedHotkeys
             // 预建 UI 骨架后，每空闲帧轻量解码 2 个未缓存模组的本地封面进 PersistentPreviewCache
             try
             {
-                ModUIManagerPerfHelper.WarmupNextLocalPreviews(_manager, 2);
+                if (ModFeatureConfig.EnableModsPreviewCache)
+                {
+                    ModUIManagerPerfHelper.WarmupNextLocalPreviews(_manager, 2);
+                }
             }
             catch
             {
                 // ignore preview warmup errors
             }
 
-            if (ModLoader.Mods != null && ModUIManagerPerfHelper.IsPreviewWarmupComplete(ModLoader.Mods.Count))
-            {
-                Destroy(this);
-            }
-            else if (_framesWaited > 120)
+            if (ModLoader.Mods == null || ModUIManagerPerfHelper.IsPreviewWarmupComplete(ModLoader.Mods.Count))
             {
                 Destroy(this);
             }
@@ -1345,7 +1508,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static void Postfix()
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            if (!ModFeatureConfig.EnableIdleWarmup) return;
             try
             {
                 ModUIManager? mgr = ModUIManager.Instance;
@@ -1366,7 +1529,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return true;
+            if (!ModFeatureConfig.EnableModsRowPool) return true;
             return !ModUIManagerPerfHelper.PopulateLayoutRowsPooled(__instance, invokeFollowups: true);
         }
     }
@@ -1376,7 +1539,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return true;
+            if (!ModFeatureConfig.EnableModsRowPool) return true;
             return !ModUIManagerPerfHelper.RefreshRowIssuesFast(__instance);
         }
     }
@@ -1386,7 +1549,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(LoadedMod mod, ref string? __result)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return true;
+            if (!ModFeatureConfig.EnableModsRowPool) return true;
             if (ModUIManagerPerfHelper.TryComputeModIssueFast(mod, out string? fastIssue))
             {
                 __result = fastIssue;
@@ -1401,7 +1564,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return true;
+            if (!ModFeatureConfig.EnableModsRowPool) return true;
             return !ModUIManagerPerfHelper.ApplyFilterToRowsDiff(__instance);
         }
     }
@@ -1411,12 +1574,12 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance, LoadedMod? mod, ref Sprite? __result)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches || __instance == null || mod?.Manifest == null || string.IsNullOrEmpty(mod.Manifest.ID))
+            if (!ModFeatureConfig.EnableModsPreviewCache || __instance == null || mod?.Manifest == null || string.IsNullOrEmpty(mod.Manifest.ID))
             {
                 return true;
             }
 
-            if (ModUIManagerPerfHelper.TryGetFastPreview(__instance, mod, out Sprite? sprite))
+            if (ModUIManagerPerfHelper.TryGetFastPreview(__instance, mod, out Sprite? sprite) && sprite != null)
             {
                 __result = sprite;
                 return false;
@@ -1431,18 +1594,18 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance, LoadedMod? mod)
         {
-            if (ModFeatureConfig.EnablePerformancePatches)
+            if (ModFeatureConfig.EnableModsPreviewCache)
             {
                 ModUIManagerPerfHelper.EnsurePreviewCached(__instance, mod);
-                ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
             }
+            ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
 
             CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
             CustomUIElement? previewPanel = handle?.Get("preview_panel");
             CustomUIElement? previewElem = handle?.Get("preview");
 
             // 本模组专属去封面优化（老板诉求 #3）：隐藏封面预览面板 preview_panel，玩家无需滚动即可直接清晰通读顶部文字介绍
-            if (mod?.Manifest != null && string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))
+            if (ModFeatureConfig.HideOwnCoverInModsPanel && mod?.Manifest != null && string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))
             {
                 if (previewElem != null)
                 {
@@ -1472,12 +1635,13 @@ namespace ProbablyUnifiedHotkeys
             return true;
         }
 
-        public static void Postfix(ModUIManager __instance)
+        public static void Postfix(ModUIManager __instance, LoadedMod? mod)
         {
-            if (ModFeatureConfig.EnablePerformancePatches)
+            if (ModFeatureConfig.EnableModsPreviewCache && __instance != null)
             {
-                ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
+                ModUIManagerPerfHelper.SyncLoadedPreviewToPersistentCache(__instance, mod);
             }
+            ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
         }
     }
 
@@ -1486,16 +1650,16 @@ namespace ProbablyUnifiedHotkeys
     {
         public static bool Prefix(ModUIManager __instance, LoadedMod? mod)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return true;
+            if (!ModFeatureConfig.EnableModsRowPool) return true;
             return !ModUIManagerPerfHelper.ShouldSkipEmptyShowMod(__instance, mod);
         }
 
         public static void Postfix(ModUIManager __instance, LoadedMod? mod)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches && (mod?.Manifest == null || !string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))) return;
+            if (!ModFeatureConfig.EnableModsRowPool && (mod?.Manifest == null || !string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))) return;
             ModUIManagerPerfHelper.RecordEmptyShowMod(__instance, mod);
 
-            if (mod?.Manifest != null && string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))
+            if (ModFeatureConfig.HideOwnCoverInModsPanel && mod?.Manifest != null && string.Equals(mod.Manifest.ID, ModFeatureConfig.ModId, StringComparison.Ordinal))
             {
                 CustomUIWindow? handle = ModUIManagerPerfHelper.GetHandle(__instance);
                 CustomUIElement? previewPanel = handle?.Get("preview_panel");
@@ -1510,6 +1674,11 @@ namespace ProbablyUnifiedHotkeys
             }
             // 切换到其他模组时，绝对不要在此处强行 previewPanel.SetVisible(true)！
             // 原版 ApplyPreview 会根据 GetPreview 结果正确调用 SetVisible(true) 或 SetVisible(false)。
+
+            if (ModFeatureConfig.EnableModsPreviewCache && __instance != null)
+            {
+                ModUIManagerPerfHelper.SyncLoadedPreviewToPersistentCache(__instance, mod);
+            }
 
             ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
         }
@@ -1543,19 +1712,18 @@ namespace ProbablyUnifiedHotkeys
     {
         public static void Prefix(ModUIManager __instance)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            if (!ModFeatureConfig.EnableConflictScannerCache) return;
             ConflictScannerPerfHelper.BeginModOpenPanel();
         }
 
         public static void Postfix(ModUIManager __instance)
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return;
             ModUIManagerPerfHelper.LockDetailButtonSizes(__instance);
         }
 
         public static void Finalizer()
         {
-            if (!ModFeatureConfig.EnablePerformancePatches) return;
+            if (!ModFeatureConfig.EnableConflictScannerCache) return;
             ConflictScannerPerfHelper.EndModOpenPanel();
         }
     }
@@ -1716,6 +1884,7 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool ConflictScannerMod_Report_Prefix()
         {
+            if (!ModFeatureConfig.EnableConflictScannerCache || !ModFeatureConfig.IsConflictScannerModEnabled()) return true;
             if (_hasReportedForCurrentEnv && HasValidCachedBuildForCurrentEnv())
             {
                 // 当前模组环境签名已上报且无变动，跳过重复打印 "Scan: 53 DLL(s) read"
@@ -1727,6 +1896,7 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool ConflictEngine_Invalidate_Prefix()
         {
+            if (!ModFeatureConfig.EnableConflictScannerCache || !ModFeatureConfig.IsConflictScannerModEnabled()) return true;
             if (HasValidCachedBuildForCurrentEnv())
             {
                 // 当前模组环境签名未变（启用状态与版本未变），直接跳过清空已有冲突分析结果，杜绝重复扫描！
@@ -1740,6 +1910,7 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool ConflictEngine_EnsureBuilt_Prefix()
         {
+            if (!ModFeatureConfig.EnableConflictScannerCache || !ModFeatureConfig.IsConflictScannerModEnabled()) return true;
             if (HasValidCachedBuildForCurrentEnv())
             {
                 // 当前模组环境签名未变，直接命中缓存跳过 53-DLL 耗时重扫！

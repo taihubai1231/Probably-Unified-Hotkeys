@@ -236,12 +236,22 @@ namespace ProbablyUnifiedHotkeys.Tests
             public bool IsSearchInputFocused { get; set; }
             public void ReleaseSearchInputFocus() { }
             public bool IsInEnhancedRefreshRules { get; set; }
+            public bool IsStandaloneModWindowOpen { get; set; }
+            public bool IsVanillaStandaloneWindowOpen { get; set; }
             public CustomUIWindow? CurrentWindow => null;
             public CustomUIWindow? UnsavedConfirmWindow => null;
 
             public bool TryOpenEnhancedUI(GameOptionUIManager instance) => true;
+            public void OnVanillaOptionsWindowOpened(GameOptionUIManager manager, CustomUIWindow? window) { }
+            public void OnModConfigWindowOpened(CustomUIWindow window, LoadedMod mod) { }
             public bool HasUnsavedChanges() => false;
+            public void DiscardUnsavedChangesOnDirectClose() { }
             public void PromptUnsavedChangesBeforeClosing() { }
+            public bool HasVanillaStandaloneUnsavedChanges() => false;
+            public void PromptVanillaStandaloneUnsavedChanges() { }
+            public void DiscardVanillaStandaloneUnsavedChanges() { }
+            public void OnBeforeVanillaStandaloneApply(GameOptionUIManager instance) { }
+            public void OnAfterVanillaStandaloneApply(GameOptionUIManager instance) { }
             public void MarkEscapeConsumed() { }
             public void TickCapture() { }
             public void OnVanillaRulesRefreshed() { }

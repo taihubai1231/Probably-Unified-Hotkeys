@@ -359,7 +359,14 @@ internal static class Program
         var asmDefType = cecilAsm.GetType("DseCecil.AssemblyDefinition", throwOnError: true)!;
         var readAsm = asmDefType.GetMethod("ReadAssembly", new[] { typeof(string) })!;
 
-        object asmDef = readAsm.Invoke(null, new object[] { Path.Combine(managed, "Assembly-CSharp.dll") })!;
+        string targetDll = (typeNames.Length > 0 && typeNames[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            ? typeNames[0]
+            : Path.Combine(managed, "Assembly-CSharp.dll");
+        string[] queries = (typeNames.Length > 0 && typeNames[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            ? typeNames.Skip(1).ToArray()
+            : typeNames;
+
+        object asmDef = readAsm.Invoke(null, new object[] { targetDll })!;
         object mainModule = asmDef.GetType().GetProperty("MainModule")!.GetValue(asmDef)!;
         var getTypes = mainModule.GetType().GetMethod("GetTypes", Type.EmptyTypes)!;
         var allTypes = (IEnumerable)getTypes.Invoke(mainModule, null)!;
@@ -372,7 +379,17 @@ internal static class Program
             typeMap[fullName.Replace('/', '+')] = t;
         }
 
-        foreach (string rawQuery in typeNames)
+        if (queries.Length == 0)
+        {
+            foreach (var t in allTypes)
+            {
+                string fullName = (string)t!.GetType().GetProperty("FullName")!.GetValue(t)!;
+                Console.WriteLine("Type: " + fullName);
+            }
+            return 0;
+        }
+
+        foreach (string rawQuery in queries)
         {
             string query = rawQuery;
             string? methodFilter = null;

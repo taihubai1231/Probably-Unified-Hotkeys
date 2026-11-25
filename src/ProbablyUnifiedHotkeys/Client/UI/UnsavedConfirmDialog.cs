@@ -188,6 +188,12 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static void PromptUnsavedChangesBeforeClosing(Action<GameOptionUIManager>? applyAllCallback = null)
         {
+            if (!ModFeatureConfig.EnableUnsavedConfirmDialog)
+            {
+                CloseEnhancedWindowSafely(() => UiSessionState.DiscardAllPendingChanges());
+                return;
+            }
+
             if (UiSessionState.UnsavedConfirmWindow != null && UiSessionState.UnsavedConfirmWindow.IsAlive)
             {
                 return;

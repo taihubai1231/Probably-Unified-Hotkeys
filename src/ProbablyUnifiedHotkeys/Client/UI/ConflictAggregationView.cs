@@ -123,8 +123,8 @@ namespace ProbablyUnifiedHotkeys
                     "<color=#ffb347><b>{0} hotkey conflict group(s) detected!</b></color> (Click any key below to rebind, Esc to clear)",
                     sortedConflicts.Count)
                 : I18n.Get(
-                    "<color=#55dd88><b>太棒了！当前没有任何按键冲突。</b></color>",
-                    "<color=#55dd88><b>Great! No hotkey conflicts found.</b></color>");
+                    "<color=#55dd88><b>当前未检测到按键冲突</b></color>",
+                    "<color=#55dd88><b>No hotkey conflicts found.</b></color>");
             builder.AddHeader(headerText, "header_conflict_status");
             UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(builder.Last, headerText, minWidth: 240f, minHeight: 28f);
             UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 8f);

@@ -40,10 +40,10 @@ namespace ProbablyUnifiedHotkeys
                 UiSessionState.IsBuildingOrOpeningUI ||
                 UiSessionState.IsApplyingSettings;
 
-            ComboKeyStore.EnsureLoaded();
-            I18n.EnsureRegistered();
-            ModFeatureConfig.EnsureRegistered();
-            ModCatalogCache.EnsureEventSubscriptions();
+            SafeExecution.SafeExecute(() => ComboKeyStore.EnsureLoaded(), "ComboKeyStore.EnsureLoaded");
+            SafeExecution.SafeExecute(() => I18n.EnsureRegistered(), "I18n.EnsureRegistered");
+            SafeExecution.SafeExecute(() => ModFeatureConfig.EnsureRegistered(), "ModFeatureConfig.EnsureRegistered");
+            SafeExecution.SafeExecute(() => ModCatalogCache.EnsureEventSubscriptions(), "ModCatalogCache.EnsureEventSubscriptions");
             UnifiedOptionWindow.EnsureBridgeRegistered();
 
             if (!_perfPatchesHookRegistered)
@@ -53,7 +53,7 @@ namespace ProbablyUnifiedHotkeys
             }
 
             workshopHarmony = new Harmony("probably_unified_hotkeys.workshop");
-            WorkshopModPatcher.Apply(workshopHarmony, log);
+            SafeExecution.SafeExecute(() => WorkshopModPatcher.Apply(workshopHarmony, log), "WorkshopModPatcher.Apply");
         }
 
         internal static bool IsApplicationQuitting => _isApplicationQuitting;

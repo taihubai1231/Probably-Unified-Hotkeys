@@ -18,40 +18,93 @@ namespace ProbablyUnifiedHotkeys
 
         internal static void SyncViewContainersAndToggleButtons()
         {
-            bool showNormal = !UiSessionState.IsConflictViewActive && !UiSessionState.IsDiagnosticViewActive;
-            if (UiSessionState.NormalContentRoot != null) UiSessionState.NormalContentRoot.SetActive(showNormal);
-            if (UiSessionState.ConflictContentRoot != null) UiSessionState.ConflictContentRoot.SetActive(UiSessionState.IsConflictViewActive);
-            if (UiSessionState.DiagnosticStickyHeaderRoot != null)
+            if (!ModFeatureConfig.ShowDisplayFilterDropdown && UiSessionState.DiagnosticFilterMode != DiagnosticFilterMode.All)
             {
-                UiSessionState.DiagnosticStickyHeaderRoot.SetActive(UiSessionState.IsDiagnosticViewActive);
-                if (!UiSessionState.IsDiagnosticViewActive && UiSessionState.DiagnosticStickyHeaderRoot.transform.parent is RectTransform parentRt)
-                {
-                    LayoutRebuilder.ForceRebuildLayoutImmediate(parentRt);
-                }
-            }
-            if (UiSessionState.DiagnosticContentRoot != null) UiSessionState.DiagnosticContentRoot.SetActive(UiSessionState.IsDiagnosticViewActive);
-            if (UiSessionState.NormalDisplayDropdown?.root != null) UiSessionState.NormalDisplayDropdown.root.SetActive(showNormal);
-            if (UiSessionState.DiagnosticFilterDropdown?.root != null)
-            {
-                UiSessionState.DiagnosticFilterDropdown.root.SetActive(UiSessionState.IsDiagnosticViewActive);
-                if (UiSessionState.IsDiagnosticViewActive)
-                {
-                    RefreshDiagnosticFilterDropdown();
-                }
+                UiSessionState.DiagnosticFilterMode = DiagnosticFilterMode.All;
             }
 
-            ConflictAggregationView.UpdateConflictToggleButtonAppearance();
-            UpdateDiagnosticToggleButtonAppearance();
-
-            if (UiSessionState.IsConflictViewActive)
+            if (PrefsStorage.UseInMemoryPrefsForTests)
             {
-                UiSessionState.ExpandToggleBtn?.SetVisible(false);
+                return;
             }
-            else
+
+            SyncViewContainersAndToggleButtonsVisualNoInline();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void SyncViewContainersAndToggleButtonsVisualNoInline()
+        {
+            try
             {
-                UiSessionState.ExpandToggleBtn?.SetVisible(true);
-                TopSearchAndActionBar.RefreshExpandAllButtonState();
-                UiLayoutAndFontHelper.SyncCompactActionButton(UiSessionState.ExpandToggleBtn);
+                bool showNormal = !UiSessionState.IsConflictViewActive && !UiSessionState.IsDiagnosticViewActive;
+                if (UiSessionState.NormalContentRoot != null) UiSessionState.NormalContentRoot.SetActive(showNormal);
+                if (UiSessionState.ConflictContentRoot != null) UiSessionState.ConflictContentRoot.SetActive(UiSessionState.IsConflictViewActive);
+                if (UiSessionState.DiagnosticStickyHeaderRoot != null)
+                {
+                    UiSessionState.DiagnosticStickyHeaderRoot.SetActive(UiSessionState.IsDiagnosticViewActive);
+                    if (!UiSessionState.IsDiagnosticViewActive && UiSessionState.DiagnosticStickyHeaderRoot.transform.parent is RectTransform parentRt)
+                    {
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(parentRt);
+                    }
+                }
+                if (UiSessionState.DiagnosticContentRoot != null) UiSessionState.DiagnosticContentRoot.SetActive(UiSessionState.IsDiagnosticViewActive);
+                if (UiSessionState.NormalDisplayDropdown?.root != null)
+                {
+                    UiSessionState.NormalDisplayDropdown.root.SetActive(showNormal && ModFeatureConfig.ShowDisplayFilterDropdown);
+                }
+                if (UiSessionState.DiagnosticFilterDropdown?.root != null)
+                {
+                    bool showDiagFilter = UiSessionState.IsDiagnosticViewActive && ModFeatureConfig.ShowDisplayFilterDropdown;
+                    UiSessionState.DiagnosticFilterDropdown.root.SetActive(showDiagFilter);
+                    if (!ModFeatureConfig.ShowDisplayFilterDropdown && UiSessionState.DiagnosticFilterMode != DiagnosticFilterMode.All)
+                    {
+                        UiSessionState.DiagnosticFilterMode = DiagnosticFilterMode.All;
+                    }
+                    if (showDiagFilter)
+                    {
+                        RefreshDiagnosticFilterDropdown();
+                    }
+                }
+
+                if (UiSessionState.ConflictToggleBtn != null)
+                {
+                    UiSessionState.ConflictToggleBtn.SetVisible(ModFeatureConfig.ShowConflictViewButton || UiSessionState.IsConflictViewActive);
+                }
+                if (UiSessionState.DiagnosticToggleBtn != null)
+                {
+                    UiSessionState.DiagnosticToggleBtn.SetVisible(ModFeatureConfig.ShowModDiagnosticButton || UiSessionState.IsDiagnosticViewActive);
+                }
+
+                ConflictAggregationView.UpdateConflictToggleButtonAppearance();
+                UpdateDiagnosticToggleButtonAppearance();
+
+                bool showExpandBtn = !UiSessionState.IsConflictViewActive && ModFeatureConfig.ShowExpandAllButton;
+                if (UiSessionState.ExpandToggleBtn != null)
+                {
+                    UiSessionState.ExpandToggleBtn.SetVisible(showExpandBtn);
+                    if (showExpandBtn)
+                    {
+                        TopSearchAndActionBar.RefreshExpandAllButtonState();
+                        UiLayoutAndFontHelper.SyncCompactActionButton(UiSessionState.ExpandToggleBtn);
+                    }
+                }
+
+                bool showFilter = ModFeatureConfig.ShowDisplayFilterDropdown && (showNormal || UiSessionState.IsDiagnosticViewActive);
+                bool showConflict = ModFeatureConfig.ShowConflictViewButton && !UiSessionState.IsConflictViewActive;
+                bool showDiag = ModFeatureConfig.ShowModDiagnosticButton;
+                bool showHint = ModFeatureConfig.ShowTopKeybindHint;
+                bool row2AllHidden = !showFilter && !showConflict && !showDiag && !showExpandBtn && !showHint;
+                if (UiSessionState.TopRow2Obj != null)
+                {
+                    UiSessionState.TopRow2Obj.SetActive(!row2AllHidden);
+                }
+                if (UiSessionState.TopBottomSepObj != null)
+                {
+                    UiSessionState.TopBottomSepObj.SetActive(ModFeatureConfig.ShowTopSearchBar || !row2AllHidden);
+                }
+            }
+            catch
+            {
             }
         }
 

@@ -54,6 +54,12 @@ namespace ProbablyUnifiedHotkeys
             builder.BeginRow(8f, TextAnchor.MiddleLeft);
             headerRow = builder.CurrentContainer.gameObject;
             UiLayoutAndFontHelper.ConfigureStretchRowObject(headerRow, 38f);
+            if (card is ModOptionCard)
+            {
+                var hdrImg = headerRow.GetComponent<Image>() ?? headerRow.AddComponent<Image>();
+                hdrImg.color = Color.clear;
+                hdrImg.raycastTarget = true;
+            }
             UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 6f);
 
             builder.AddButton(initialExpanded ? "▼" : "▶", onFoldClicked, foldButtonId);
@@ -95,6 +101,29 @@ namespace ProbablyUnifiedHotkeys
                 card.ResetButtonElement = builder.Last;
                 UiLayoutAndFontHelper.StyleActionButton(card.ResetButtonElement, 112f, 36f, lrMargin: 8f, tbMargin: 2f, fontScale: 0.86f);
                 card.ResetButtonElement?.SetVisible(initialExpanded && card.ResetToDefaultsAction != null);
+            }
+
+            if (card is ModOptionCard modCard && ModFeatureConfig.AllowCardDragReorder)
+            {
+                UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 6f);
+                string dragSymbol = "<b>≡</b>";
+                string link = "drag_tip:" + modCard.Group.ModId;
+                TMPIconHover.CustomLinks[link] = () => I18n.Get("按住拖动以调整模组显示顺序", "Drag to reorder mod cards");
+                builder.AddLabel($"<color=#94a3b8><link=\"{link}\">{dragSymbol}</link></color>", "drag_" + modCard.Group.ModId);
+                var dragEl = builder.Last;
+                if (dragEl != null)
+                {
+                    UiLayoutAndFontHelper.ConfigureFixedWidthControl(dragEl, 26f, 32f);
+                    if (dragEl.text != null)
+                    {
+                        dragEl.text.alignment = TextAlignmentOptions.Center;
+                        I18n.ApplyFontIfRuntime(dragEl.text, dragSymbol);
+                    }
+                    if (UiSessionState.TryGetCardParts(modCard.Group, out var parts))
+                    {
+                        parts.DragHandleElement = dragEl;
+                    }
+                }
             }
 
             UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 6f);
@@ -185,8 +214,17 @@ namespace ProbablyUnifiedHotkeys
                 for (int e = 0; e < filteredEntries.Count; e++)
                 {
                     var entry = filteredEntries[e];
+                    if (entry == null) continue;
                     int childBefore = entriesColumnRt.childCount;
-                    UiSessionState.BuildEntryDelegate?.Invoke(manager, builder, entry);
+                    try
+                    {
+                        UiSessionState.BuildEntryDelegate?.Invoke(manager, builder, entry);
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Warn($"[CollapsibleCardView] Failed to build vanilla entry '{entry.id}': {ex.Message}");
+                        continue;
+                    }
 
                     var vanillaLabelEl = builder.Handle?.Get("label_" + entry.id) ?? UiSessionState.CurrentWindow?.Get("label_" + entry.id);
                     if (vanillaLabelEl != null)
@@ -246,6 +284,13 @@ namespace ProbablyUnifiedHotkeys
             var parts = UiSessionState.GetOrCreateCardParts(group);
             parts.IsContentBuilt = false;
 
+            builder.BeginColumn(0f, TextAnchor.UpperLeft);
+            var cardRoot = builder.CurrentContainer.gameObject;
+            parts.CardRootObject = cardRoot;
+            UiLayoutAndFontHelper.ConfigureStretchColumnObject(cardRoot);
+            var cardRootLe = cardRoot.GetComponent<LayoutElement>() ?? cardRoot.AddComponent<LayoutElement>();
+            cardRootLe.flexibleWidth = 1f;
+
             Action? onModReset = group.ResetToDefaultsAction != null
                 ? () =>
                 {
@@ -285,6 +330,15 @@ namespace ProbablyUnifiedHotkeys
             parts.HeaderRowObject = headerRow;
             parts.FoldArrowElement = foldBtn;
 
+            if (headerRow != null)
+            {
+                var dragCtrl = headerRow.AddComponent<CardDragReorderController>();
+                dragCtrl.Group = group;
+                dragCtrl.CardRoot = cardRoot;
+                dragCtrl.ContainerRt = UiSessionState.ModCardsContainer?.GetComponent<RectTransform>()!;
+                dragCtrl.ScrollRect = UiSessionState.ScrollRect;
+            }
+
             // 2. 卡片展开内容占位容器（折叠态初始为空，由窗口开启后的静默后台预建或按需触发填充）
             builder.BeginColumn(3f, TextAnchor.UpperLeft);
             parts.ContentContainerObject = builder.CurrentContainer.gameObject;
@@ -295,6 +349,8 @@ namespace ProbablyUnifiedHotkeys
             // 3. 卡片外部分界横线（无论折叠还是展开都清晰划分模组卡片边界）
             builder.AddSeparator(null, 2);
             parts.OuterSeparatorObject = GetLastChildGameObject(builder.CurrentContainer);
+
+            builder.End(); // 结束 CardRootObject
         }
 
         internal static void RestoreSavedExpandedModCards()
@@ -358,7 +414,14 @@ namespace ProbablyUnifiedHotkeys
 
                         for (int i = 0; i < group.Hotkeys.Count; i++)
                         {
-                            BuildHotkeyRow(builder, group.Hotkeys[i]);
+                            try
+                            {
+                                BuildHotkeyRow(builder, group.Hotkeys[i]);
+                            }
+                            catch (Exception ex)
+                            {
+                                ModLogger.Warn($"[CollapsibleCardView] Error building hotkey row '{group.Hotkeys[i]?.Id}': {ex.Message}");
+                            }
                         }
                     }
 
@@ -394,7 +457,14 @@ namespace ProbablyUnifiedHotkeys
 
                             for (int eIdx = 0; eIdx < secEntries.Count; eIdx++)
                             {
-                                BuildGeneralSettingRow(builder, secEntries[eIdx]);
+                                try
+                                {
+                                    BuildGeneralSettingRow(builder, secEntries[eIdx]);
+                                }
+                                catch (Exception ex)
+                                {
+                                    ModLogger.Warn($"[CollapsibleCardView] Error building general row '{secEntries[eIdx]?.Id}': {ex.Message}");
+                                }
                             }
 
                             parts.GeneralSections.Add(secBlock);
@@ -426,14 +496,24 @@ namespace ProbablyUnifiedHotkeys
 
                         for (int i = 0; i < group.ReadOnlyProbedHotkeys.Count; i++)
                         {
-                            BuildHotkeyRow(builder, group.ReadOnlyProbedHotkeys[i]);
+                            try
+                            {
+                                BuildHotkeyRow(builder, group.ReadOnlyProbedHotkeys[i]);
+                            }
+                            catch (Exception ex)
+                            {
+                                ModLogger.Warn($"[CollapsibleCardView] Error building probed hotkey row '{group.ReadOnlyProbedHotkeys[i]?.Id}': {ex.Message}");
+                            }
                         }
                     }
 
                     // --- 本模组专属：键位与设置方案快照管理面板（3 套场景预设槽位 + 剪贴板 JSON 导入/导出） ---
                     if (string.Equals(group.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase))
                     {
-                        ProfilePresetCardView.BuildSelfModProfileSection(builder);
+                        if (ModFeatureConfig.ShowProfilePresetCard)
+                        {
+                            ProfilePresetCardView.BuildSelfModProfileSection(builder);
+                        }
                     }
 
                     builder.AddSpace(4f);
@@ -490,6 +570,7 @@ namespace ProbablyUnifiedHotkeys
 
         private static void OnManualFoldModGroup(ModOptionGroup group)
         {
+            if (Time.frameCount <= CardDragReorderController.LastDragCompletedFrame + 1) return;
             bool nextExpanded = !IsCardCurrentlyExpanded(group);
             SetGroupExpanded(group, nextExpanded);
             TopSearchAndActionBar.RefreshExpandAllButtonState();
@@ -598,12 +679,10 @@ namespace ProbablyUnifiedHotkeys
 
         private static void BuildGeneralSettingRow(CustomUIBuilder builder, ModGeneralEntry gen)
         {
+            if (gen == null) return;
             var genUi = UiSessionState.GetOrCreateGeneralUi(gen);
-            builder.BeginRow(6f, TextAnchor.MiddleLeft);
-            genUi.RowObject = builder.CurrentContainer.gameObject;
-            UiLayoutAndFontHelper.ConfigureStretchRowObject(genUi.RowObject, 34f);
-            UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 18f);
 
+            // 1. 在 BeginRow 之前安全求值，绝不在容器打开后抛异常导致栈失衡
             string labelText = gen.DisplayName;
             if (gen.IsReadOnlyInfo)
             {
@@ -612,183 +691,423 @@ namespace ProbablyUnifiedHotkeys
             if (!string.IsNullOrEmpty(gen.Tooltip))
             {
                 string link = "modopt:" + gen.Id;
-                TMPIconHover.CustomLinks[link] = () => gen.Tooltip;
+                TMPIconHover.CustomLinks[link] = () =>
+                {
+                    try { return gen.Tooltip ?? string.Empty; }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Debug($"TMPIconHover link for '{gen.Id}' tooltip error: {ex.Message}");
+                        return string.Empty;
+                    }
+                };
                 labelText += $" <link=\"{link}\"><sprite name=\"info\" tint=1></link>";
             }
 
-            builder.AddLabel(labelText, "label_" + gen.Id);
-            if (gen.IsReadOnlyInfo)
-            {
-                UiLayoutAndFontHelper.ConfigureWrappedDiagnosticLabel(builder.Last, labelText);
-                UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 10f);
-                builder.End();
-                return;
-            }
-
-            UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(builder.Last, labelText, minWidth: 200f, minHeight: 30f);
-            builder.AddFlexibleSpace();
+            // 安全预取选项与状态
+            bool currentBool = false;
+            float currentFloat = 0f;
+            float minVal = 0f;
+            float maxVal = 100f;
+            string sliderValText = string.Empty;
+            List<string> choicesList = new List<string>();
+            int currentIdx = 0;
+            string currentStr = string.Empty;
 
             switch (gen.Kind)
             {
                 case OptionKind.Toggle:
-                    bool currentBool = gen.GetBool?.Invoke() ?? false;
-                    builder.AddToggle(string.Empty, currentBool, (val) =>
-                    {
-                        gen.PendingBool = val;
-                    }, "toggle_" + gen.Id);
-                    genUi.ControlElement = builder.Last;
+                    try { currentBool = gen.PendingBool ?? (gen.GetBool?.Invoke() ?? false); }
+                    catch (Exception ex) { ModLogger.Debug($"GetBool for '{gen.Id}' failed: {ex.Message}"); }
                     break;
 
                 case OptionKind.Slider:
-                    float currentFloat = gen.GetFloat?.Invoke() ?? gen.Min;
-                    string sliderValText = UiLayoutAndFontHelper.FormatSliderValue(gen, currentFloat);
-                    builder.AddLabel(sliderValText, "val_" + gen.Id);
-                    genUi.ValueLabelElement = builder.Last;
-                    UiLayoutAndFontHelper.ConfigureFixedWidthControl(genUi.ValueLabelElement, 58f, 30f);
-                    if (genUi.ValueLabelElement?.text != null)
-                    {
-                        genUi.ValueLabelElement.text.enableWordWrapping = false;
-                        genUi.ValueLabelElement.text.overflowMode = TextOverflowModes.Overflow;
-                        genUi.ValueLabelElement.text.alignment = TextAlignmentOptions.MidlineRight;
-                        I18n.ApplyFontIfRuntime(genUi.ValueLabelElement.text, sliderValText);
-                    }
+                    minVal = float.IsNaN(gen.Min) || float.IsInfinity(gen.Min) ? 0f : gen.Min;
+                    maxVal = float.IsNaN(gen.Max) || float.IsInfinity(gen.Max) ? (minVal + 100f) : gen.Max;
+                    if (maxVal <= minVal) maxVal = minVal + 1f;
 
-                    builder.AddSlider(gen.Min, gen.Max, currentFloat, (val) =>
+                    try { currentFloat = gen.PendingFloat ?? (gen.GetFloat?.Invoke() ?? minVal); }
+                    catch (Exception ex) { ModLogger.Debug($"GetFloat for '{gen.Id}' failed: {ex.Message}"); currentFloat = minVal; }
+
+                    if (float.IsNaN(currentFloat) || float.IsInfinity(currentFloat)) currentFloat = minVal;
+                    currentFloat = Mathf.Clamp(currentFloat, minVal, maxVal);
+
+                    try { sliderValText = UiLayoutAndFontHelper.FormatSliderValue(gen, currentFloat); }
+                    catch (Exception ex)
                     {
-                        gen.PendingFloat = val;
-                        genUi.ValueLabelElement?.SetText(UiLayoutAndFontHelper.FormatSliderValue(gen, val));
-                    }, gen.WholeNumbers, "slider_" + gen.Id);
-                    genUi.ControlElement = builder.Last;
-                    UiLayoutAndFontHelper.ConfigureFixedWidthControl(genUi.ControlElement, 242f, 30f);
+                        ModLogger.Debug($"FormatSliderValue for '{gen.Id}' failed: {ex.Message}");
+                        sliderValText = currentFloat.ToString();
+                    }
                     break;
 
                 case OptionKind.Dropdown:
-                    var choices = gen.GetChoices?.Invoke() ?? new List<string>();
-                    int currentIdx = gen.GetIndex?.Invoke() ?? 0;
-                    builder.AddDropdown(choices, currentIdx, (idx) =>
+                    try
                     {
-                        gen.PendingIndex = idx;
-                    }, "drop_" + gen.Id);
-                    genUi.ControlElement = builder.Last;
-                    UiLayoutAndFontHelper.ConfigureFixedWidthControl(genUi.ControlElement, 306f, 36f);
-                    bool isLangDrop = string.Equals(gen.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase);
-                    I18n.ApplyFontToDropdown(genUi.ControlElement, forceCjkCapableList: isLangDrop || I18n.IsChinese);
+                        var rawChoices = gen.GetChoices?.Invoke();
+                        if (rawChoices != null)
+                        {
+                            foreach (var c in rawChoices) choicesList.Add(c ?? string.Empty);
+                        }
+                    }
+                    catch (Exception ex) { ModLogger.Debug($"GetChoices for '{gen.Id}' failed: {ex.Message}"); }
+
+                    if (choicesList.Count == 0) choicesList.Add(I18n.Get("默认", "Default"));
+
+                    try { currentIdx = gen.PendingIndex ?? (gen.GetIndex?.Invoke() ?? 0); }
+                    catch (Exception ex) { ModLogger.Debug($"GetIndex for '{gen.Id}' failed: {ex.Message}"); currentIdx = 0; }
+
+                    if (currentIdx < 0 || currentIdx >= choicesList.Count) currentIdx = 0;
                     break;
 
                 case OptionKind.Input:
-                    string currentStr = gen.PendingString ?? (gen.GetString?.Invoke() ?? string.Empty);
-                    builder.AddInput(
-                        I18n.Get("输入内容...", "Enter text..."),
-                        currentStr,
-                        (val) =>
-                        {
-                            gen.PendingString = val ?? string.Empty;
-                        },
-                        "input_" + gen.Id,
-                        (val) =>
-                        {
-                            gen.PendingString = val ?? string.Empty;
-                        }
-                    );
-                    genUi.ControlElement = builder.Last;
-                    UiLayoutAndFontHelper.ConfigureSearchOrLongInputLayout(genUi.ControlElement, 306f, false);
-                    if (genUi.ControlElement?.input != null)
-                    {
-                        I18n.ApplyFontIfRuntime(genUi.ControlElement.input.textComponent, null);
-                        if (genUi.ControlElement.input.placeholder is TextMeshProUGUI phTmp)
-                        {
-                            I18n.ApplyFontIfRuntime(phTmp, phTmp.text);
-                        }
-                    }
+                    try { currentStr = gen.PendingString ?? (gen.GetString?.Invoke() ?? string.Empty); }
+                    catch (Exception ex) { ModLogger.Debug($"GetString for '{gen.Id}' failed: {ex.Message}"); currentStr = string.Empty; }
                     break;
             }
 
-            UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 10f);
-            builder.End();
+            // 2. 开始构建行，保证 try...finally { builder.End(); } 栈平衡
+            builder.BeginRow(6f, TextAnchor.MiddleLeft);
+            try
+            {
+                genUi.RowObject = builder.CurrentContainer.gameObject;
+                UiLayoutAndFontHelper.ConfigureStretchRowObject(genUi.RowObject, 34f);
+                UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 18f);
+
+                builder.AddLabel(labelText, "label_" + gen.Id);
+                if (gen.IsReadOnlyInfo)
+                {
+                    UiLayoutAndFontHelper.ConfigureWrappedDiagnosticLabel(builder.Last, labelText);
+                    UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 10f);
+                    return;
+                }
+
+                UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(builder.Last, labelText, minWidth: 200f, minHeight: 30f);
+                builder.AddFlexibleSpace();
+
+                switch (gen.Kind)
+                {
+                    case OptionKind.Toggle:
+                        builder.AddToggle(string.Empty, currentBool, (val) =>
+                        {
+                            gen.PendingBool = val;
+                            if (string.Equals(gen.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (gen.Id.EndsWith("show_top_search_bar", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    UpdateSelfModSearchBarChildInteractable(val);
+                                }
+                                else if (gen.Id.EndsWith("enable_search_debounce", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    UpdateSelfModDebounceInputInteractable(val);
+                                }
+                            }
+                        }, "toggle_" + gen.Id);
+                        genUi.ControlElement = builder.Last;
+                        if (string.Equals(gen.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            bool isParentBarEnabled = ModFeatureConfig.ShowTopSearchBar;
+                            if (gen.Id.EndsWith("show_search_scope_dropdown", StringComparison.OrdinalIgnoreCase) ||
+                                gen.Id.EndsWith("enable_search_debounce", StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (!isParentBarEnabled && genUi.ControlElement?.toggle != null)
+                                {
+                                    genUi.ControlElement.toggle.interactable = false;
+                                }
+                            }
+                        }
+                        break;
+
+                    case OptionKind.Slider:
+                        builder.AddLabel(sliderValText, "val_" + gen.Id);
+                        genUi.ValueLabelElement = builder.Last;
+                        UiLayoutAndFontHelper.ConfigureFixedWidthControl(genUi.ValueLabelElement, 58f, 30f);
+                        if (genUi.ValueLabelElement?.text != null)
+                        {
+                            genUi.ValueLabelElement.text.enableWordWrapping = false;
+                            genUi.ValueLabelElement.text.overflowMode = TextOverflowModes.Overflow;
+                            genUi.ValueLabelElement.text.alignment = TextAlignmentOptions.MidlineRight;
+                            I18n.ApplyFontIfRuntime(genUi.ValueLabelElement.text, sliderValText);
+                        }
+
+                        builder.AddSlider(minVal, maxVal, currentFloat, (val) =>
+                        {
+                            gen.PendingFloat = val;
+                            try { genUi.ValueLabelElement?.SetText(UiLayoutAndFontHelper.FormatSliderValue(gen, val)); }
+                            catch (Exception ex)
+                            {
+                                ModLogger.Debug($"Slider SetText for '{gen.Id}' failed: {ex.Message}");
+                            }
+                        }, gen.WholeNumbers, "slider_" + gen.Id);
+                        genUi.ControlElement = builder.Last;
+                        UiLayoutAndFontHelper.ConfigureFixedWidthControl(genUi.ControlElement, 242f, 30f);
+                        break;
+
+                    case OptionKind.Dropdown:
+                        builder.AddDropdown(choicesList, currentIdx, (idx) =>
+                        {
+                            gen.PendingIndex = idx;
+                        }, "drop_" + gen.Id);
+                        genUi.ControlElement = builder.Last;
+                        UiLayoutAndFontHelper.ConfigureFixedWidthControl(genUi.ControlElement, 306f, 36f);
+                        bool isLangDrop = string.Equals(gen.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase);
+                        I18n.ApplyFontToDropdown(genUi.ControlElement, forceCjkCapableList: isLangDrop || I18n.IsChinese);
+                        break;
+
+                    case OptionKind.Input:
+                        builder.AddInput(
+                            I18n.Get("输入内容...", "Enter text..."),
+                            currentStr,
+                            (val) => { gen.PendingString = val ?? string.Empty; },
+                            "input_" + gen.Id,
+                            (val) =>
+                            {
+                                if (string.Equals(gen.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
+                                    gen.Id.EndsWith("search_debounce_ms", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    int clamped = ModFeatureConfig.ParseAndClampDebounceMs(val);
+                                    gen.PendingString = clamped.ToString();
+                                    if (genUi.ControlElement?.input != null)
+                                    {
+                                        genUi.ControlElement.input.SetTextWithoutNotify(clamped.ToString());
+                                    }
+                                }
+                                else
+                                {
+                                    gen.PendingString = val ?? string.Empty;
+                                }
+                            }
+                        );
+                        genUi.ControlElement = builder.Last;
+                        bool isDebounceMs = string.Equals(gen.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase) &&
+                                            gen.Id.EndsWith(ModFeatureConfig.KeySearchDebounceMs, StringComparison.OrdinalIgnoreCase);
+                        if (isDebounceMs)
+                        {
+                            UiLayoutAndFontHelper.ConfigureFixedWidthControl(genUi.ControlElement, 92f, 32f);
+                            if (genUi.ControlElement?.input?.textComponent != null)
+                            {
+                                genUi.ControlElement.input.textComponent.alignment = TextAlignmentOptions.Center;
+                            }
+                        }
+                        else
+                        {
+                            UiLayoutAndFontHelper.ConfigureSearchOrLongInputLayout(genUi.ControlElement, 306f, false);
+                        }
+                        if (genUi.ControlElement?.input != null)
+                        {
+                            I18n.ApplyFontIfRuntime(genUi.ControlElement.input.textComponent, null);
+                            if (genUi.ControlElement.input.placeholder is TextMeshProUGUI phTmp)
+                            {
+                                I18n.ApplyFontIfRuntime(phTmp, phTmp.text);
+                            }
+                            if (isDebounceMs)
+                            {
+                                bool canInteract = ModFeatureConfig.ShowTopSearchBar && ModFeatureConfig.EnableSearchDebounce;
+                                genUi.ControlElement.input.interactable = canInteract;
+                            }
+                        }
+                        break;
+                }
+
+                UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 10f);
+            }
+            finally
+            {
+                builder.End();
+            }
+        }
+
+        private static void UpdateSelfModSearchBarChildInteractable(bool isBarEnabled)
+        {
+            if (UiSessionState.ModGroups == null) return;
+            var selfGroup = UiSessionState.ModGroups.Find(g => string.Equals(g.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase));
+            if (selfGroup == null) return;
+
+            bool isDebounceChecked = true;
+            for (int i = 0; i < selfGroup.GeneralSettings.Count; i++)
+            {
+                var gen = selfGroup.GeneralSettings[i];
+                if (gen == null) continue;
+                if (gen.Id.EndsWith("show_search_scope_dropdown", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (UiSessionState.TryGetGeneralUi(gen, out var ui) && ui.ControlElement?.toggle != null)
+                    {
+                        ui.ControlElement.toggle.interactable = isBarEnabled;
+                    }
+                }
+                else if (gen.Id.EndsWith("enable_search_debounce", StringComparison.OrdinalIgnoreCase))
+                {
+                    isDebounceChecked = gen.PendingBool ?? (gen.GetBool?.Invoke() ?? true);
+                    if (UiSessionState.TryGetGeneralUi(gen, out var ui) && ui.ControlElement?.toggle != null)
+                    {
+                        ui.ControlElement.toggle.interactable = isBarEnabled;
+                    }
+                }
+                else if (gen.Id.EndsWith("search_debounce_ms", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (UiSessionState.TryGetGeneralUi(gen, out var ui) && ui.ControlElement?.input != null)
+                    {
+                        ui.ControlElement.input.interactable = isBarEnabled && isDebounceChecked;
+                    }
+                }
+            }
+        }
+
+        private static void UpdateSelfModDebounceInputInteractable(bool isDebounceEnabled)
+        {
+            if (UiSessionState.ModGroups == null) return;
+            var selfGroup = UiSessionState.ModGroups.Find(g => string.Equals(g.ModId, I18n.ModId, StringComparison.OrdinalIgnoreCase));
+            if (selfGroup == null) return;
+
+            bool isBarEnabled = true;
+            for (int i = 0; i < selfGroup.GeneralSettings.Count; i++)
+            {
+                var gen = selfGroup.GeneralSettings[i];
+                if (gen != null && gen.Id.EndsWith("show_top_search_bar", StringComparison.OrdinalIgnoreCase))
+                {
+                    isBarEnabled = gen.PendingBool ?? (gen.GetBool?.Invoke() ?? true);
+                    break;
+                }
+            }
+
+            for (int i = 0; i < selfGroup.GeneralSettings.Count; i++)
+            {
+                var gen = selfGroup.GeneralSettings[i];
+                if (gen != null && gen.Id.EndsWith("search_debounce_ms", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (UiSessionState.TryGetGeneralUi(gen, out var ui) && ui.ControlElement?.input != null)
+                    {
+                        ui.ControlElement.input.interactable = isBarEnabled && isDebounceEnabled;
+                    }
+                }
+            }
         }
 
         internal static void BuildHotkeyRow(CustomUIBuilder builder, ModHotkeyEntry hotkey, bool isConflictRow = false)
         {
+            if (hotkey == null) return;
             var ui = UiSessionState.GetOrCreateHotkeyUi(hotkey);
-            builder.BeginRow(6f, TextAnchor.MiddleLeft);
-            var rowObj = builder.CurrentContainer.gameObject;
-            if (!isConflictRow)
-            {
-                ui.RowObject = rowObj;
-            }
-            UiLayoutAndFontHelper.ConfigureStretchRowObject(rowObj, 36f);
-            UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, isConflictRow ? 20f : 18f);
 
+            // 1. 在 BeginRow 之前安全求值
+            string keyText = string.Empty;
+            try { keyText = UiLayoutAndFontHelper.FormatHotkeyComboText(hotkey); }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"FormatHotkeyComboText for '{hotkey.Id}' failed: {ex.Message}");
+                keyText = "None";
+            }
+
+            string rowLabel = string.Empty;
             if (isConflictRow)
             {
-                string rowLabel = hotkey.IsReadOnlyProbed
+                rowLabel = hotkey.IsReadOnlyProbed
                     ? I18n.Get("<color=#d8b4fe>[探测·只读]</color> ", "<color=#d8b4fe>[Probed·Read-Only]</color> ") + $"[{hotkey.ModDisplayName}]  {hotkey.DisplayName}"
                     : $"[{hotkey.ModDisplayName}]  {hotkey.DisplayName}";
                 if (hotkey.IsReadOnlyProbed && !string.IsNullOrEmpty(hotkey.Tooltip))
                 {
                     string infoLink = "cg_modkey:" + hotkey.Id;
-                    TMPIconHover.CustomLinks[infoLink] = () => hotkey.Tooltip;
-                    rowLabel += $" <link=\"{infoLink}\"><sprite name=\"info\" tint=1></link>";
-                }
-                builder.AddLabel(rowLabel, "cg_label_" + hotkey.Id);
-                UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(builder.Last, rowLabel, minWidth: 200f, minHeight: 30f);
-
-                builder.AddFlexibleSpace();
-
-                string keyText = UiLayoutAndFontHelper.FormatHotkeyComboText(hotkey);
-                builder.AddButton(keyText, () =>
-                {
-                    if (!hotkey.IsReadOnlyProbed)
+                    TMPIconHover.CustomLinks[infoLink] = () =>
                     {
-                        KeyCaptureController.StartCaptureHotkey(hotkey);
-                    }
-                }, "cg_btn_" + hotkey.Id);
-
-                var btn = builder.Last;
-                ui.ConflictButtonElement = btn;
-                UiLayoutAndFontHelper.StyleHotkeyButton(btn);
-                if (hotkey.IsReadOnlyProbed && btn?.button != null)
-                {
-                    btn.button.interactable = false;
-                }
-                if (btn != null && UiSessionState.CapturingEntry != hotkey)
-                {
-                    UiLayoutAndFontHelper.ApplySingleButtonColor(btn, hotkey.EffectiveCombo, hotkey.IsReadOnlyProbed);
+                        try { return hotkey.Tooltip ?? string.Empty; }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"TMPIconHover infoLink for '{hotkey.Id}' tooltip error: {ex.Message}");
+                            return string.Empty;
+                        }
+                    };
+                    rowLabel += $" <link=\"{infoLink}\"><sprite name=\"info\" tint=1></link>";
                 }
             }
             else
             {
-                string hkLabel = UiLayoutAndFontHelper.BuildHotkeyLabelText(hotkey);
-                builder.AddLabel(hkLabel, "label_" + hotkey.Id);
-                ui.LabelElement = builder.Last;
-                UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(ui.LabelElement, hkLabel, minWidth: 200f, minHeight: 30f);
-
-                builder.AddFlexibleSpace();
-
-                string keyText = UiLayoutAndFontHelper.FormatHotkeyComboText(hotkey);
-                builder.AddButton(keyText, () =>
+                try { rowLabel = UiLayoutAndFontHelper.BuildHotkeyLabelText(hotkey); }
+                catch (Exception ex)
                 {
-                    if (!hotkey.IsReadOnlyProbed)
-                    {
-                        KeyCaptureController.StartCaptureHotkey(hotkey);
-                    }
-                }, "btn_key_" + hotkey.Id);
-
-                ui.ButtonElement = builder.Last;
-                UiLayoutAndFontHelper.StyleHotkeyButton(ui.ButtonElement);
-                if (hotkey.IsReadOnlyProbed && ui.ButtonElement?.button != null)
-                {
-                    ui.ButtonElement.button.interactable = false;
-                }
-
-                if (ui.ButtonElement != null && UiSessionState.CapturingEntry != hotkey)
-                {
-                    UiLayoutAndFontHelper.ApplySingleButtonColor(ui.ButtonElement, hotkey.EffectiveCombo, hotkey.IsReadOnlyProbed);
+                    ModLogger.Debug($"BuildHotkeyLabelText for '{hotkey.Id}' failed: {ex.Message}");
+                    rowLabel = hotkey.DisplayName ?? hotkey.Id;
                 }
             }
 
-            UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 10f);
-            builder.End();
+            // 2. 开始构建行，保证 try...finally { builder.End(); } 栈平衡
+            builder.BeginRow(6f, TextAnchor.MiddleLeft);
+            try
+            {
+                var rowObj = builder.CurrentContainer.gameObject;
+                if (!isConflictRow)
+                {
+                    ui.RowObject = rowObj;
+                }
+                UiLayoutAndFontHelper.ConfigureStretchRowObject(rowObj, 36f);
+                UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, isConflictRow ? 20f : 18f);
+
+                if (isConflictRow)
+                {
+                    builder.AddLabel(rowLabel, "cg_label_" + hotkey.Id);
+                    UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(builder.Last, rowLabel, minWidth: 200f, minHeight: 30f);
+
+                    builder.AddFlexibleSpace();
+
+                    builder.AddButton(keyText, () =>
+                    {
+                        if (!hotkey.IsReadOnlyProbed)
+                        {
+                            KeyCaptureController.StartCaptureHotkey(hotkey);
+                        }
+                    }, "cg_btn_" + hotkey.Id);
+
+                    var btn = builder.Last;
+                    ui.ConflictButtonElement = btn;
+                    UiLayoutAndFontHelper.StyleHotkeyButton(btn);
+                    if (hotkey.IsReadOnlyProbed && btn?.button != null)
+                    {
+                        btn.button.interactable = false;
+                    }
+                    if (btn != null && UiSessionState.CapturingEntry != hotkey)
+                    {
+                        try { UiLayoutAndFontHelper.ApplySingleButtonColor(btn, hotkey.EffectiveCombo, hotkey.IsReadOnlyProbed); }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"ApplySingleButtonColor conflict for '{hotkey.Id}' failed: {ex.Message}");
+                        }
+                    }
+                }
+                else
+                {
+                    builder.AddLabel(rowLabel, "label_" + hotkey.Id);
+                    ui.LabelElement = builder.Last;
+                    UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(ui.LabelElement, rowLabel, minWidth: 200f, minHeight: 30f);
+
+                    builder.AddFlexibleSpace();
+
+                    builder.AddButton(keyText, () =>
+                    {
+                        if (!hotkey.IsReadOnlyProbed)
+                        {
+                            KeyCaptureController.StartCaptureHotkey(hotkey);
+                        }
+                    }, "btn_key_" + hotkey.Id);
+
+                    ui.ButtonElement = builder.Last;
+                    UiLayoutAndFontHelper.StyleHotkeyButton(ui.ButtonElement);
+                    if (hotkey.IsReadOnlyProbed && ui.ButtonElement?.button != null)
+                    {
+                        ui.ButtonElement.button.interactable = false;
+                    }
+
+                    if (ui.ButtonElement != null && UiSessionState.CapturingEntry != hotkey)
+                    {
+                        try { UiLayoutAndFontHelper.ApplySingleButtonColor(ui.ButtonElement, hotkey.EffectiveCombo, hotkey.IsReadOnlyProbed); }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"ApplySingleButtonColor button for '{hotkey.Id}' failed: {ex.Message}");
+                        }
+                    }
+                }
+
+                UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 10f);
+            }
+            finally
+            {
+                builder.End();
+            }
         }
 
         private static KeyCode GetVanillaDefaultKey(GameOptionRegistry.Entry entry, ModHotkeyEntry? linked)

@@ -26,6 +26,17 @@ namespace ProbablyUnifiedHotkeys
         public static readonly Dictionary<string, (string Zh, string En)> KnownSectionTitleTable =
             new Dictionary<string, (string Zh, string En)>(StringComparer.OrdinalIgnoreCase)
             {
+                // 本模组 7 大分区标题
+                { "语言设置 / Language", ("语言设置", "Language") },
+                { "界面语言 / UI Language", ("界面语言", "UI Language") },
+                { "选项页面布局 / Options Page Layout", ("选项页面布局", "Options Page Layout") },
+                { "选项页顶部工具栏 / Options Top Toolbar", ("选项页顶部工具栏", "Options Top Toolbar") },
+                { "快捷键绑定规则 / Keybinding Rules", ("快捷键绑定规则", "Keybinding Rules") },
+                { "改造件页面设置 / Mods Page", ("改造件页面设置", "Mods Page") },
+                { "预载及退出加速 / Preload & Fast Exit", ("预载及退出加速", "Preload & Fast Exit") },
+                { "调试日志 / Debug Logging", ("调试日志", "Debug Logging") },
+                { "可选功能模块 / Modular Features", ("可选功能模块", "Modular Features") },
+
                 // 通用默认分类
                 { "General", ("常规", "General") },
                 { "Default", ("常规", "General") },
@@ -214,6 +225,15 @@ namespace ProbablyUnifiedHotkeys
                     return true;
                 }
 
+                // 1a-2. 若直查未命中且不以 "section_" 开头，补充尝试查询 "section_" + rawSection（精准覆盖 item_stacking 等模组的分类键）
+                if (!rawSection.StartsWith("section_", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TryLookupKeyInLocaleTables(loc, primaryCandidates, primaryPrefix, "section_" + rawSection, out resolved))
+                    {
+                        return true;
+                    }
+                }
+
                 // 1b. 反向对齐：若模组在 OnLoad 启动期（LocalizationSettings 尚未就绪或语言切换前）将英文/旧语言值写死进了 Section，
                 // 在所有语言表中反查 Value == rawSection 的对应 Key，再取出当前目标语言下的译文
                 string? matchedKey = null;
@@ -242,6 +262,96 @@ namespace ProbablyUnifiedHotkeys
             catch (Exception ex)
             {
                 ModLogger.Debug($"TryResolveFromModLocalization exception for '{rawSection}': {ex.Message}");
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 从模组 Localization 表中按当前语言依次查找配置项显示名称：
+        /// 依次查找 cfg_<entryKey>、config.<entryKey>、config_<entryKey>、<modId>.<entryKey>、<entryKey>
+        /// </summary>
+        public static bool TryResolveConfigLabelFromModLocalization(LoadedMod? mod, string? entryKey, out string resolved)
+        {
+            resolved = string.Empty;
+            if (mod == null || string.IsNullOrWhiteSpace(entryKey)) return false;
+            try
+            {
+                var loc = mod.Localization;
+                if (loc == null || loc.Count == 0) return false;
+
+                bool wantZh = BilingualText.IsChinese;
+                string[] primaryCandidates = wantZh ? ChineseLocaleCandidates : EnglishLocaleCandidates;
+                string primaryPrefix = wantZh ? "zh" : "en";
+                string modId = mod.Manifest?.ID ?? string.Empty;
+
+                string trimmedKey = entryKey!.Trim();
+                var candidateKeys = new List<string>(5)
+                {
+                    "cfg_" + trimmedKey,
+                    "config." + trimmedKey,
+                    "config_" + trimmedKey
+                };
+                if (!string.IsNullOrEmpty(modId))
+                {
+                    candidateKeys.Add(modId + "." + trimmedKey);
+                }
+                candidateKeys.Add(trimmedKey);
+
+                for (int i = 0; i < candidateKeys.Count; i++)
+                {
+                    if (TryLookupKeyInLocaleTables(loc, primaryCandidates, primaryPrefix, candidateKeys[i], out resolved))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"TryResolveConfigLabelFromModLocalization exception for '{entryKey}': {ex.Message}");
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 从模组 Localization 表中按当前语言依次查找配置项提示说明：
+        /// 依次查找 cfg_<entryKey>.tip、cfg_<entryKey>.tooltip、config.<entryKey>.tip、config.<entryKey>.tooltip、<entryKey>.tip、<entryKey>.tooltip、<entryKey>.desc
+        /// </summary>
+        public static bool TryResolveConfigTooltipFromModLocalization(LoadedMod? mod, string? entryKey, out string resolved)
+        {
+            resolved = string.Empty;
+            if (mod == null || string.IsNullOrWhiteSpace(entryKey)) return false;
+            try
+            {
+                var loc = mod.Localization;
+                if (loc == null || loc.Count == 0) return false;
+
+                bool wantZh = BilingualText.IsChinese;
+                string[] primaryCandidates = wantZh ? ChineseLocaleCandidates : EnglishLocaleCandidates;
+                string primaryPrefix = wantZh ? "zh" : "en";
+
+                string trimmedKey = entryKey!.Trim();
+                var candidateKeys = new string[]
+                {
+                    "cfg_" + trimmedKey + ".tip",
+                    "cfg_" + trimmedKey + ".tooltip",
+                    "config." + trimmedKey + ".tip",
+                    "config." + trimmedKey + ".tooltip",
+                    trimmedKey + ".tip",
+                    trimmedKey + ".tooltip",
+                    trimmedKey + ".desc"
+                };
+
+                for (int i = 0; i < candidateKeys.Length; i++)
+                {
+                    if (TryLookupKeyInLocaleTables(loc, primaryCandidates, primaryPrefix, candidateKeys[i], out resolved))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"TryResolveConfigTooltipFromModLocalization exception for '{entryKey}': {ex.Message}");
             }
             return false;
         }

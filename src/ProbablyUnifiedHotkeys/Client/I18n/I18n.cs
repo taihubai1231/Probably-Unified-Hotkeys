@@ -147,6 +147,16 @@ namespace ProbablyUnifiedHotkeys
             if (el?.dropdown == null) return;
             try
             {
+                // 统一优化所有下拉框列表的滚轮滚动灵敏度至 45f
+                if (el.dropdown.template != null)
+                {
+                    var scroll = el.dropdown.template.GetComponentInChildren<UnityEngine.UI.ScrollRect>(true);
+                    if (scroll != null)
+                    {
+                        scroll.scrollSensitivity = 45f;
+                    }
+                }
+
                 if (FontLoader.Instance == null) return;
                 var chineseFont = FontLoader.Instance.simplifiedChineseFont;
                 if (chineseFont == null) return;

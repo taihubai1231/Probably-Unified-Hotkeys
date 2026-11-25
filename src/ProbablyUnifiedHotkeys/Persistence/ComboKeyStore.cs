@@ -17,8 +17,14 @@ namespace ProbablyUnifiedHotkeys
         private const string ForcedHotkeysPrefsKey = "probably_unified_hotkeys.forced_hotkeys.v1";
         private const string IgnoredCandidatesPrefsKey = "probably_unified_hotkeys.ignored_candidates.v1";
         public const string ExplicitUnboundPrefsKey = "probably_unified_hotkeys.explicit_unbound.v1";
+        public const string CustomCardOrderPrefsKey = "probably_unified_hotkeys.card_custom_order.v1";
+        public const string ModEnabledOrderPrefsKey = "probably_unified_hotkeys.mod_enabled_order.v1";
+        public const string CardSortModePrefsKey = "probably_unified_hotkeys.card_sort_mode.v1";
 
         public static readonly HashSet<string> ExplicitUnboundHotkeys
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly HashSet<string> _suppressedSecondaryHotkeyIds
             = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private static readonly Dictionary<string, (KeyModifierMask Modifiers, KeyCode Key)> SavedCombos
@@ -1465,7 +1471,7 @@ namespace ProbablyUnifiedHotkeys
                 foreach (string id in candidateEntryIds)
                 {
                     if (string.IsNullOrEmpty(id)) continue;
-                    if (IsExplicitlyUnbound(id))
+                    if (IsExplicitlyUnbound(id) || IsSecondaryConflictingHotkeySuppressed(id))
                     {
                         key = KeyCode.None;
                         return;
@@ -1589,6 +1595,205 @@ namespace ProbablyUnifiedHotkeys
 
             string modStr = FormatModifiers(effectiveMods);
             return bitCount == 1 ? $"{modStr} + {keyName}" : $"{modStr}+{keyName}";
+        }
+
+        public static void RebuildConflictingOwnership(IEnumerable<ModHotkeyEntry>? allHotkeys)
+        {
+            _suppressedSecondaryHotkeyIds.Clear();
+            if (allHotkeys == null) return;
+
+            var primaryOwnerByCombo = new Dictionary<KeyCombo, string>();
+            foreach (var entry in allHotkeys)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.Id)) continue;
+                KeyCombo combo = entry.EffectiveCombo;
+                if (combo.IsEmpty) continue;
+
+                if (!primaryOwnerByCombo.ContainsKey(combo))
+                {
+                    primaryOwnerByCombo[combo] = entry.Id;
+                }
+                else
+                {
+                    _suppressedSecondaryHotkeyIds.Add(entry.Id);
+                }
+            }
+        }
+
+        public static bool IsSecondaryConflictingHotkeySuppressed(string hotkeyId)
+        {
+            if (ModFeatureConfig.AllowConflictingKeys) return false;
+            if (string.IsNullOrEmpty(hotkeyId)) return false;
+            return _suppressedSecondaryHotkeyIds.Contains(hotkeyId);
+        }
+
+        public static IReadOnlyList<string> GetSavedCustomCardOrder()
+        {
+            string raw = PrefsStorage.GetString(CustomCardOrderPrefsKey, string.Empty);
+            if (string.IsNullOrWhiteSpace(raw)) return Array.Empty<string>();
+            var parts = raw.Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries);
+            var list = new List<string>(parts.Length);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string id = parts[i].Trim();
+                if (!string.IsNullOrEmpty(id) && !list.Contains(id))
+                {
+                    list.Add(id);
+                }
+            }
+            return list;
+        }
+
+        public static void SetSavedCustomCardOrder(IEnumerable<string> orderedModIds)
+        {
+            if (orderedModIds == null) return;
+            var list = new List<string>();
+            foreach (string id in orderedModIds)
+            {
+                if (!string.IsNullOrWhiteSpace(id) && !list.Contains(id.Trim()))
+                {
+                    list.Add(id.Trim());
+                }
+            }
+            string joined = string.Join("|", list);
+            PrefsStorage.SetString(CustomCardOrderPrefsKey, joined);
+            PrefsStorage.Save();
+        }
+
+        public static ModCardSortMode GetSavedCardSortMode()
+        {
+            string raw = PrefsStorage.GetString(CardSortModePrefsKey, string.Empty);
+            return ModFeatureConfig.ParseCardSortMode(raw);
+        }
+
+        public static void SetSavedCardSortMode(ModCardSortMode mode)
+        {
+            string val = ModFeatureConfig.CardSortModeToChoiceValue(mode);
+            PrefsStorage.SetString(CardSortModePrefsKey, val);
+            PrefsStorage.Save();
+        }
+
+        public static Dictionary<string, int> UpdateAndGetRecentEnabledRanks(IEnumerable<string> currentlyEnabledModIds)
+        {
+            var rankMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (currentlyEnabledModIds == null) return rankMap;
+
+            string raw = PrefsStorage.GetString(ModEnabledOrderPrefsKey, string.Empty);
+            var orderList = new List<string>();
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                var parts = raw.Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries);
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string id = parts[i].Trim();
+                    if (!string.IsNullOrEmpty(id) && !orderList.Contains(id))
+                    {
+                        orderList.Add(id);
+                    }
+                }
+            }
+
+            bool changed = false;
+            foreach (string id in currentlyEnabledModIds)
+            {
+                if (string.IsNullOrWhiteSpace(id)) continue;
+                string cleanId = id.Trim();
+                if (!orderList.Contains(cleanId))
+                {
+                    orderList.Add(cleanId);
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                PrefsStorage.SetString(ModEnabledOrderPrefsKey, string.Join("|", orderList));
+                PrefsStorage.Save();
+            }
+
+            for (int i = 0; i < orderList.Count; i++)
+            {
+                rankMap[orderList[i]] = i;
+            }
+            return rankMap;
+        }
+
+        public static void SortModOptionGroups(
+            List<ModOptionGroup> groups,
+            ModCardSortMode sortMode,
+            IReadOnlyList<string>? customOrderOverride = null,
+            bool? pinOwnToTopOverride = null)
+        {
+            if (groups == null || groups.Count <= 1) return;
+
+            bool pinOwn = pinOwnToTopOverride ?? ModFeatureConfig.PinOwnCardToTop;
+
+            switch (sortMode)
+            {
+                case ModCardSortMode.PinyinAsc:
+                    groups.Sort((a, b) => string.Compare(a.PinyinSortKey, b.PinyinSortKey, StringComparison.OrdinalIgnoreCase));
+                    break;
+                case ModCardSortMode.PinyinDesc:
+                    groups.Sort((a, b) => string.Compare(b.PinyinSortKey, a.PinyinSortKey, StringComparison.OrdinalIgnoreCase));
+                    break;
+                case ModCardSortMode.HotkeyCountDesc:
+                    groups.Sort((a, b) =>
+                    {
+                        int cmp = b.Hotkeys.Count.CompareTo(a.Hotkeys.Count);
+                        if (cmp != 0) return cmp;
+                        return string.Compare(a.PinyinSortKey, b.PinyinSortKey, StringComparison.OrdinalIgnoreCase);
+                    });
+                    break;
+                case ModCardSortMode.GameLoadOrder:
+                    groups.Sort((a, b) =>
+                    {
+                        int cmp = a.LoadOrderIndex.CompareTo(b.LoadOrderIndex);
+                        if (cmp != 0) return cmp;
+                        return string.Compare(a.PinyinSortKey, b.PinyinSortKey, StringComparison.OrdinalIgnoreCase);
+                    });
+                    break;
+                case ModCardSortMode.RecentEnabled:
+                    groups.Sort((a, b) =>
+                    {
+                        int cmp = b.RecentEnabledRank.CompareTo(a.RecentEnabledRank);
+                        if (cmp != 0) return cmp;
+                        return string.Compare(a.PinyinSortKey, b.PinyinSortKey, StringComparison.OrdinalIgnoreCase);
+                    });
+                    break;
+                case ModCardSortMode.CustomOrder:
+                    var customList = customOrderOverride ?? GetSavedCustomCardOrder();
+                    var orderMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < customList.Count; i++)
+                    {
+                        orderMap[customList[i]] = i;
+                    }
+                    groups.Sort((a, b) =>
+                    {
+                        bool hasA = orderMap.TryGetValue(a.ModId, out int idxA);
+                        bool hasB = orderMap.TryGetValue(b.ModId, out int idxB);
+                        if (hasA && hasB) return idxA.CompareTo(idxB);
+                        if (hasA) return -1;
+                        if (hasB) return 1;
+                        int cmp = a.LoadOrderIndex.CompareTo(b.LoadOrderIndex);
+                        if (cmp != 0) return cmp;
+                        return string.Compare(a.PinyinSortKey, b.PinyinSortKey, StringComparison.OrdinalIgnoreCase);
+                    });
+                    break;
+                default:
+                    groups.Sort((a, b) => string.Compare(a.PinyinSortKey, b.PinyinSortKey, StringComparison.OrdinalIgnoreCase));
+                    break;
+            }
+
+            if (pinOwn)
+            {
+                int ownIdx = groups.FindIndex(g => string.Equals(g.ModId, ModFeatureConfig.ModId, StringComparison.OrdinalIgnoreCase));
+                if (ownIdx > 0)
+                {
+                    var ownGroup = groups[ownIdx];
+                    groups.RemoveAt(ownIdx);
+                    groups.Insert(0, ownGroup);
+                }
+            }
         }
     }
 }

@@ -13,6 +13,23 @@ namespace ProbablyUnifiedHotkeys
         Input
     }
 
+    public enum OptionDisplayLocation
+    {
+        MergedInOptions = 0,        // "merged"
+        StandaloneBottomButton = 1, // "standalone"
+        GearOnly = 2                // "gear_only"
+    }
+
+    public enum ModCardSortMode
+    {
+        PinyinAsc = 0,       // "pinyin_asc"
+        PinyinDesc = 1,      // "pinyin_desc"
+        CustomOrder = 2,     // "custom"
+        RecentEnabled = 3,   // "recent_enabled"
+        HotkeyCountDesc = 4, // "hotkey_count"
+        GameLoadOrder = 5    // "load_order"
+    }
+
     public enum SearchScope
     {
         All = 0,               // 整体搜索（模组名 + 按键 + 常规设置）
@@ -55,6 +72,8 @@ namespace ProbablyUnifiedHotkeys
         public string DisplayName { get; set; } = string.Empty;
         public string PinyinSortKey { get; set; } = string.Empty;
         public bool IsExpanded { get; set; } = false;
+        public int LoadOrderIndex { get; set; } = 0;
+        public int RecentEnabledRank { get; set; } = 0;
 
         public List<ModHotkeyEntry> Hotkeys { get; } = new List<ModHotkeyEntry>();
         public List<ModHotkeyEntry> ReadOnlyProbedHotkeys { get; } = new List<ModHotkeyEntry>();

@@ -10,7 +10,7 @@ namespace ProbablyUnifiedHotkeys
     public sealed class ProfileSnapshot
     {
         public string Schema { get; set; } = string.Empty;
-        public string Version { get; set; } = "1.5.0";
+        public string Version { get; set; } = "1.5.1";
         public string Name { get; set; } = string.Empty;
         public string Timestamp { get; set; } = string.Empty;
         public Dictionary<string, string> Hotkeys { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -18,6 +18,8 @@ namespace ProbablyUnifiedHotkeys
         public Dictionary<string, string> General { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public List<string> Forced { get; } = new List<string>();
         public List<string> Ignored { get; } = new List<string>();
+        public string? CardSortMode { get; set; }
+        public List<string>? CardOrder { get; set; }
     }
 
     /// <summary>
@@ -32,6 +34,16 @@ namespace ProbablyUnifiedHotkeys
         private const string ActiveSlotPrefKey = "probably_unified_hotkeys.profile_active_slot.v1";
         private const string SlotJsonPrefPrefix = "probably_unified_hotkeys.profile_slot_json.v1.";
         private const string SlotMetaPrefPrefix = "probably_unified_hotkeys.profile_slot_meta.v1.";
+
+        /// <summary>
+        /// 解耦委托：由外部按需注入额外的常规设置条目（如原版设置项），完全隔离 Persistence 对 GameOptionRegistry 的逆向依赖。
+        /// </summary>
+        public static Func<IEnumerable<KeyValuePair<string, string>>>? ExtraGeneralSettingsProvider { get; set; }
+
+        /// <summary>
+        /// 解耦委托：由外部按需注入额外常规设置项的还原逻辑。
+        /// </summary>
+        public static Action<string, string, bool>? ExtraGeneralSettingApplier { get; set; }
 
         private static int _activeSlotIndex = -1;
 
@@ -291,6 +303,7 @@ namespace ProbablyUnifiedHotkeys
                 {
                     var group = modGroups[g];
                     if (group == null) continue;
+
                     for (int i = 0; i < group.GeneralSettings.Count; i++)
                     {
                         var gen = group.GeneralSettings[i];
@@ -334,6 +347,35 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
+            // 4B. 逐项恢复外部注入的额外常规配置（若包含）
+            if (ExtraGeneralSettingApplier != null && snapshot.General != null)
+            {
+                try
+                {
+                    foreach (var kvp in snapshot.General)
+                    {
+                        if (string.IsNullOrEmpty(kvp.Key) || string.IsNullOrEmpty(kvp.Value)) continue;
+                        ExtraGeneralSettingApplier(kvp.Key, kvp.Value, applyToUnderlying);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"Failed to apply extra general setting: {ex.Message}");
+                }
+            }
+
+            // 5. 还原卡片排序偏好与自由排列顺序（若方案中包含）
+            if (!string.IsNullOrEmpty(snapshot.CardSortMode))
+            {
+                var sortMode = ModFeatureConfig.ParseCardSortMode(snapshot.CardSortMode);
+                ModFeatureConfig.SetCardSortMode(sortMode);
+            }
+            if (snapshot.CardOrder != null && snapshot.CardOrder.Count > 0)
+            {
+                ComboKeyStore.SetSavedCustomCardOrder(snapshot.CardOrder);
+                ComboKeyStore.Save();
+            }
+
             return true;
         }
 
@@ -352,7 +394,7 @@ namespace ProbablyUnifiedHotkeys
             var sb = new StringBuilder(4096);
             sb.Append('{');
             AppendJsonKeyVal(sb, "schema", SchemaId, first: true);
-            AppendJsonKeyVal(sb, "version", "1.5.0", first: false);
+            AppendJsonKeyVal(sb, "version", "1.5.1", first: false);
             AppendJsonKeyVal(sb, "name", profileName ?? "Custom", first: false);
             AppendJsonKeyVal(sb, "timestamp", timestamp, first: false);
 
@@ -401,6 +443,7 @@ namespace ProbablyUnifiedHotkeys
                 {
                     var group = modGroups[g];
                     if (group == null) continue;
+
                     for (int i = 0; i < group.GeneralSettings.Count; i++)
                     {
                         var gen = group.GeneralSettings[i];
@@ -416,6 +459,32 @@ namespace ProbablyUnifiedHotkeys
                     }
                 }
             }
+
+            // 3B. 补充外部注入的额外常规设置（如原版设置项）
+            if (ExtraGeneralSettingsProvider != null)
+            {
+                try
+                {
+                    var extraEntries = ExtraGeneralSettingsProvider();
+                    if (extraEntries != null)
+                    {
+                        foreach (var kvp in extraEntries)
+                        {
+                            if (string.IsNullOrEmpty(kvp.Key) || string.IsNullOrEmpty(kvp.Value)) continue;
+                            if (!seenGenIds.Add(kvp.Key)) continue;
+
+                            AppendJsonKeyVal(sb, kvp.Key, kvp.Value, firstGen);
+                            firstGen = false;
+                            genCount++;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"Failed to serialize extra general settings: {ex.Message}");
+                }
+            }
+
             sb.Append('}');
 
             // 4. Forced Hotkey Table
@@ -438,6 +507,44 @@ namespace ProbablyUnifiedHotkeys
             }
             sb.Append(']');
 
+            // 6. Card Sort Mode & Custom Order
+            var sortModeStr = ModFeatureConfig.CardSortModeToChoiceValue(ModFeatureConfig.CardSortMode);
+            AppendJsonKeyVal(sb, "sortMode", sortModeStr, first: false);
+
+            List<string>? orderToSave = null;
+            if (modGroups != null && modGroups.Count > 0)
+            {
+                orderToSave = new List<string>(modGroups.Count);
+                for (int i = 0; i < modGroups.Count; i++)
+                {
+                    var g = modGroups[i];
+                    if (g != null && !string.IsNullOrEmpty(g.ModId) && !orderToSave.Contains(g.ModId))
+                    {
+                        orderToSave.Add(g.ModId);
+                    }
+                }
+            }
+
+            if (orderToSave == null || orderToSave.Count == 0)
+            {
+                var savedCustom = ComboKeyStore.GetSavedCustomCardOrder();
+                if (savedCustom != null && savedCustom.Count > 0)
+                {
+                    orderToSave = new List<string>(savedCustom);
+                }
+            }
+
+            if (orderToSave != null && orderToSave.Count > 0)
+            {
+                sb.Append(",\"cardOrder\":[");
+                for (int i = 0; i < orderToSave.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    AppendJsonString(sb, orderToSave[i]);
+                }
+                sb.Append(']');
+            }
+
             sb.Append('}');
             return sb.ToString();
         }
@@ -448,7 +555,7 @@ namespace ProbablyUnifiedHotkeys
             var sb = new StringBuilder(4096);
             sb.Append('{');
             AppendJsonKeyVal(sb, "schema", string.IsNullOrEmpty(snapshot.Schema) ? SchemaId : snapshot.Schema, first: true);
-            AppendJsonKeyVal(sb, "version", string.IsNullOrEmpty(snapshot.Version) ? "1.5.0" : snapshot.Version, first: false);
+            AppendJsonKeyVal(sb, "version", string.IsNullOrEmpty(snapshot.Version) ? "1.5.1" : snapshot.Version, first: false);
             AppendJsonKeyVal(sb, "name", snapshot.Name ?? "Custom", first: false);
             AppendJsonKeyVal(sb, "timestamp", snapshot.Timestamp ?? string.Empty, first: false);
 
@@ -512,6 +619,21 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
             sb.Append(']');
+
+            if (!string.IsNullOrEmpty(snapshot.CardSortMode))
+            {
+                AppendJsonKeyVal(sb, "sortMode", snapshot.CardSortMode, first: false);
+            }
+            if (snapshot.CardOrder != null && snapshot.CardOrder.Count > 0)
+            {
+                sb.Append(",\"cardOrder\":[");
+                for (int i = 0; i < snapshot.CardOrder.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    AppendJsonString(sb, snapshot.CardOrder[i]);
+                }
+                sb.Append(']');
+            }
 
             sb.Append('}');
             return sb.ToString();
@@ -653,6 +775,16 @@ namespace ProbablyUnifiedHotkeys
                     else if (string.Equals(key, "ignored", StringComparison.OrdinalIgnoreCase))
                     {
                         ReadJsonStringArray(json, ref pos, parsed.Ignored);
+                    }
+                    else if (string.Equals(key, "sortMode", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (TryReadJsonString(json, ref pos, out string v)) parsed.CardSortMode = v;
+                        else SkipJsonValue(json, ref pos);
+                    }
+                    else if (string.Equals(key, "cardOrder", StringComparison.OrdinalIgnoreCase))
+                    {
+                        parsed.CardOrder = new List<string>();
+                        ReadJsonStringArray(json, ref pos, parsed.CardOrder);
                     }
                     else
                     {

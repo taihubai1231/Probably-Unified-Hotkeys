@@ -22,16 +22,68 @@ namespace ProbablyUnifiedHotkeys
         private static readonly Stopwatch PrebuildStopwatch = new Stopwatch();
         private static readonly Color CapturePromptColor = new Color(0.4f, 0.8f, 1f, 1f);
 
-        private static string CapturePrompt => I18n.Get("请按键... (Esc=无)", "Press key... (Esc=None)");
+        private static string CapturePrompt => ModFeatureConfig.EnableEmptyKeyUnbind
+            ? I18n.Get("请按键... (Esc=空键)", "Press key... (Esc=None)")
+            : I18n.Get("请按键... (Esc=取消)", "Press key... (Esc=Cancel)");
+
+        private static string GetDynamicCaptureStatusPrompt(ModHotkeyEntry entry)
+        {
+            bool combos = entry.SupportsModifierCombos && ModFeatureConfig.EnableComboKeyBind;
+            bool mouse = ModFeatureConfig.EnableMouseButtonRebind;
+            bool unbind = ModFeatureConfig.EnableEmptyKeyUnbind;
+
+            string supportText;
+            if (combos && mouse)
+                supportText = I18n.Get("支持组合键、鼠标右键与侧键", "combos, right click & side buttons supported");
+            else if (combos && !mouse)
+                supportText = I18n.Get("支持组合键", "combos supported");
+            else if (!combos && mouse)
+                supportText = I18n.Get("支持键盘单键、鼠标右键与侧键", "single keys, right click & side buttons supported");
+            else
+                supportText = I18n.Get("仅支持键盘单键", "single keys only");
+
+            string escText = unbind
+                ? I18n.Get("按 Esc 清空解绑", "Esc to clear")
+                : I18n.Get("按 Esc 取消", "Esc to cancel");
+
+            string cancelText = mouse
+                ? I18n.Get("左键取消", "Left click to cancel")
+                : I18n.Get("左键或右键取消", "click to cancel");
+
+            return I18n.Format(
+                "正在为 [{0}: {1}] 绑定按键（{2}；{3}，{4}）",
+                "Binding [{0}: {1}] ({2}; {3}, {4})",
+                entry.ModDisplayName, entry.DisplayName, supportText, escText, cancelText);
+        }
 
         /// <summary>
         /// 开启原版原生设置项的按键录制。
         /// </summary>
         internal static bool StartCaptureVanillaOption(GameOptionUIManager manager, string optionId)
         {
-            if (UiSessionState.CurrentWindow == null || UiSessionState.CurrentManager != manager || string.IsNullOrEmpty(optionId))
+            if (ModFeatureConfig.DisplayLocation == OptionDisplayLocation.GearOnly)
             {
                 return false;
+            }
+
+            var activeWin = UiSessionState.CurrentWindow ?? UiSessionState.VanillaStandaloneWindow;
+            if (activeWin == null || string.IsNullOrEmpty(optionId))
+            {
+                return false;
+            }
+            if (UiSessionState.CurrentManager == null)
+            {
+                UiSessionState.CurrentManager = manager;
+            }
+            else if (UiSessionState.CurrentManager != manager)
+            {
+                return false;
+            }
+
+            if (UiSessionState.AllHotkeys == null || UiSessionState.AllHotkeys.Count == 0)
+            {
+                UiSessionState.ModGroups = ModCatalogCache.GetOrScanGroups(out var scannedHotkeys, out UiSessionState.ScanReport);
+                UiSessionState.AllHotkeys = scannedHotkeys;
             }
 
             var vanillaEntry = UiSessionState.AllHotkeys.Find(h =>
@@ -69,10 +121,11 @@ namespace ProbablyUnifiedHotkeys
 
             KeyBindHelper.StopCapture();
 
-            if (UiSessionState.CapturingEntry == null && UiSessionState.CurrentWindow != null)
+            var activeWin = UiSessionState.CurrentWindow ?? UiSessionState.VanillaStandaloneWindow;
+            if (UiSessionState.CapturingEntry == null && activeWin != null)
             {
-                UiSessionState.CloseOnEscapeBeforeCapture = UiSessionState.CurrentWindow.closeOnEscape;
-                UiSessionState.CurrentWindow.closeOnEscape = false;
+                UiSessionState.CloseOnEscapeBeforeCapture = activeWin.closeOnEscape;
+                activeWin.closeOnEscape = false;
             }
 
             UiSessionState.CapturingEntry = entry;
@@ -86,15 +139,7 @@ namespace ProbablyUnifiedHotkeys
 
             if (UiSessionState.CurrentManager != null)
             {
-                string statusPrompt = entry.SupportsModifierCombos
-                    ? I18n.Format(
-                        "正在为 [{0}: {1}] 绑定按键 (支持组合键与鼠标侧键；按 Esc 设为空，左键取消)",
-                        "Binding [{0}: {1}] (combos & side buttons supported; Esc to clear, Left click to cancel)",
-                        entry.ModDisplayName, entry.DisplayName)
-                    : I18n.Format(
-                        "正在为 [{0}: {1}] 绑定按键 (支持单键与鼠标侧键；按 Esc 设为空，左键取消；此模组暂不支持组合键前缀)",
-                        "Binding [{0}: {1}] (single key & side buttons; Esc to clear, Left click to cancel; no modifier combos)",
-                        entry.ModDisplayName, entry.DisplayName);
+                string statusPrompt = GetDynamicCaptureStatusPrompt(entry);
                 UiSessionState.SetKeyBindStatusDelegate?.Invoke(UiSessionState.CurrentManager, statusPrompt);
             }
         }
@@ -117,7 +162,8 @@ namespace ProbablyUnifiedHotkeys
 
             if (entry.ModId == "vanilla" && !string.IsNullOrEmpty(entry.RawOptionId))
             {
-                var vanillaEl = UiSessionState.CurrentWindow?.Get(entry.RawOptionId);
+                var activeWin = UiSessionState.CurrentWindow ?? UiSessionState.VanillaStandaloneWindow;
+                var vanillaEl = activeWin?.Get(entry.RawOptionId);
                 if (vanillaEl != null)
                 {
                     UiLayoutAndFontHelper.SetButtonTextFast(vanillaEl, text);
@@ -132,6 +178,7 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static void PrebuildNextCollapsedModCard()
         {
+            if (!ModFeatureConfig.EnableBackgroundCardPrebuild) return;
             if (UiSessionState.CurrentWindow == null || UiSessionState.IsConflictViewActive || UiSessionState.IsDiagnosticViewActive || UiSessionState.CapturingEntry != null || UiSessionState.PendingScrollTarget != null || !string.IsNullOrWhiteSpace(UiSessionState.SearchQuery) || TopSearchAndActionBar.HasPendingProgressiveExpand)
             {
                 return;
@@ -201,18 +248,32 @@ namespace ProbablyUnifiedHotkeys
             // 延迟恢复关闭窗口的 Esc 权限，防止解绑当帧窗口意外关闭
             if (UiSessionState.CapturingEntry == null && UiSessionState.RestoreCloseOnEscapeFrame >= 0 && Time.frameCount >= UiSessionState.RestoreCloseOnEscapeFrame)
             {
-                if (UiSessionState.CurrentWindow != null)
+                var activeWin = UiSessionState.CurrentWindow ?? UiSessionState.VanillaStandaloneWindow;
+                if (activeWin != null)
                 {
-                    UiSessionState.CurrentWindow.closeOnEscape = UiSessionState.CloseOnEscapeBeforeCapture;
+                    activeWin.closeOnEscape = UiSessionState.CloseOnEscapeBeforeCapture;
                 }
                 UiSessionState.RestoreCloseOnEscapeFrame = -1;
             }
 
             // 正在录制按键或刚完成按键录制的缓冲帧内：由 Patch_CustomUIManager_HandleEscape 保证不触发未保存 Esc 弹窗
-            if (UiSessionState.CapturingEntry == null && UiSessionState.CurrentWindow != null && UiSessionState.CurrentWindow.IsAlive && UiSessionState.CurrentWindow.IsVisible && UiSessionState.RestoreCloseOnEscapeFrame < 0)
+            var targetWin = UiSessionState.CurrentWindow ?? UiSessionState.VanillaStandaloneWindow;
+            if (UiSessionState.CapturingEntry == null && targetWin != null && targetWin.IsAlive && targetWin.IsVisible && UiSessionState.RestoreCloseOnEscapeFrame < 0)
             {
-                bool isStoreUi = StoreUIManager.Instance != null;
-                UiSessionState.CurrentWindow.closeOnEscape = !isStoreUi;
+                if (targetWin == UiSessionState.VanillaStandaloneWindow)
+                {
+                    bool isStoreUi = StoreUIManager.Instance != null;
+                    targetWin.closeOnEscape = !isStoreUi;
+                }
+                else if (UiSessionState.IsStandaloneModWindowOpen)
+                {
+                    targetWin.closeOnEscape = true;
+                }
+                else
+                {
+                    bool isStoreUi = StoreUIManager.Instance != null;
+                    targetWin.closeOnEscape = !isStoreUi;
+                }
             }
 
             if (UiSessionState.CapturingEntry == null) return;
@@ -224,21 +285,29 @@ namespace ProbablyUnifiedHotkeys
                 UiSessionState.WaitingMouseRelease = false;
             }
 
-            bool allowCombos = UiSessionState.CapturingEntry.SupportsModifierCombos;
+            bool allowCombos = UiSessionState.CapturingEntry.SupportsModifierCombos && ModFeatureConfig.EnableComboKeyBind;
+            bool allowMouseRebind = ModFeatureConfig.EnableMouseButtonRebind;
             KeyModifierMask heldModifiers = allowCombos ? ComboKeyStore.GetHeldModifiersMask() : KeyModifierMask.None;
 
-            // 1. 仅 Esc 用于解除绑定（清空为无），Backspace 与 Delete 均作为普通可绑定按键
+            // 1. Esc 解绑/取消判定
             if (Input.GetKeyDown(KeyCode.Escape))
             {
                 UiSessionState.MarkEscapeConsumed();
-                FinishCapture(KeyModifierMask.None, KeyCode.None, fromMouseClick: false);
+                if (ModFeatureConfig.EnableEmptyKeyUnbind)
+                {
+                    FinishCapture(KeyModifierMask.None, KeyCode.None, fromMouseClick: false);
+                }
+                else
+                {
+                    CancelCapture(fromMouseClick: false);
+                }
                 return;
             }
 
-            // 2. 鼠标按键优先轮询（ADR-010 核心契约：无修饰左键取消，右键直接绑定，修饰键+左键绑定）
+            // 2. 鼠标按键轮询（根据 EnableMouseButtonRebind 开关决定右键直接绑定还是取消）
             if (Input.GetMouseButtonDown(0))
             {
-                if (heldModifiers == KeyModifierMask.None)
+                if (heldModifiers == KeyModifierMask.None || !allowCombos || !allowMouseRebind)
                 {
                     CancelCapture(fromMouseClick: true);
                 }
@@ -251,45 +320,71 @@ namespace ProbablyUnifiedHotkeys
 
             if (Input.GetMouseButtonDown(1))
             {
-                FinishCapture(heldModifiers, KeyCode.Mouse1, fromMouseClick: true);
+                if (allowMouseRebind)
+                {
+                    FinishCapture(heldModifiers, KeyCode.Mouse1, fromMouseClick: true);
+                }
+                else
+                {
+                    CancelCapture(fromMouseClick: true);
+                }
                 return;
             }
 
-            for (int btn = 2; btn <= 6; btn++)
+            if (allowMouseRebind)
             {
-                KeyCode mk = KeyCode.Mouse0 + btn;
-                if (ComboKeyStore.IsKeyDownRaw(mk))
+                for (int btn = 2; btn <= 6; btn++)
                 {
-                    FinishCapture(heldModifiers, mk, fromMouseClick: false);
-                    return;
+                    KeyCode mk = KeyCode.Mouse0 + btn;
+                    if (ComboKeyStore.IsKeyDownRaw(mk))
+                    {
+                        FinishCapture(heldModifiers, mk, fromMouseClick: false);
+                        return;
+                    }
                 }
             }
 
             // 3. 修饰键追踪（允许按住 Shift/Ctrl/Alt 等等待主键，或单击松开绑为独立修饰键）
-            foreach (KeyCode modKey in TrackedModifierKeys)
+            if (allowCombos)
             {
-                if (Input.GetKeyDown(modKey))
+                foreach (KeyCode modKey in TrackedModifierKeys)
                 {
-                    if (UiSessionState.PendingStandaloneModifier == KeyCode.None)
+                    if (Input.GetKeyDown(modKey))
                     {
-                        UiSessionState.PendingStandaloneModifier = modKey;
-                        UiSessionState.HadMultipleModifiers = false;
+                        if (UiSessionState.PendingStandaloneModifier == KeyCode.None)
+                        {
+                            UiSessionState.PendingStandaloneModifier = modKey;
+                            UiSessionState.HadMultipleModifiers = false;
+                        }
+                        else if (UiSessionState.PendingStandaloneModifier != modKey)
+                        {
+                            UiSessionState.HadMultipleModifiers = true;
+                        }
                     }
-                    else if (UiSessionState.PendingStandaloneModifier != modKey)
-                    {
-                        UiSessionState.HadMultipleModifiers = true;
-                    }
+                }
+
+                if (((int)heldModifiers & ((int)heldModifiers - 1)) != 0)
+                {
+                    UiSessionState.HadMultipleModifiers = true;
                 }
             }
 
-            if (((int)heldModifiers & ((int)heldModifiers - 1)) != 0)
-            {
-                UiSessionState.HadMultipleModifiers = true;
-            }
-
-            // 4. 常规非修饰键盘主键轮询（使用静态预筛选键值表，零 GC 分配）
+            // 4. 常规键盘按键轮询（使用静态预筛选键值表，零 GC 分配）
             if (Input.anyKeyDown)
             {
+                if (!allowCombos)
+                {
+                    // 当关闭组合键时，修饰键亦作为普通单键直接录入
+                    foreach (KeyCode modKey in TrackedModifierKeys)
+                    {
+                        if (Input.GetKeyDown(modKey))
+                        {
+                            FinishCapture(KeyModifierMask.None, modKey, fromMouseClick: false);
+                            return;
+                        }
+                    }
+                }
+
                 for (int i = 0; i < UiSessionState.BindableKeyboardKeys.Length; i++)
                 {
                     KeyCode kc = UiSessionState.BindableKeyboardKeys[i];
@@ -303,12 +398,12 @@ namespace ProbablyUnifiedHotkeys
             }
 
             // 5. 若按住修饰键后未按主键而松开：仅单修饰键点按才回落绑定该修饰键自身（保留如 LeftAlt 单独快移）
-            if (UiSessionState.PendingStandaloneModifier != KeyCode.None && Input.GetKeyUp(UiSessionState.PendingStandaloneModifier))
+            if (allowCombos && UiSessionState.PendingStandaloneModifier != KeyCode.None && Input.GetKeyUp(UiSessionState.PendingStandaloneModifier))
             {
                 KeyCode standalone = UiSessionState.PendingStandaloneModifier;
                 UiSessionState.PendingStandaloneModifier = KeyCode.None;
 
-                KeyModifierMask afterMods = allowCombos ? ComboKeyStore.GetHeldModifiersMask() : KeyModifierMask.None;
+                KeyModifierMask afterMods = ComboKeyStore.GetHeldModifiersMask();
                 if (!UiSessionState.HadMultipleModifiers && afterMods == KeyModifierMask.None)
                 {
                     FinishCapture(KeyModifierMask.None, standalone, fromMouseClick: false);
@@ -328,7 +423,7 @@ namespace ProbablyUnifiedHotkeys
             }
 
             // 实时显示当前按住的修饰键前缀
-            if (heldModifiers != KeyModifierMask.None)
+            if (allowCombos && heldModifiers != KeyModifierMask.None)
             {
                 SetCapturingEntryDisplayText(UiSessionState.CapturingEntry, ComboKeyStore.FormatModifiers(heldModifiers) + "...");
             }
@@ -346,6 +441,32 @@ namespace ProbablyUnifiedHotkeys
             UiSessionState.CancelCapture(fromMouseClick);
         }
 
+        private static ModHotkeyEntry? FindExistingComboOwner(ModHotkeyEntry current, KeyModifierMask mods, KeyCode key)
+        {
+            if (key == KeyCode.None || UiSessionState.AllHotkeys == null) return null;
+
+            for (int i = 0; i < UiSessionState.AllHotkeys.Count; i++)
+            {
+                var other = UiSessionState.AllHotkeys[i];
+                if (other == null || other == current || other.IsReadOnlyProbed) continue;
+
+                KeyCode otherKey = other.HasPendingChange ? other.PendingKey : (other.GetKey?.Invoke() ?? KeyCode.None);
+                if (otherKey == KeyCode.None) continue;
+
+                KeyModifierMask otherMods = other.HasPendingChange
+                    ? other.PendingModifiers
+                    : (other.GetExternalModifiers != null
+                        ? other.GetExternalModifiers.Invoke()
+                        : ComboKeyStore.GetSavedModifiers(other.Id, otherKey));
+
+                if (otherKey == key && otherMods == mods)
+                {
+                    return other;
+                }
+            }
+            return null;
+        }
+
         /// <summary>
         /// 确认完成按键捕获并更新待保存数据。
         /// </summary>
@@ -355,6 +476,25 @@ namespace ProbablyUnifiedHotkeys
 
             var entry = UiSessionState.CapturingEntry;
             if (!entry.SupportsModifierCombos) newMods = KeyModifierMask.None;
+
+            if (!ModFeatureConfig.AllowConflictingKeys && newKey != KeyCode.None)
+            {
+                var conflictOwner = FindExistingComboOwner(entry, newMods, newKey);
+                if (conflictOwner != null)
+                {
+                    string conflictPrompt = I18n.Format(
+                        "绑定失败：按键与 [{0}: {1}] 冲突，已开启严格唯一模式",
+                        "Binding failed: conflicts with [{0}: {1}] (unique keybinds only)",
+                        conflictOwner.ModDisplayName, conflictOwner.DisplayName);
+                    if (UiSessionState.CurrentManager != null)
+                    {
+                        UiSessionState.SetKeyBindStatusDelegate?.Invoke(UiSessionState.CurrentManager, conflictPrompt);
+                    }
+                    CancelCapture(fromMouseClick);
+                    return;
+                }
+            }
+
             entry.PendingModifiers = newKey == KeyCode.None ? KeyModifierMask.None : newMods;
             entry.PendingKey = newKey;
 
@@ -407,6 +547,16 @@ namespace ProbablyUnifiedHotkeys
             UiSessionState.RefreshConflicts();
             ConflictAggregationView.RefreshConflicts();
             UiLayoutAndFontHelper.UpdateHotkeyButtonVisual(entry);
+            if (UiSessionState.VanillaStandaloneWindow != null && UiSessionState.VanillaStandaloneWindow.IsAlive && entry.ModId == "vanilla" && !string.IsNullOrEmpty(entry.RawOptionId))
+            {
+                var vanillaEl = UiSessionState.VanillaStandaloneWindow.Get(entry.RawOptionId);
+                if (vanillaEl != null)
+                {
+                    UiLayoutAndFontHelper.StyleNativeWidthButton(vanillaEl, 160f);
+                    UiLayoutAndFontHelper.SetButtonTextFast(vanillaEl, UiLayoutAndFontHelper.FormatHotkeyComboText(entry));
+                    UiLayoutAndFontHelper.ApplySingleButtonColor(vanillaEl, entry.EffectiveCombo, entry.IsReadOnlyProbed);
+                }
+            }
             if (UiSessionState.CurrentManager != null)
             {
                 UiSessionState.SetKeyBindStatusDelegate?.Invoke(UiSessionState.CurrentManager, string.Empty);

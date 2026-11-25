@@ -3,32 +3,34 @@
   <ID>probably_unified_hotkeys</ID>
   <Name>可能是按键统一优化 / Probably Unified Hotkeys</Name>
   <Author>太湖白1231</Author>
-  <ModVersion>1.5.0</ModVersion>
-  <Description>将《深空当铺》原版与工坊模组的快捷键、常规设置合并至官方 ESC「选项」页。
+  <ModVersion>1.5.1</ModVersion>
+  <Description>将《深空当铺》原版与工坊模组的快捷键、常规设置合并至官方 ESC「选项」页，支持多种界面形态切换与自由设置。
 【操作说明】
-• 按 ESC 打开「选项」；点击按键录入（支持鼠标右键与侧键以及组合键），按 Esc 设为「无」，左键取消。
-• 修改后点击底部「应用」保存；展开本模组卡片内置「方案一/二/三」与剪贴板导入导出。
+• 按 ESC 打开「选项」，在独立界面模式下可点击原版选项页左下角入口打开模组设置；点击目标按键直接录入，支持组合键、鼠标右键与侧键，按 Esc 设为「无」，单击鼠标左键取消。
+• 修改后点击底部的「应用」保存生效；展开本模组卡片可使用 3 套本地预设槽位与剪贴板导入导出。
 【主要功能】
-• 统一视图：按分区折叠卡片，支持原版样式与一键「恢复默认」。
+• 统一视图：按分区折叠卡片，支持原版样式与一键「恢复默认」；支持合并至原版、模组独立界面与纯原版界面三种形态自由切换。
+• 自由排布：按住卡片即可拖动调整顺序，内置 6 种卡片排序方式，排布顺序随预设方案同步保存。
 • 按键增强：支持 Shift / Ctrl / Alt 组合键、鼠标右键与侧键（Mouse1~6）及空键解绑（按 Esc 设为「无」）。
 • 快速检索：支持简繁中英、多音字与拼音搜索，自带 [!] 冲突集中筛选。
 • 方案快照：展开本模组卡片提供 3 套本地预设槽位与剪贴板导入导出。
 • 便捷反馈：支持顶部「模组排查」一键复制汇总。
-• 流畅响应：选项页面单帧响应，改造件模组封面本地秒开，退出游戏与返回主菜单加速。
+• 流畅响应：优化选项页面打开速度，改造件模组封面显示加速，退出游戏与返回主菜单加速。
 
 ---
 
-Merges vanilla and workshop mod hotkeys and settings into the official ESC "Options" menu.
+Merges vanilla and workshop mod hotkeys and settings into the official ESC "Options" menu, with customizable layout modes.
 [Usage]
-• Press ESC to open "Options"; click any key to rebind (supports right click, side buttons, and combos), press Esc to set to "None", left-click to cancel.
-• Click "Apply" at the bottom to save; expand this mod card for Preset Slots 1/2/3 and clipboard import/export.
+• Press ESC to open "Options" or use the bottom-left entry in standalone mode; click any key to rebind (supports combos, right click and side buttons), press Esc to set to "None", left-click to cancel.
+• Click "Apply" at the bottom to save; expand this mod card for 3 preset slots and clipboard import/export.
 [Features]
-• Unified View: Collapsible cards matching native style with per-section "Reset to Default".
+• Unified View: Collapsible cards matching native style with per-section "Reset to Default"; switch freely between Merged, Standalone, and Vanilla-only display layouts.
+• Flexible Ordering: Drag cards to reorder with 6 built-in sort modes, saved with profile presets.
 • Enhanced Keybinds: Supports Shift / Ctrl / Alt combos, mouse right click and side buttons (Mouse1~6), and unbinding to "None" (Esc).
 • Fast Search: Search via Chinese (Simp/Trad), polyphone pinyin, or English with [!] conflict filter.
 • Profile Presets: 3 local preset slots and clipboard import/export inside this mod card.
-• Diagnostics: One-click "Diagnostics" summary copy at the top bar for easy feedback.
-• Smooth Performance: Single-frame Options menu opening, instant local mod cover loading, and faster quit/main menu return.</Description>
+• Diagnostics Summary: One-click "Diagnostics" summary copy at the top bar for easy feedback.
+• Faster Response: Optimized Options menu opening, faster mod preview loading, and quicker main menu return and game quit.</Description>
   <GameVersions>
     <Version>0.46</Version>
     <Version>0.46D</Version>

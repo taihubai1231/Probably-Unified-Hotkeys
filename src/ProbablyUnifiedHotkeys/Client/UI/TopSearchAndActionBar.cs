@@ -60,6 +60,11 @@ namespace ProbablyUnifiedHotkeys
         {
         }
 
+        public static string GetDynamicTopHintText()
+        {
+            return I18n.Get("Ctrl/Shift/Alt+侧键 | Esc=无", "Combos/Side | Esc=None");
+        }
+
         /// <summary>
         /// 装配顶部双行搜索与快捷操作栏。
         /// </summary>
@@ -71,6 +76,8 @@ namespace ProbablyUnifiedHotkeys
 
             // 第一行：搜索范围下拉框 + 宽幅搜索框
             builder.BeginRow(8f, TextAnchor.MiddleCenter);
+            var row1Obj = builder.CurrentContainer.gameObject;
+            UiSessionState.TopRow1Obj = row1Obj;
             builder.AddSpace(10f);
 
             builder.AddDropdown(
@@ -86,9 +93,14 @@ namespace ProbablyUnifiedHotkeys
                 "unified_search_scope"
             );
             var scopeEl = builder.Last;
+            UiSessionState.TopScopeDropdown = scopeEl;
             scopeEl.SetFixedWidth(158f);
             scopeEl.SetPreferredSize(158f, 36f);
             I18n.ApplyFontToDropdown(scopeEl, forceCjkCapableList: I18n.IsChinese);
+            if (!ModFeatureConfig.ShowSearchScopeDropdown || !ModFeatureConfig.ShowTopSearchBar)
+            {
+                scopeEl.SetVisible(false);
+            }
 
             builder.AddInput(
                 I18n.Get(
@@ -101,6 +113,7 @@ namespace ProbablyUnifiedHotkeys
                 OnSearchTyping
             );
             var searchEl = builder.Last;
+            UiSessionState.TopSearchInputEl = searchEl;
             searchEl.SetFlexible(1f, 0f);
             if (searchEl.root != null)
             {
@@ -121,10 +134,18 @@ namespace ProbablyUnifiedHotkeys
             builder.AddSpace(10f);
             builder.End();
 
+            if (!ModFeatureConfig.ShowTopSearchBar)
+            {
+                row1Obj.SetActive(false);
+                UiSessionState.SearchQuery = string.Empty;
+            }
+
             builder.AddSpace(6f);
 
             // 第二行：选项(显示模式/排查分类) + 仅看冲突 + 模组排查 + 全部展开/收起 + 快捷提示（紧凑单行排版）
             builder.BeginRow(6f, TextAnchor.MiddleCenter);
+            var row2Obj = builder.CurrentContainer.gameObject;
+            UiSessionState.TopRow2Obj = row2Obj;
             builder.AddSpace(10f);
 
             // 1. 完整设置展示筛选下拉选项 (显示: 全部 / 仅展示按键 / 仅展示常规)
@@ -143,6 +164,11 @@ namespace ProbablyUnifiedHotkeys
             UiSessionState.NormalDisplayDropdown.SetFixedWidth(158f);
             UiSessionState.NormalDisplayDropdown.SetPreferredSize(158f, 36f);
             I18n.ApplyFontToDropdown(UiSessionState.NormalDisplayDropdown, forceCjkCapableList: I18n.IsChinese);
+            if (!ModFeatureConfig.ShowDisplayFilterDropdown)
+            {
+                UiSessionState.NormalDisplayDropdown.SetVisible(false);
+                UiSessionState.NormalDisplayMode = NormalDisplayMode.All;
+            }
 
             // 1-alt. 模组排查分类筛选下拉选项 (全部 / 探测热键 / 疑难待确认 / 未配官方 / 正常纳管 / 纯资源)
             builder.AddDropdown(
@@ -166,6 +192,10 @@ namespace ProbablyUnifiedHotkeys
                 : I18n.Get("[!] 仅看冲突", "[!] Conflicts");
             builder.AddButton(conflictBtnText, ConflictAggregationView.ToggleConflictMode, "btn_conflict_toggle");
             UiSessionState.ConflictToggleBtn = builder.Last;
+            if (!ModFeatureConfig.ShowConflictViewButton)
+            {
+                UiSessionState.ConflictToggleBtn.SetVisible(false);
+            }
 
             // 3. 模组排查按钮
             int diagCount = UiSessionState.ScanReport?.AttentionModCount ?? 0;
@@ -174,10 +204,18 @@ namespace ProbablyUnifiedHotkeys
                 : I18n.Get("模组排查", "Diagnostics");
             builder.AddButton(diagBtnText, ModDiagnosticView.ToggleDiagnosticMode, "btn_diagnostic_toggle");
             UiSessionState.DiagnosticToggleBtn = builder.Last;
+            if (!ModFeatureConfig.ShowModDiagnosticButton)
+            {
+                UiSessionState.DiagnosticToggleBtn.SetVisible(false);
+            }
 
             // 4. 全部展开 / 全部收起按钮
             builder.AddButton(UiSessionState.AllExpanded ? I18n.Get("全部收起", "Collapse All") : I18n.Get("全部展开", "Expand All"), ToggleExpandAll, "btn_expand_all");
             UiSessionState.ExpandToggleBtn = builder.Last;
+            if (!ModFeatureConfig.ShowExpandAllButton)
+            {
+                UiSessionState.ExpandToggleBtn.SetVisible(false);
+            }
 
             // 优先抓取原生 ButtonTextColor 默认字色、高亮色、按下色、激活字体与原始字号（每个层级 menu/meta 仅需首开抓取一次）
             if (!hasThemeForLayer)
@@ -206,9 +244,10 @@ namespace ProbablyUnifiedHotkeys
             ConflictAggregationView.UpdateConflictToggleButtonAppearance();
             ModDiagnosticView.UpdateDiagnosticToggleButtonAppearance();
 
-            string topHintText = I18n.Get("Ctrl/Shift/Alt+侧键 | Esc=无", "Combos/Side | Esc=None");
+            string topHintText = GetDynamicTopHintText();
             builder.AddLabel(topHintText, "label_top_hint");
             var hintEl = builder.Last;
+            UiSessionState.TopHintLabelEl = hintEl;
             if (hintEl != null)
             {
                 I18n.ApplyFontIfRuntime(hintEl.text, topHintText);
@@ -237,11 +276,149 @@ namespace ProbablyUnifiedHotkeys
                         MinFontSize = 11f
                     });
                 }
+                if (!ModFeatureConfig.ShowTopKeybindHint)
+                {
+                    hintEl.SetVisible(false);
+                }
             }
             builder.AddSpace(10f);
             builder.End();
 
+            bool row2AllHidden = !ModFeatureConfig.ShowDisplayFilterDropdown &&
+                                 !ModFeatureConfig.ShowConflictViewButton &&
+                                 !ModFeatureConfig.ShowModDiagnosticButton &&
+                                 !ModFeatureConfig.ShowExpandAllButton &&
+                                 !ModFeatureConfig.ShowTopKeybindHint;
+            if (row2AllHidden)
+            {
+                row2Obj.SetActive(false);
+            }
+
             builder.AddSeparator(null, 2);
+            UiSessionState.TopBottomSepObj = CollapsibleCardView.GetLastChildGameObject(builder.CurrentContainer);
+        }
+
+        public static void RefreshToolbarVisibilityInPlace()
+        {
+            bool showBar = ModFeatureConfig.ShowTopSearchBar;
+            bool showFilter = ModFeatureConfig.ShowDisplayFilterDropdown;
+            bool showConflict = ModFeatureConfig.ShowConflictViewButton;
+            bool showDiag = ModFeatureConfig.ShowModDiagnosticButton;
+
+            if (!showBar && !string.IsNullOrEmpty(UiSessionState.SearchQuery))
+            {
+                UiSessionState.SearchQuery = string.Empty;
+                ClearSearchDebounce();
+                if (!PrefsStorage.UseInMemoryPrefsForTests)
+                {
+                    ExecuteSearchFilter(string.Empty);
+                }
+            }
+
+            if (!showFilter && UiSessionState.NormalDisplayMode != NormalDisplayMode.All)
+            {
+                UiSessionState.NormalDisplayMode = NormalDisplayMode.All;
+                if (!PrefsStorage.UseInMemoryPrefsForTests)
+                {
+                    ApplySearchFilter();
+                }
+            }
+
+            if (!showConflict && UiSessionState.IsConflictViewActive)
+            {
+                UiSessionState.IsConflictViewActive = false;
+                if (!PrefsStorage.UseInMemoryPrefsForTests)
+                {
+                    ConflictAggregationView.ToggleConflictMode();
+                }
+            }
+
+            if (!showDiag && UiSessionState.IsDiagnosticViewActive)
+            {
+                UiSessionState.IsDiagnosticViewActive = false;
+                if (!PrefsStorage.UseInMemoryPrefsForTests)
+                {
+                    ModDiagnosticView.ToggleDiagnosticMode();
+                }
+            }
+
+            if (PrefsStorage.UseInMemoryPrefsForTests) return;
+
+            RefreshToolbarVisualWidgetsNoInline();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void RefreshToolbarVisualWidgetsNoInline()
+        {
+            try
+            {
+                bool showBar = ModFeatureConfig.ShowTopSearchBar;
+                bool showScope = ModFeatureConfig.ShowSearchScopeDropdown;
+                bool showFilter = ModFeatureConfig.ShowDisplayFilterDropdown;
+                bool showConflict = ModFeatureConfig.ShowConflictViewButton;
+                bool showDiag = ModFeatureConfig.ShowModDiagnosticButton;
+                bool showExpand = ModFeatureConfig.ShowExpandAllButton;
+                bool showHint = ModFeatureConfig.ShowTopKeybindHint;
+
+                // Row 1 控件与容器
+                if (UiSessionState.TopScopeDropdown != null)
+                {
+                    UiSessionState.TopScopeDropdown.SetVisible(showBar && showScope);
+                }
+                if (UiSessionState.TopRow1Obj != null)
+                {
+                    UiSessionState.TopRow1Obj.SetActive(showBar);
+                }
+
+                // Row 2 控件与容器
+                if (UiSessionState.NormalDisplayDropdown != null)
+                {
+                    UiSessionState.NormalDisplayDropdown.SetVisible(showFilter && !UiSessionState.IsConflictViewActive && !UiSessionState.IsDiagnosticViewActive);
+                }
+                if (UiSessionState.ConflictToggleBtn != null)
+                {
+                    UiSessionState.ConflictToggleBtn.SetVisible(showConflict || UiSessionState.IsConflictViewActive);
+                }
+                if (UiSessionState.DiagnosticToggleBtn != null)
+                {
+                    UiSessionState.DiagnosticToggleBtn.SetVisible(showDiag);
+                }
+                if (UiSessionState.ExpandToggleBtn != null)
+                {
+                    UiSessionState.ExpandToggleBtn.SetVisible(showExpand && !UiSessionState.IsConflictViewActive);
+                }
+                if (UiSessionState.TopHintLabelEl != null)
+                {
+                    UiSessionState.TopHintLabelEl.SetVisible(showHint);
+                    if (showHint && UiSessionState.TopHintLabelEl.text != null)
+                    {
+                        string hintText = GetDynamicTopHintText();
+                        UiSessionState.TopHintLabelEl.SetText(hintText);
+                        I18n.ApplyFontIfRuntime(UiSessionState.TopHintLabelEl.text, hintText);
+                    }
+                }
+
+                bool row2AllHidden = !showFilter && !showConflict && !showDiag && !showExpand && !showHint && !UiSessionState.IsConflictViewActive && !UiSessionState.IsDiagnosticViewActive;
+                if (UiSessionState.TopRow2Obj != null)
+                {
+                    UiSessionState.TopRow2Obj.SetActive(!row2AllHidden);
+                }
+                if (UiSessionState.TopBottomSepObj != null)
+                {
+                    UiSessionState.TopBottomSepObj.SetActive(showBar || !row2AllHidden);
+                }
+                if (UiSessionState.TopRow1Obj != null && UiSessionState.TopRow1Obj.transform.parent is RectTransform topParentRt)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(topParentRt);
+                }
+                if (UiSessionState.CurrentWindow?.root != null && UiSessionState.CurrentWindow.root.transform is RectTransform winRt)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(winRt);
+                }
+            }
+            catch
+            {
+            }
         }
 
         private static void OnSearchScopeChanged(int index)
@@ -290,9 +467,17 @@ namespace ProbablyUnifiedHotkeys
                 return;
             }
 
-            // 300ms 轻量输入防抖（人类正常敲两个字母间隔约 150~250ms，300ms 保证连续逐字敲击期间 0 界面重排）
+            if (!ModFeatureConfig.EnableSearchDebounce)
+            {
+                ClearSearchDebounce();
+                ExecuteSearchFilter(text);
+                return;
+            }
+
+            // 动态输入防抖（默认 300ms，范围 0~2000ms）
             s_pendingSearchText = text;
-            s_searchDebounceTime = Time.unscaledTime + 0.30f;
+            float debounceSec = Mathf.Clamp(ModFeatureConfig.SearchDebounceMs, 0, 2000) / 1000f;
+            s_searchDebounceTime = Time.unscaledTime + debounceSec;
             s_hasPendingSearchDebounce = true;
         }
 
@@ -767,6 +952,7 @@ namespace ProbablyUnifiedHotkeys
         {
             if (UiSessionState.TryGetCardParts(group, out var parts))
             {
+                SetObjectActive(parts.CardRootObject, false);
                 SetObjectActive(parts.HeaderRowObject, false);
                 SetObjectActive(parts.ContentContainerObject, false);
                 SetObjectActive(parts.OuterSeparatorObject, false);
@@ -979,6 +1165,7 @@ namespace ProbablyUnifiedHotkeys
 
                                 if (parts != null)
                                 {
+                                    SetObjectActive(parts.CardRootObject, true);
                                     SetObjectActive(parts.HeaderRowObject, true);
                                     SetObjectActive(parts.OuterSeparatorObject, true);
                                 }
@@ -997,6 +1184,7 @@ namespace ProbablyUnifiedHotkeys
                                 }
                                 if (parts != null)
                                 {
+                                    SetObjectActive(parts.CardRootObject, true);
                                     SetObjectActive(parts.HeaderRowObject, true);
                                     SetObjectActive(parts.OuterSeparatorObject, true);
                                 }
@@ -1071,6 +1259,7 @@ namespace ProbablyUnifiedHotkeys
 
                             if (parts != null)
                             {
+                                SetObjectActive(parts.CardRootObject, true);
                                 SetObjectActive(parts.HeaderRowObject, true);
                                 SetObjectActive(parts.OuterSeparatorObject, true);
                                 if (firstMatchedHeader == null && parts.HeaderRowObject != null)

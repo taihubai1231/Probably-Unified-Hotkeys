@@ -47,6 +47,7 @@
   - [33. 离线构建期 `ComboKeyStore.IsBypassed == false` 穿透过滤导致局内重开选项页组合键误显为「无」](#33-离线构建期-combokeystoreisbypassed--false-穿透过滤导致局内重开选项页组合键误显为无)
   - [34. 改造件封面强制 `SetVisible(true)` 导致未配封面模组串图与网络超时卡死](#34-改造件封面强制-setvisibletrue-导致未配封面模组串图与网络超时卡死)
   - [35. 原版退回主菜单 `MainMenuWithAnalytics` 强制 1.0 秒协程空等阻塞与切场卡顿](#35-原版退回主菜单-mainmenuwithanalytics-强制-10-秒协程空等阻塞与切场卡顿)
+  - [36. 第三方模组延迟本地化委托主菜单空引用击穿扫描导致选项界面回退原版及四级故障隔离](#36-第三方模组延迟本地化委托主菜单空引用击穿扫描导致选项界面回退原版及四级故障隔离)
 
 ---
 
@@ -442,3 +443,153 @@
   1. 新增 `Patch_EscapeUIManager_OnMainMenu.Prefix`，在 `EnableFastQuit || EnablePerformancePatches` 开启时接管回调。安全上报遥测后，**100% 完整执行原版退出主菜单的全部状态重置逻辑**（`NewGameData.Instance.isLoadFromMainMenu = true; PlayerStore.Instance.Reset(); EmporiumEntry.ResetData(); PlayerStore.ResetData(); StoreStation.ResetData();`），零秒等待直接调起 `SceneManager.LoadScene("EmporiumMenu")`，物理消除 1,000ms 强制空等；
   2. 将此前在 `ModUIManager.Awake` 与 `CustomUIManager.Start` 中同步执行的预热彻底解耦，统一交由 `ModUIPrewarmRunner` 延后 5 帧在主菜单稳定渲染后的空闲帧分步执行，消除切场进主菜单时的瞬间定格。
 - **【严禁反模式 Anti-pattern】**：严禁在优化切场与退回主菜单时跳过游戏自身的单例状态重置逻辑，严禁触碰或跳过任何存档保存逻辑。
+
+### 36. 第三方模组延迟本地化委托主菜单空引用击穿扫描导致选项界面回退原版及四级故障隔离
+- **【现象 Symptom】**：玩家订阅并启用创意工坊模组「物品堆叠增强（Item Stacking）」（ID: `3830647974`）等包含动态委托配置项的模组后，在游戏主菜单按 Esc 键或点击设置，选项界面回退到原版简陋外观，统一按键优化中心的折叠卡片与搜索栏完全失效。
+- **【根因 Root Cause】**：
+  1. 部分第三方模组（如 `item_stacking`）在 `ModConfig.Define` 中将配置项的 `Label` 与 `Tooltip` 绑定为动态本地化委托，底层依赖局内存档加载事件（`ModHook.OnGameLoadedLate`）置位本地化字典就绪标志；
+  2. 玩家在游戏主菜单打开选项界面时，游戏尚未载入局内存档，第三方本地化字典尚未初始化，其内部字典检索逻辑在 `table == null` 时调用 `TryGetValue` 抛出 `System.NullReferenceException`；
+  3. 旧版 `ModOptionScanner.ScanModConfigIntoGroup` 在调用 `entry.Label?.Invoke()` 与 `entry.Tooltip?.Invoke()` 时未设置局部异常捕获，空引用异常向上穿透至最外层 `Patch_GameOptionUIManager_OpenUI.Prefix` 的 catch 块；
+  4. 该 catch 块记录日志后直接返回 `true` 放行原版 `GameOptionUIManager.OpenUI` 原生方法体，导致统一选项界面整体崩溃并降级回退到原版。
+- **【解法 Remedy】**：建立四级故障隔离与自愈防御网：
+  1. **第一级：单条目动态委托沙盒求值**：在 `ModOptionScanner` 中对所有第三方 `entry.Label`、`entry.Tooltip`、`entry.BoxedValue`、`entry.Choices` 实行受控读取，捕获异常后将 `ModCatalogCache.HasDegradedEntries` 标记为 `true`；若 `label` 或 `tooltip` 异常或为空，自动调用 `SectionLocalizer.TryResolveConfigLabelFromModLocalization` 与 `TryResolveConfigTooltipFromModLocalization` 从模组已解压的 `LoadedMod.Localization` 中提取中英双语规范译文，仍无则安全回退为 `entryKey`；
+  2. **第二级：单模组/单卡片级构建隔离**：在 `ScanAll` 遍历各模组、`UnifiedOptionWindow` 遍历 `ModGroups` 构建卡片外壳、以及 `CollapsibleCardView` 恢复展开卡片内容时，施加独立的单模组/单卡片级异常隔离与 `CustomUIBuilder` 容器栈平衡保护（`try-finally { builder.End(); }`），单个第三方模组损坏绝不中断其他模组与原版选项的渲染；
+  3. **第三级：会话状态读取安全防护**：在 `UiSessionState` 的 `CaptureOpenBaselineSnapshot`、`HasAnyPendingGeneralChanged` 与 `HasAnyHotkeyChanged` 中对条目取值委托全量包裹空值与异常保护，确保第三方异常 Getter 不向外抛出未捕获异常，且不误触发假脏保存确认弹窗；
+  4. **第四级：最高优先级守护与运行时热自愈**：为 `Patch_GameOptionUIManager_OpenUI` 显式标注 `[HarmonyPriority(Priority.First)]` 确保接管权；在 `ModEntry.Init` 中确保 `OptionUiHost.Active` 初始化；并通过 `Patch_ModHook_FireOnGameLoadedLate` 在游戏载入存档进入运行时后自动对降级条目执行 `ModCatalogCache.Invalidate()` 热刷新，实现动态字典延迟就绪后的自动无感修复。
+- **【严禁反模式 Anti-pattern】**：严禁在扫描与渲染外部模组配置时裸调任何第三方委托；严禁在最外层捕获到单个模组异常时粗暴放弃接管并直接放行原版界面；严禁在出现第三方异常时产生未修改假脏状态弹窗。
+
+### 37. 卡片拖拽自由排序与状态机未保存防假脏闭环
+- **【现象 Symptom】**：玩家在选项页通过拖拽卡片调整顺序后，若中途改回原顺序，仍会弹出“存在未保存修改”提示框；或者在单模组卡片内点击“恢复默认”时，导致玩家精心排列的卡片顺序被意外重置。
+- **【根因 Root Cause】**：
+  1. 拖拽卡片后如果仅仅通过布尔标志标记页面已修改，当卡片被重新拖回原位置时，无法识别当前顺序已与开窗初始顺序完全一致；
+  2. 模组卡片内的“恢复默认”如果遍历重置了 `ModFeatureConfig.CardSortMode`，会导致卡片排序偏好被当作游戏快捷键设置一起被冲掉。
+- **【解法 Remedy】**：
+  1. 在 `UiSessionState` 中引入基准视觉顺序（`BaselineVisualModIdOrder`）与基准排序模式（`BaselineCardSortMode`）；
+  2. 每次拖拽完成后调用 `CheckCardOrderDirtyState()`，若当前视觉顺序与基准顺序完全相同，自动将当前排序模式还原为基准模式，并撤销未保存标记；
+  3. 在本模组卡片的一键恢复默认逻辑中，显式暂存并在重置后还原 `CardSortMode`，排序模式不随常规配置项重置。
+- **【严禁反模式 Anti-pattern】**：严禁在拖动操作中脱离基准快照进行粗暴布尔判脏；严禁在重置模组业务设置时误伤玩家的界面排布偏好。
+
+### 38. UGUI 拖动插入指示线零重算与视口平滑滚动
+- **【现象 Symptom】**：拖动卡片时界面明显掉帧，拖拽目标在长模组列表两端时无法向外扩展，滚轮滚动卡顿。
+- **【根因 Root Cause】**：
+  1. 在拖拽过程中若通过往卡片容器内动态增删临时占位 GameObject 来展示插入位置，会导致父级 `VerticalLayoutGroup` 和 `ContentSizeFitter` 在每一帧触发强制排版计算（`LayoutRebuilder`）；
+  2. 拖拽事件劫持了鼠标指针输入，若未实现 `IScrollHandler`，滚轮事件无法透传给外层 `ScrollRect`。
+- **【解法 Remedy】**：
+  1. 在 `CardDragReorderController` 中使用单一轻量指示线（Image），仅根据目标卡片的 `RectTransform` 局部高度动态更新其 Y 轴位置，不改变父容器内部的同级节点结构，单帧开销极低；
+  2. 在指示线上实现 `IScrollHandler` 将滚轮增量直接转发给外层滚动视图，并在视口上下各设置 60px 缓冲区，接近边缘时平滑自动滚屏；
+  3. 设置 8px 拖拽阈值，避免玩家单击标题折叠时误触发拖动。
+- **【严禁反模式 Anti-pattern】**：严禁在拖拽高频帧中增删节点触发 UGUI 整体排版回流；严禁拦截滚动输入而不向下传递。
+
+### 39. 零权限 `mod_enabled_order` 替代文件系统时间戳与 .NET 8 无头测试 Unity ECall 隔离
+- **【现象 Symptom】**：
+  1. 为了获取模组启用顺序而读取模组文件的修改时间，导致需要声明 `files` 权限，触发官方 2026-12-10 零权限安全拦截；
+  2. 在脱机单元测试中调用放弃修改逻辑时，抛出 `SecurityException: ECall methods must be packaged into a system module` 异常。
+- **【根因 Root Cause】**：
+  1. 官方加载器自 2026-12-10 起对未获白名单认证且声明了文件权限的模组直接阻断加载；
+  2. 在非 Unity 托管的 .NET 8 单元测试中，直接调用 `Transform.SetSiblingIndex` 会触发 Mono/Unity 内部调用（InternalCall），CLR 运行时检测到外部程序集直接中断报错。
+- **【解法 Remedy】**：
+  1. 在 `ComboKeyStore` 中通过 PlayerPrefs 保存 `probably_unified_hotkeys.mod_enabled_order.v1` 字符串列表，每次扫描时将新启用的模组追加至末尾，全程零外部文件操作，达成 0 权限纯净运行；
+  2. 在 `UiSessionState.RestoreCardVisualOrder` 中，将调用 `transform.SetSiblingIndex` 的逻辑抽离到带有 `[MethodImpl(MethodImplOptions.NoInlining)]` 的独立私有方法中，并在进入前通过 `PrefsStorage.UseInMemoryPrefsForTests` 前置短路，保证脱机单测模式绝不触碰 Unity 内部调用。
+- **【严禁反模式 Anti-pattern】**：严禁为了轻量功能声明文件或网络权限打破零权限标准；严禁在脱机测试可执行路径中直接调用未隔离的 Unity InternalCall。
+
+### 40. `ModFeatureConfig` 多次注册重复累加 `OnChanged` 委托导致配置保存卡顿
+- **【现象 Symptom】**：点击设置窗口底部的「应用」或修改配置项时，界面明显停顿数秒，日志中密集刷新扫描记录。
+- **【根因 Root Cause】**：
+  1. 在 `ModFeatureConfig.RegisterBoolEntry` 与 `RegisterStringChoiceEntry` 中，当 `config.Get(key)` 命中已有条目时，旧代码直接执行 `existing.OnChanged += _ => onChanged(existing);`；
+  2. 随着进入选项页、重置配置或打开齿轮窗口，`EnsureRegistered()` 被多次调用，导致同一个条目上叠加注册了数十个相同的变更回调，一旦触发保存，所有委托成倍执行引发重扫风暴。
+- **【解法 Remedy】**：
+  1. 在 `ModFeatureConfig` 内部引入静态防重集合 `private static readonly HashSet<object> BoundEntries = new HashSet<object>();`；
+  2. 无论是新创建的条目还是已有条目，仅在 `BoundEntries.Add(entry)` 返回 `true` 时才绑定 `OnChanged` 监听，保证无论调用多少次 `EnsureRegistered()`，每个配置项的委托仅绑定一次。
+- **【严禁反模式 Anti-pattern】**：严禁在具有多次调用预期的初始化逻辑中向事件或委托重复挂载监听而不做幂等去重。
+
+### 41. Unity `OnPointerUp` 偶发先于 `OnEndDrag` 触发导致拖拽手柄卡在半透明灰色
+- **【现象 Symptom】**：拖动卡片调整顺序后松开鼠标，被拖动的卡片有时依然保持半透明淡灰色（透明度停留在 0.55f），必须再次点击才能恢复正常。
+- **【根因 Root Cause】**：
+  1. 在 Unity UGUI 的事件流中，拖拽结束时 `OnPointerUp` 有可能早于 `OnEndDrag` 分发，或在拖拽超出视口释放时丢失 `OnEndDrag` 回调；
+  2. 若卡片恢复不透明度（`alpha = 1f`）仅写在 `OnEndDrag` 中，事件错序或丢失就会导致卡片透明度未被还原。
+- **【解法 Remedy】**：
+  1. 在 `CardDragReorderController` 中同时实现 `IPointerUpHandler`，在松开鼠标时与 `OnEndDrag` 共同执行清理重置；
+  2. 在组件的 `OnDisable` 中增加兜底复位，确保组件失活或卡片被回收时透明度必定恢复至 1f。
+- **【严禁反模式 Anti-pattern】**：严禁将 UI 视觉状态的清理逻辑仅寄托于单一且可能受输入环境影响而丢失的事件回调。
+
+### 42. UGUI 拖拽指示线未配置 `ignoreLayout = true` 触发布局自激震荡
+- **【现象 Symptom】**：拖动卡片时指示线剧烈上下跳动，鼠标悬停位置不断颤动。
+- **【根因 Root Cause】**：
+  1. 指示线游戏对象挂在包含 `VerticalLayoutGroup` 的卡片列表容器下，但没有在自身的 `LayoutElement` 上设置 `ignoreLayout = true`；
+  2. 每次指示线显示并改变位置时，父级布局组件把指示线当作列表项重新计算排版，导致卡片位置移动，卡片移动又反过来改变了计算出的指示线坐标，形成高频自激循环。
+- **【解法 Remedy】**：
+  1. 指示线生成时在其 `LayoutElement` 组件上显式设置 `ignoreLayout = true`，使父级布局完全忽略指示线对象；
+  2. 仅通过修改指示线的 `RectTransform.anchoredPosition` 进行局部悬浮定位，彻底切断与父级排版计算的循环依赖。
+- **【严禁反模式 Anti-pattern】**：严禁在自动布局容器内放置未忽略布局的临时辅助高亮或测量节点。
+
+### 43. 模组卡片根节点缺少 `childForceExpandWidth = true` 导致右侧控件参差不齐
+- **【现象 Symptom】**：在不同模组卡片中，右侧的快捷键按钮、滑动条、输入框和复选框没有右对齐，左右宽度各不相同。
+- **【根因 Root Cause】**：
+  1. 卡片每行设置的父级 HorizontalLayoutGroup 若未统一开启 `childForceExpandWidth = true`，或者内部的标签与控件未合理配置 `FlexibleSpace`；
+  2. 左侧标签文字长度不一时，右侧的固定宽度控件会被左侧内容不同程度地向右推移，无法整齐靠右对齐。
+- **【解法 Remedy】**：
+  1. 在卡片根节点与行构建中明确父容器与每行的水平布局规则，在左侧标题与右侧控件之间统一插入弹性间隔（`AddFlexibleSpace`）；
+  2. 右侧各类控件（按键 160f、滑块 224f、输入框与下拉框 245f）统一设置固定宽度，保证所有卡片右侧控件在垂直方向严格对齐。
+- **【严禁反模式 Anti-pattern】**：严禁在没有弹性间隔支撑的情况下混用不同长度的文本标签与右侧交互组件。
+
+### 44. `CustomUIBuilder.AddSpace` 不更新 `builder.Last` 导致追加按钮误移原版控件
+- **【现象 Symptom】**：在原版选项页底部行注入左下角「模组设置」按钮后，原版居中的 180f「应用」按钮被向右挤压甚至被移至行尾。
+- **【根因 Root Cause】**：
+  1. 调用 `builder.AddButton` 注入按钮后，若调用 `builder.AddSpace` 添加间隔，`CustomUIBuilder.AddSpace` 内部并不更新 `builder.Last` 属性；
+  2. 随后若对 `builder.Last` 调用 `SetAsLastSibling()`，实际上操作的是先前的按钮而非间隔，破坏了整行的兄弟节点排列顺序，使居中对齐彻底失效。
+- **【解法 Remedy】**：
+  1. 在按钮的 `LayoutElement` 组件上显式配置 `ignoreLayout = true`，使横向布局组完全忽略该按钮的占位；
+  2. 将其 RectTransform 锚点设置为绝对左中锚定（`anchorMin/Max = (0, 0.5f)`，偏移 `(10f, 0f)`），在完全脱离布局计算的前提下悬浮定位在左下角，对原版 180f 居中应用按钮实现零物理干扰与零像素偏移。
+- **【严禁反模式 Anti-pattern】**：严禁在未核查 `CustomUIBuilder` 内部状态更新的前提下连续调用 `builder.Last` 进行层级操作；严禁在原版布局行内插入未忽略布局的自定义元素打破居中平衡。
+
+### 45. `CaptureOpenBaselineSnapshot` 与保存期 `Invalidate` 误清空活动窗口引用导致卡片失灵
+- **【现象 Symptom】**：在选项页点击「应用」保存后，模组卡片无法再次点击展开，折叠按钮无响应；或者在选项页关闭某顶栏开关后，对应按钮未能即时隐藏。
+- **【根因 Root Cause】**：
+  1. 保存配置后触发 `ModCatalogCache.Invalidate()`，其订阅的 `ClearModelUiBindings()` 在窗口依然处于活动状态时误清空了 `CardParts` 与 `HotkeyUiMap`，使卡片视图丢失了对应的 GameObject 句柄；
+  2. `CaptureOpenBaselineSnapshot()` 内部错误将顶栏控件句柄（如 `TopHintLabelEl`）重置为 null，后续动态更新时判定为 null 而跳过执行。
+- **【解法 Remedy】**：
+  1. 在 `UiSessionState.ClearModelUiBindings()` 中加入前置守卫：当 `(CurrentWindow != null && CurrentWindow.IsAlive) || IsApplyingSettings || IsBuildingOrOpeningUI` 时直接返回，保护活动窗口的 UI 句柄不受破坏；
+  2. 从 `CaptureOpenBaselineSnapshot()` 中移除所有顶栏与窗口对象的置空代码，快照逻辑仅负责比对数值与键位基准，绝不污染活动句柄。
+- **【严禁反模式 Anti-pattern】**：严禁在 UI 会话存活期间销毁表现层持有的活动节点句柄；严禁将数据快照逻辑与 UI 生命周期清理逻辑耦合。
+
+### 46. 独立模式下第三方模组通过默认优先级补丁及 `KeyBindHelper.Define` 混入原版界面
+- **【现象 Symptom】**：开启「模组独立界面」模式后，打开原版选项页，某些第三方模组（如水质扫描仪）的快捷键依然混杂在原版快捷键区域中。
+- **【根因 Root Cause】**：
+  1. 旧拦截补丁以 `Priority.First` 执行后放行原版，第三方模组以默认 `Priority.Normal` 挂载的 Prefix 依然会在我们之后向 `GameOptionRegistry` 追加条目，或通过 Postfix 在原版窗口生成控件；
+  2. 部分模组通过 `KeyBindHelper.Define` 注册按键，当原版遍历该列表时，生成的委托声明类属于原版内部闭包，绕过了常规外部程序集检查。
+- **【解法 Remedy】**：
+  1. 建立 `VanillaKeybindWhitelist` 硬核白名单（包含 `rotate_cw`、`flip_item` 等 17 个固定原版常量键名及 `toolbox_slot_` 前缀），非白名单按键一律判定为非原版项；
+  2. 采用三明治补丁架构：在所有第三方 Prefix 执行完毕后（`[Priority.Last] Prefix`）备份并过滤 `GameOptionRegistry`；在原版构建完毕后（`[Priority.First] Postfix`）记录纯净原版节点；在所有第三方 Postfix 执行完毕后（`[Priority.Last] Postfix`）将所有非原版外来节点隐藏，并由 Finalizer 确保备份 100% 还原。
+- **【严禁反模式 Anti-pattern】**：严禁仅依赖 `entry.source` 字符串判定原版归属性；严禁在多补丁竞争环境下使用单层前置拦截。
+
+### 47. Harmony 补丁方法未按标准命名且未显式指定 `[HarmonyPostfix]` 导致补丁静默失效
+- **【现象 Symptom】**：在独立模式下打开原版设置窗口，左下角的「模组设置」按钮始终没有注入显示，但编译与启动日志中均无报错。
+- **【根因 Root Cause】**：
+  1. 在定义补丁类时将后置方法命名为 `PostfixLast`，且仅标注了 `[HarmonyPriority(Priority.Last)]`，漏掉了 `[HarmonyPostfix]` 特性；
+  2. Harmony 默认根据方法名是否精确等于 `Prefix`、`Postfix`、`Finalizer` 等关键词进行自动识别，非标准命名的公开静态方法若未显式标注特性，会被 Harmony 静默跳过而不执行挂载。
+- **【解法 Remedy】**：
+  1. 拆分为独立标准 Patch 类，方法名严格使用标准 `Postfix`，并显式标注 `[HarmonyPostfix]` 与优先级特性；
+  2. 编写 `Harmony_AllPatchMethods_FollowStandardNamingOrAttributes_Verification` 全仓反射扫描单元测试，对程序集内所有 Patch 类的静态方法进行命名与特性审查，防止未来再次发生静默漏挂。
+- **【严禁反模式 Anti-pattern】**：严禁在未显式标注 Harmony 特性的情况下使用自定义方法名作为钩子入口。
+
+### 48. 工坊模组未打包本地 `preview.png` 导致封面永久缺失与异步缓存收编
+- **【现象 Symptom】**：开启本地封面优化后，部分未在工坊根目录提供 `preview.png` 的模组（如仅依赖 Steam 详情页的 jpg 封面）在改造件页面长期显示空白或默认占位图。
+- **【根因 Root Cause】**：
+  1. 部分工坊作者上传时未随 DLL 打包 `preview.png`，游戏原版 `GetLocalPreview` 返回 null；
+  2. 优化逻辑若将 null 占位直接当作已缓存处理，会阻断原版向 Steam 发起异步拉取，导致该模组封面永久无法展示。
+- **【解法 Remedy】**：
+  1. 空闲预热阶段调用 `ModWorkshop.RequestDetails` 提前向 Steam 批量请求未配本地封面模组的详情信息；
+  2. 快速读取封面时，若原版缓存中存在 null 占位则主动移除，放行原版异步拉取；
+  3. 在原版异步完成设置 Sprite 时，同步收编至跨会话持久缓存，使后续浏览与页面切换即时显示。
+- **【严禁反模式 Anti-pattern】**：严禁将临时空值占位作为持久缓存命中；严禁对异步网络加载链路采取粗暴拦截。
+
+### 49. 原版设置界面修改快捷键点击「应用」后退出仍误弹未保存确认窗之两端闭环
+- **【现象 Symptom】**：在「模组独立界面」的原版设置页中，修改按键并点击「应用」保存后，尝试退出时仍会错误弹出「未保存的更改」确认窗。
+- **【根因 Root Cause】**：
+  1. 此前在原版 `apply` 按钮上挂载的保存监听是在原版 `OnApplySetting()` 执行之后触发；导致原版保存执行时未处于 `ComboKeyStore.EnterBypass()` 状态，部分组合键被过滤为 None，且提前清空了 pendingKeys 导致快照对比错位；
+  2. 原版 `OnApplySetting` 执行后未彻底复位 `AllHotkeys` 中原版条目的 `HasPendingChange = false` 及 `PendingKey/Modifiers`，导致会话状态机依然判定存在未保存待定修改。
+- **【解法 Remedy】**：
+  1. 挂钩 `GameOptionUIManager.OnApplySetting`：在 Prefix 中开启 `EnterBypass()` 并调用 `OnBeforeVanillaStandaloneApply` 提前将待定键与组合键修饰位写入 `pendingKeys` 与 `ComboKeyStore`；
+  2. 在 Postfix 中调用 `OnAfterVanillaStandaloneApply` 彻底清空 `pendingKeys`、复位 `HasPendingChange = false` 并重拍基准快照，由 Finalizer 确保安全释放 bypass；
+  3. 增加单测覆盖单键、组合键、空键解绑、空键重绑及放弃修改 5 大场景，锁死防假脏状态机。
+- **【严禁反模式 Anti-pattern】**：严禁在原版保存流程之外滞后执行配置落盘；严禁在完成保存后遗留脏标记或快照不同步。

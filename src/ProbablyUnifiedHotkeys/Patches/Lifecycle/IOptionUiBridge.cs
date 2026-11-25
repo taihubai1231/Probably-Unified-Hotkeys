@@ -30,6 +30,16 @@ namespace ProbablyUnifiedHotkeys
         bool StartCaptureVanillaOption(GameOptionUIManager instance, string optionId);
         bool ShouldSilenceMissingElementWarning(CustomUIWindow instance, string elementId, out CustomUIElement? found);
         void ResetSessionState();
+        void OnVanillaOptionsWindowOpened(GameOptionUIManager instance, CustomUIWindow? window = null);
+        void OnModConfigWindowOpened(CustomUIWindow window, LoadedMod mod);
+        void DiscardUnsavedChangesOnDirectClose();
+        bool IsStandaloneModWindowOpen { get; }
+        bool IsVanillaStandaloneWindowOpen { get; }
+        bool HasVanillaStandaloneUnsavedChanges();
+        void PromptVanillaStandaloneUnsavedChanges();
+        void DiscardVanillaStandaloneUnsavedChanges();
+        void OnBeforeVanillaStandaloneApply(GameOptionUIManager instance);
+        void OnAfterVanillaStandaloneApply(GameOptionUIManager instance);
     }
 
     /// <summary>

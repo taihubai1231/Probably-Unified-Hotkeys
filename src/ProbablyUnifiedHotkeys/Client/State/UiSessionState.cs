@@ -3,6 +3,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
@@ -105,10 +106,12 @@ namespace ProbablyUnifiedHotkeys
     internal sealed class ModCardUiParts
     {
         public bool IsContentBuilt { get; set; } = false;
+        public GameObject? CardRootObject { get; set; }
         public GameObject? HeaderRowObject { get; set; }
         public GameObject? ContentContainerObject { get; set; }
         public GameObject? OuterSeparatorObject { get; set; }
         public CustomUIElement? FoldArrowElement { get; set; }
+        public CustomUIElement? DragHandleElement { get; set; }
         public CustomUIElement? ResetButtonElement { get; set; }
 
         public GameObject? HkHeader;
@@ -236,6 +239,10 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         internal static void ClearModelUiBindings()
         {
+            if ((CurrentWindow != null && CurrentWindow.IsAlive) || IsApplyingSettings || IsBuildingOrOpeningUI)
+            {
+                return;
+            }
             CardParts.Clear();
             HotkeyUiMap.Clear();
             GeneralUiMap.Clear();
@@ -315,6 +322,29 @@ namespace ProbablyUnifiedHotkeys
         internal static readonly Dictionary<string, bool> VanillaExpandedStates =
             new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
+        public static ModCardSortMode CurrentCardSortMode { get; set; } = ModCardSortMode.PinyinAsc;
+        public static ModCardSortMode? BaselineCardSortMode { get; set; }
+        public static List<string>? BaselineVisualModIdOrder { get; set; }
+        public static bool IsSortModeExplicitlyChosenByUser { get; set; } = false;
+        public static bool IsStandaloneModWindowOpen { get; set; } = false;
+        public static CustomUIWindow? StandaloneModWindow { get; set; }
+        public static CustomUIWindow? VanillaStandaloneWindow { get; set; }
+        public static bool IsVanillaStandaloneWindowOpen => VanillaStandaloneWindow != null && (PrefsStorage.UseInMemoryPrefsForTests || (VanillaStandaloneWindow.IsAlive && VanillaStandaloneWindow.IsVisible)) && !IsStandaloneModWindowOpen;
+        public static bool IsExplicitVanillaClosing { get; set; } = false;
+        internal static bool SuppressWakeVanillaOnStandaloneClose = false;
+
+        internal static readonly Dictionary<string, bool> VanillaStandaloneToggleBaseline = new Dictionary<string, bool>(StringComparer.Ordinal);
+        internal static readonly Dictionary<string, float> VanillaStandaloneSliderBaseline = new Dictionary<string, float>(StringComparer.Ordinal);
+        internal static readonly Dictionary<string, int> VanillaStandaloneDropdownBaseline = new Dictionary<string, int>(StringComparer.Ordinal);
+        public static CustomUIElement? CardSortDropdown { get; set; }
+
+        internal static GameObject? TopRow1Obj;
+        internal static GameObject? TopRow2Obj;
+        internal static GameObject? TopBottomSepObj;
+        internal static CustomUIElement? TopScopeDropdown;
+        internal static CustomUIElement? TopSearchInputEl;
+        internal static CustomUIElement? TopHintLabelEl;
+
         internal static ModScanReport ScanReport = new ModScanReport();
         internal static string SearchQuery = string.Empty;
         internal static SearchScope SearchScope = SearchScope.All;
@@ -364,7 +394,7 @@ namespace ProbablyUnifiedHotkeys
         internal static bool HasUserInteractedInSession = false;
 
         public static bool IsCapturingModHotkey => CapturingEntry != null;
-        public static bool IsEnhancedWindowOpen => CurrentWindow != null;
+        public static bool IsEnhancedWindowOpen => CurrentWindow != null || IsStandaloneModWindowOpen;
         public static bool IsCapturingAnyKey => CapturingEntry != null || KeyBindHelper.IsCapturing;
         public static bool IsSuppressingEscapeAfterCapture => SuppressEscapeUntilFrame >= 0 && SafeGetCurrentFrame() <= SuppressEscapeUntilFrame;
 
@@ -517,9 +547,12 @@ namespace ProbablyUnifiedHotkeys
         internal static Action? RebuildConflictViewCallback { get; set; }
         internal static Action? OnFeatureConfigChangedCallback { get; set; }
 
+        public static int ConsumedEscapeFrame { get; internal set; } = -1;
+
         public static void MarkEscapeConsumed()
         {
             int frame = SafeGetCurrentFrame();
+            ConsumedEscapeFrame = frame;
             ConsumedEscapeFrameField?.SetValue(null, frame);
             CustomUIConsumedEscapeFrameField?.SetValue(null, frame);
         }
@@ -595,6 +628,12 @@ namespace ProbablyUnifiedHotkeys
             VanillaOpenToggleBaseline.Clear();
             VanillaOpenSliderBaseline.Clear();
             VanillaOpenDropdownBaseline.Clear();
+            TopRow1Obj = null;
+            TopRow2Obj = null;
+            TopBottomSepObj = null;
+            TopScopeDropdown = null;
+            TopSearchInputEl = null;
+            TopHintLabelEl = null;
         }
 
         internal static void ResetDiagnosticSectionDefaults()
@@ -655,6 +694,8 @@ namespace ProbablyUnifiedHotkeys
             EmptySearchLabelRow = null;
             OpenedFrameCount = SafeGetCurrentFrame();
             PrebuildModIndex = 0;
+            IsSortModeExplicitlyChosenByUser = false;
+            CurrentCardSortMode = ModFeatureConfig.CardSortMode;
             ClearSessionUiCaches();
             ComboKeyStore.EnsureLoaded();
         }
@@ -696,6 +737,7 @@ namespace ProbablyUnifiedHotkeys
             VanillaHotkeyByRawId.Clear();
             OpenedFrameCount = -1;
             PrebuildModIndex = 0;
+            IsSortModeExplicitlyChosenByUser = false;
             HasUserInteractedInSession = false;
             ClearSessionUiCaches();
         }
@@ -725,17 +767,24 @@ namespace ProbablyUnifiedHotkeys
                         var el = CurrentWindow.Get(entry.id);
                         if (el == null || !el.IsAlive) continue;
 
-                        switch (entry.kind)
+                        try
                         {
-                            case GameOptionRegistry.Kind.Toggle:
-                                VanillaOpenToggleBaseline[entry.id] = el.GetBool();
-                                break;
-                            case GameOptionRegistry.Kind.Slider:
-                                VanillaOpenSliderBaseline[entry.id] = el.GetFloat();
-                                break;
-                            case GameOptionRegistry.Kind.Dropdown:
-                                VanillaOpenDropdownBaseline[entry.id] = el.GetIndex();
-                                break;
+                            switch (entry.kind)
+                            {
+                                case GameOptionRegistry.Kind.Toggle:
+                                    VanillaOpenToggleBaseline[entry.id] = el.GetBool();
+                                    break;
+                                case GameOptionRegistry.Kind.Slider:
+                                    VanillaOpenSliderBaseline[entry.id] = el.GetFloat();
+                                    break;
+                                case GameOptionRegistry.Kind.Dropdown:
+                                    VanillaOpenDropdownBaseline[entry.id] = el.GetIndex();
+                                    break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"CaptureOpenBaselineSnapshot for '{entry.id}' failed: {ex.Message}");
                         }
                     }
                 }
@@ -744,6 +793,146 @@ namespace ProbablyUnifiedHotkeys
             if (CurrentManager != null)
             {
                 (PendingKeysField?.GetValue(CurrentManager) as Dictionary<string, KeyCode>)?.Clear();
+            }
+
+            BaselineCardSortMode = CurrentCardSortMode;
+            BaselineVisualModIdOrder = GetCurrentVisualModIdOrder();
+        }
+
+        internal static List<string> GetCurrentVisualModIdOrder()
+        {
+            var list = new List<string>(ModGroups.Count);
+            for (int i = 0; i < ModGroups.Count; i++)
+            {
+                var g = ModGroups[i];
+                if (g != null && !string.IsNullOrEmpty(g.ModId))
+                {
+                    list.Add(g.ModId);
+                }
+            }
+            return list;
+        }
+
+        internal static bool HasCardOrderOrSortModeChanged()
+        {
+            if (BaselineCardSortMode.HasValue && CurrentCardSortMode != BaselineCardSortMode.Value)
+            {
+                return true;
+            }
+
+            if (BaselineVisualModIdOrder != null && BaselineVisualModIdOrder.Count > 0)
+            {
+                var currentOrder = GetCurrentVisualModIdOrder();
+                if (currentOrder.Count == BaselineVisualModIdOrder.Count)
+                {
+                    for (int i = 0; i < currentOrder.Count; i++)
+                    {
+                        if (!string.Equals(currentOrder[i], BaselineVisualModIdOrder[i], StringComparison.Ordinal))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        internal static void CheckCardOrderDirtyState()
+        {
+            if (!IsSortModeExplicitlyChosenByUser && BaselineCardSortMode.HasValue && BaselineVisualModIdOrder != null)
+            {
+                var curOrder = GetCurrentVisualModIdOrder();
+                if (curOrder.Count == BaselineVisualModIdOrder.Count)
+                {
+                    bool isIdentical = true;
+                    for (int i = 0; i < curOrder.Count; i++)
+                    {
+                        if (!string.Equals(curOrder[i], BaselineVisualModIdOrder[i], StringComparison.Ordinal))
+                        {
+                            isIdentical = false;
+                            break;
+                        }
+                    }
+
+                    if (isIdentical)
+                    {
+                        CurrentCardSortMode = BaselineCardSortMode.Value;
+                        SyncCardSortPendingAndDropdown(isDirty: false);
+                        return;
+                    }
+                }
+            }
+
+            SyncCardSortPendingAndDropdown(isDirty: HasCardOrderOrSortModeChanged());
+        }
+
+        internal static void SyncCardSortPendingAndDropdown(bool isDirty)
+        {
+            if (CardSortDropdown?.dropdown != null)
+            {
+                CardSortDropdown.dropdown.SetValueWithoutNotify((int)CurrentCardSortMode);
+            }
+
+            if (ModGroups != null)
+            {
+                for (int i = 0; i < ModGroups.Count; i++)
+                {
+                    var g = ModGroups[i];
+                    if (g != null && string.Equals(g.ModId, ModFeatureConfig.ModId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        for (int j = 0; j < g.GeneralSettings.Count; j++)
+                        {
+                            var gen = g.GeneralSettings[j];
+                            if (gen != null && gen.Id.EndsWith("mod_card_sort_mode", StringComparison.OrdinalIgnoreCase))
+                            {
+                                gen.PendingIndex = isDirty ? (int)CurrentCardSortMode : (int?)null;
+                                if (TryGetGeneralUi(gen, out var ui) && ui.ControlElement?.dropdown != null)
+                                {
+                                    ui.ControlElement.dropdown.SetValueWithoutNotify((int)CurrentCardSortMode);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        internal static void RestoreCardVisualOrder(List<string> targetOrder)
+        {
+            if (targetOrder == null || ModGroups == null) return;
+
+            var dict = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < targetOrder.Count; i++) dict[targetOrder[i]] = i;
+
+            ModGroups.Sort((a, b) =>
+            {
+                int aIdx = dict.TryGetValue(a.ModId, out int ai) ? ai : 9999;
+                int bIdx = dict.TryGetValue(b.ModId, out int bi) ? bi : 9999;
+                return aIdx.CompareTo(bIdx);
+            });
+
+            if (PrefsStorage.UseInMemoryPrefsForTests || object.ReferenceEquals(ModCardsContainer, null)) return;
+
+            for (int i = 0; i < ModGroups.Count; i++)
+            {
+                var g = ModGroups[i];
+                if (TryGetCardParts(g, out var parts) && !object.ReferenceEquals(parts.CardRootObject, null))
+                {
+                    SetTransformSiblingIndexNoInline(parts.CardRootObject, i);
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void SetTransformSiblingIndexNoInline(GameObject obj, int index)
+        {
+            try
+            {
+                obj.transform.SetSiblingIndex(index);
+            }
+            catch
+            {
+                // 离线无头单测环境下安全忽略 Transform 调用
             }
         }
 
@@ -759,21 +948,61 @@ namespace ProbablyUnifiedHotkeys
                     var gen = group.GeneralSettings[i];
                     if (gen == null) continue;
 
-                    if (gen.PendingBool.HasValue && gen.PendingBool.Value != (gen.GetBool?.Invoke() ?? false))
+                    if (gen.PendingBool.HasValue)
                     {
-                        return true;
+                        bool liveBool = false;
+                        try { liveBool = gen.GetBool?.Invoke() ?? false; }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"GetBool for '{gen.Id}' failed: {ex.Message}");
+                            liveBool = false;
+                        }
+                        if (gen.PendingBool.Value != liveBool)
+                        {
+                            return true;
+                        }
                     }
-                    if (gen.PendingFloat.HasValue && Mathf.Abs(gen.PendingFloat.Value - (gen.GetFloat?.Invoke() ?? gen.Min)) > 0.0001f)
+                    if (gen.PendingFloat.HasValue)
                     {
-                        return true;
+                        float liveFloat = gen.Min;
+                        try { liveFloat = gen.GetFloat?.Invoke() ?? gen.Min; }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"GetFloat for '{gen.Id}' failed: {ex.Message}");
+                            liveFloat = gen.Min;
+                        }
+                        if (Mathf.Abs(gen.PendingFloat.Value - liveFloat) > 0.0001f)
+                        {
+                            return true;
+                        }
                     }
-                    if (gen.PendingIndex.HasValue && gen.PendingIndex.Value != (gen.GetIndex?.Invoke() ?? 0))
+                    if (gen.PendingIndex.HasValue)
                     {
-                        return true;
+                        int liveIndex = 0;
+                        try { liveIndex = gen.GetIndex?.Invoke() ?? 0; }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"GetIndex for '{gen.Id}' failed: {ex.Message}");
+                            liveIndex = 0;
+                        }
+                        if (gen.PendingIndex.Value != liveIndex)
+                        {
+                            return true;
+                        }
                     }
-                    if (gen.PendingString != null && !string.Equals(gen.PendingString, gen.GetString?.Invoke() ?? string.Empty, StringComparison.Ordinal))
+                    if (gen.PendingString != null)
                     {
-                        return true;
+                        string liveStr = string.Empty;
+                        try { liveStr = gen.GetString?.Invoke() ?? string.Empty; }
+                        catch (Exception ex)
+                        {
+                            ModLogger.Debug($"GetString for '{gen.Id}' failed: {ex.Message}");
+                            liveStr = string.Empty;
+                        }
+                        if (!string.Equals(gen.PendingString, liveStr, StringComparison.Ordinal))
+                        {
+                            return true;
+                        }
                     }
                 }
             }
@@ -801,36 +1030,57 @@ namespace ProbablyUnifiedHotkeys
                         case GameOptionRegistry.Kind.Toggle:
                             if (entry.getBool != null)
                             {
-                                bool curVal = el.GetBool();
-                                bool origVal = entry.getBool();
-                                bool hasBase = VanillaOpenToggleBaseline.TryGetValue(entry.id, out bool baseVal);
-                                if (curVal != origVal && (!hasBase || curVal != baseVal))
+                                try
                                 {
-                                    return true;
+                                    bool curVal = el.GetBool();
+                                    bool origVal = entry.getBool();
+                                    bool hasBase = VanillaOpenToggleBaseline.TryGetValue(entry.id, out bool baseVal);
+                                    if (curVal != origVal && (!hasBase || curVal != baseVal))
+                                    {
+                                        return true;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    ModLogger.Debug($"HasAnyVanillaBaselineChanged Toggle '{entry.id}' error: {ex.Message}");
                                 }
                             }
                             break;
                         case GameOptionRegistry.Kind.Slider:
                             if (entry.getFloat != null)
                             {
-                                float curVal = el.GetFloat();
-                                float origVal = entry.getFloat();
-                                bool hasBase = VanillaOpenSliderBaseline.TryGetValue(entry.id, out float baseVal);
-                                if (Mathf.Abs(curVal - origVal) > 0.001f && (!hasBase || Mathf.Abs(curVal - baseVal) > 0.001f))
+                                try
                                 {
-                                    return true;
+                                    float curVal = el.GetFloat();
+                                    float origVal = entry.getFloat();
+                                    bool hasBase = VanillaOpenSliderBaseline.TryGetValue(entry.id, out float baseVal);
+                                    if (Mathf.Abs(curVal - origVal) > 0.001f && (!hasBase || Mathf.Abs(curVal - baseVal) > 0.001f))
+                                    {
+                                        return true;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    ModLogger.Debug($"HasAnyVanillaBaselineChanged Slider '{entry.id}' error: {ex.Message}");
                                 }
                             }
                             break;
                         case GameOptionRegistry.Kind.Dropdown:
                             if (entry.getIndex != null)
                             {
-                                int curVal = el.GetIndex();
-                                int origVal = entry.getIndex();
-                                bool hasBase = VanillaOpenDropdownBaseline.TryGetValue(entry.id, out int baseVal);
-                                if (curVal != origVal && (!hasBase || curVal != baseVal))
+                                try
                                 {
-                                    return true;
+                                    int curVal = el.GetIndex();
+                                    int origVal = entry.getIndex();
+                                    bool hasBase = VanillaOpenDropdownBaseline.TryGetValue(entry.id, out int baseVal);
+                                    if (curVal != origVal && (!hasBase || curVal != baseVal))
+                                    {
+                                        return true;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    ModLogger.Debug($"HasAnyVanillaBaselineChanged Dropdown '{entry.id}' error: {ex.Message}");
                                 }
                             }
                             break;
@@ -854,12 +1104,20 @@ namespace ProbablyUnifiedHotkeys
                 var hk = AllHotkeys[i];
                 if (hk == null || hk.IsReadOnlyProbed) continue;
 
-                KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
-                KeyModifierMask currentMods = currentKey == KeyCode.None
-                    ? KeyModifierMask.None
-                    : (hk.GetExternalModifiers != null
-                        ? hk.GetExternalModifiers.Invoke()
-                        : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
+                KeyCode currentKey = KeyCode.None;
+                try { currentKey = hk.GetKey?.Invoke() ?? KeyCode.None; }
+                catch (Exception ex) { ModLogger.Debug($"HasAnyHotkeyChanged GetKey for '{hk.Id}' error: {ex.Message}"); }
+
+                KeyModifierMask currentMods = KeyModifierMask.None;
+                try
+                {
+                    currentMods = currentKey == KeyCode.None
+                        ? KeyModifierMask.None
+                        : (hk.GetExternalModifiers != null
+                            ? hk.GetExternalModifiers.Invoke()
+                            : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey));
+                }
+                catch (Exception ex) { ModLogger.Debug($"HasAnyHotkeyChanged GetSavedModifiers for '{hk.Id}' error: {ex.Message}"); }
 
                 if (hk.ModId == "vanilla")
                 {
@@ -905,7 +1163,279 @@ namespace ProbablyUnifiedHotkeys
 
         public static bool HasUnsavedChanges()
         {
-            return HasAnyHotkeyChanged() || HasAnyPendingGeneralChanged() || HasAnyVanillaBaselineChanged();
+            return HasAnyHotkeyChanged() || HasAnyPendingGeneralChanged() || HasAnyVanillaBaselineChanged() || HasCardOrderOrSortModeChanged();
+        }
+
+        public static void CaptureVanillaStandaloneBaseline(GameOptionUIManager manager, CustomUIWindow window)
+        {
+            CurrentManager = manager;
+            VanillaStandaloneWindow = window;
+            VanillaStandaloneToggleBaseline.Clear();
+            VanillaStandaloneSliderBaseline.Clear();
+            VanillaStandaloneDropdownBaseline.Clear();
+
+            if (window == null || !window.IsAlive) return;
+
+            using (ComboKeyStore.EnterBypass())
+            {
+                foreach (var sec in GameOptionRegistry.Sections)
+                {
+                    if (sec == null || !GameOptionRegistry.IsVanillaSection(sec.id) || sec.entries == null) continue;
+
+                    for (int i = 0; i < sec.entries.Count; i++)
+                    {
+                        var entry = sec.entries[i];
+                        if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+
+                        var el = window.Get(entry.id);
+                        if (el == null || !el.IsAlive) continue;
+
+                        switch (entry.kind)
+                        {
+                            case GameOptionRegistry.Kind.Toggle:
+                                VanillaStandaloneToggleBaseline[entry.id] = el.GetBool();
+                                break;
+                            case GameOptionRegistry.Kind.Slider:
+                                VanillaStandaloneSliderBaseline[entry.id] = el.GetFloat();
+                                break;
+                            case GameOptionRegistry.Kind.Dropdown:
+                                VanillaStandaloneDropdownBaseline[entry.id] = el.GetIndex();
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+
+        public static bool HasVanillaStandaloneUnsavedChanges()
+        {
+            if (!IsVanillaStandaloneWindowOpen || IsExplicitVanillaClosing || VanillaStandaloneWindow == null || (!PrefsStorage.UseInMemoryPrefsForTests && !VanillaStandaloneWindow.IsAlive))
+            {
+                return false;
+            }
+
+            // 基准快照为空说明尚未完成首轮初始化，严禁误判为假脏
+            if (VanillaStandaloneToggleBaseline.Count == 0 && VanillaStandaloneSliderBaseline.Count == 0 && VanillaStandaloneDropdownBaseline.Count == 0)
+            {
+                return false;
+            }
+
+            using (ComboKeyStore.EnterBypass())
+            {
+                // 1. 检查 pendingKeys
+                if (CurrentManager != null && PendingKeysField != null)
+                {
+                    var pkDict = PendingKeysField.GetValue(CurrentManager) as Dictionary<string, KeyCode>;
+                    if (pkDict != null && pkDict.Count > 0)
+                    {
+                        foreach (var kvp in pkDict)
+                        {
+                            string optId = kvp.Key;
+                            KeyCode pkKey = kvp.Value;
+                            KeyCode curKey = KeyBindHelper.Get(optId);
+                            // v1.4.7 空键豁免：当前键为 None 且待存为 None 则不判脏
+                            if (pkKey == KeyCode.None && curKey == KeyCode.None)
+                            {
+                                continue;
+                            }
+                            if (pkKey != curKey)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                // 1B. 检查原版快捷键待保存状态
+                if (AllHotkeys != null)
+                {
+                    for (int i = 0; i < AllHotkeys.Count; i++)
+                    {
+                        var hk = AllHotkeys[i];
+                        if (hk != null && hk.ModId == "vanilla" && hk.HasPendingChange)
+                        {
+                            KeyCode curKey = hk.GetKey?.Invoke() ?? KeyCode.None;
+                            if (hk.PendingKey == KeyCode.None && curKey == KeyCode.None)
+                            {
+                                continue;
+                            }
+                            return true;
+                        }
+                    }
+                }
+
+                // 2. 检查 GameOptionRegistry 原版控件偏离
+                if (!PrefsStorage.UseInMemoryPrefsForTests)
+                {
+                    foreach (var sec in GameOptionRegistry.Sections)
+                    {
+                        if (sec == null || !GameOptionRegistry.IsVanillaSection(sec.id) || sec.entries == null) continue;
+
+                        for (int i = 0; i < sec.entries.Count; i++)
+                        {
+                            var entry = sec.entries[i];
+                            if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+
+                            var el = VanillaStandaloneWindow.Get(entry.id);
+                            if (el == null || !el.IsAlive) continue;
+
+                            switch (entry.kind)
+                            {
+                                case GameOptionRegistry.Kind.Toggle:
+                                    if (entry.getBool != null)
+                                    {
+                                        bool cur = el.GetBool();
+                                        bool orig = entry.getBool();
+                                        bool hasBase = VanillaStandaloneToggleBaseline.TryGetValue(entry.id, out bool baseVal);
+                                        if (cur != orig && (!hasBase || cur != baseVal))
+                                        {
+                                            return true;
+                                        }
+                                    }
+                                    break;
+                                case GameOptionRegistry.Kind.Slider:
+                                    if (entry.getFloat != null)
+                                    {
+                                        float cur = el.GetFloat();
+                                        float orig = entry.getFloat();
+                                        bool hasBase = VanillaStandaloneSliderBaseline.TryGetValue(entry.id, out float baseVal);
+                                        if (Mathf.Abs(cur - orig) > 0.001f && (!hasBase || Mathf.Abs(cur - baseVal) > 0.001f))
+                                        {
+                                            return true;
+                                        }
+                                    }
+                                    break;
+                                case GameOptionRegistry.Kind.Dropdown:
+                                    if (entry.getIndex != null)
+                                    {
+                                        int cur = el.GetIndex();
+                                        int orig = entry.getIndex();
+                                        bool hasBase = VanillaStandaloneDropdownBaseline.TryGetValue(entry.id, out int baseVal);
+                                        if (cur != orig && (!hasBase || cur != baseVal))
+                                        {
+                                            return true;
+                                        }
+                                    }
+                                    break;
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+        }
+
+        public static void PromptVanillaStandaloneUnsavedChanges(GameOptionUIManager manager, Action onClosed)
+        {
+            UnsavedConfirmDialog.ShowUnsavedChangesConfirmDialog(
+                onSaveAndExit: () =>
+                {
+                    IsExplicitVanillaClosing = true;
+                    try
+                    {
+                        if (manager != null)
+                        {
+                            OriginalApplySettingDelegate?.Invoke(manager);
+                        }
+                        else if (VanillaStandaloneWindow != null && VanillaStandaloneWindow.IsAlive)
+                        {
+                            var applyBtn = VanillaStandaloneWindow.Get("apply")?.button;
+                            applyBtn?.onClick.Invoke();
+                        }
+                        VanillaStandaloneWindow?.Close();
+                        onClosed?.Invoke();
+                    }
+                    finally
+                    {
+                        IsExplicitVanillaClosing = false;
+                    }
+                },
+                onDiscardAndExit: () =>
+                {
+                    IsExplicitVanillaClosing = true;
+                    try
+                    {
+                        DiscardVanillaStandaloneUnsavedChanges();
+                        var pendingKeys = (manager != null && PendingKeysField != null)
+                            ? PendingKeysField.GetValue(manager) as Dictionary<string, KeyCode>
+                            : null;
+                        pendingKeys?.Clear();
+                        if (AllHotkeys != null)
+                        {
+                            foreach (var hk in AllHotkeys)
+                            {
+                                if (hk.ModId == "vanilla")
+                                {
+                                    hk.HasPendingChange = false;
+                                    hk.PendingKey = KeyCode.None;
+                                    hk.PendingModifiers = KeyModifierMask.None;
+                                }
+                            }
+                        }
+                        if (VanillaStandaloneWindow != null && VanillaStandaloneWindow.IsAlive && manager != null)
+                        {
+                            UnifiedOptionWindow.BindAndRefreshVanillaStandaloneHotkeys(manager, VanillaStandaloneWindow);
+                        }
+                        VanillaStandaloneWindow?.Close();
+                        onClosed?.Invoke();
+                    }
+                    finally
+                    {
+                        IsExplicitVanillaClosing = false;
+                    }
+                }
+            );
+        }
+
+        public static void DiscardVanillaStandaloneUnsavedChanges()
+        {
+            if (CurrentManager != null && PendingKeysField != null)
+            {
+                (PendingKeysField.GetValue(CurrentManager) as Dictionary<string, KeyCode>)?.Clear();
+            }
+
+            if (AllHotkeys != null)
+            {
+                foreach (var hk in AllHotkeys)
+                {
+                    if (hk.ModId == "vanilla")
+                    {
+                        hk.HasPendingChange = false;
+                        hk.PendingKey = KeyCode.None;
+                        hk.PendingModifiers = KeyModifierMask.None;
+                    }
+                }
+            }
+
+            if (!PrefsStorage.UseInMemoryPrefsForTests && VanillaStandaloneWindow != null && VanillaStandaloneWindow.IsAlive)
+            {
+                foreach (var sec in GameOptionRegistry.Sections)
+                {
+                    if (sec == null || !GameOptionRegistry.IsVanillaSection(sec.id) || sec.entries == null) continue;
+
+                    for (int i = 0; i < sec.entries.Count; i++)
+                    {
+                        var entry = sec.entries[i];
+                        if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+
+                        var el = VanillaStandaloneWindow.Get(entry.id);
+                        if (el == null || !el.IsAlive) continue;
+
+                        switch (entry.kind)
+                        {
+                            case GameOptionRegistry.Kind.Toggle:
+                                if (entry.getBool != null) el.SetBool(entry.getBool(), notify: false);
+                                break;
+                            case GameOptionRegistry.Kind.Slider:
+                                if (entry.getFloat != null) el.SetFloat(entry.getFloat(), notify: false);
+                                break;
+                            case GameOptionRegistry.Kind.Dropdown:
+                                if (entry.getIndex != null) el.SetIndex(entry.getIndex(), notify: false);
+                                break;
+                        }
+                    }
+                }
+            }
         }
 
         public static void DiscardAllPendingChanges(Action? onRefreshConflicts = null, Action? onRebuildConflictView = null)
@@ -921,13 +1451,27 @@ namespace ProbablyUnifiedHotkeys
             {
                 var hk = AllHotkeys[i];
                 if (hk == null) continue;
-                KeyCode currentKey = hk.GetKey?.Invoke() ?? KeyCode.None;
+                KeyCode currentKey = KeyCode.None;
+                try { currentKey = hk.GetKey?.Invoke() ?? KeyCode.None; }
+                catch (Exception ex) { ModLogger.Debug($"DiscardAllPendingChanges GetKey for '{hk.Id}' error: {ex.Message}"); }
                 hk.HasPendingChange = false;
-                hk.PendingModifiers = hk.GetExternalModifiers != null
-                    ? hk.GetExternalModifiers.Invoke()
-                    : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey);
+                try
+                {
+                    hk.PendingModifiers = hk.GetExternalModifiers != null
+                        ? hk.GetExternalModifiers.Invoke()
+                        : ComboKeyStore.GetSavedModifiers(hk.Id, currentKey);
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"DiscardAllPendingChanges GetSavedModifiers for '{hk.Id}' error: {ex.Message}");
+                    hk.PendingModifiers = KeyModifierMask.None;
+                }
                 hk.PendingKey = currentKey;
-                UiLayoutAndFontHelper.UpdateHotkeyButtonVisual(hk);
+                try { UiLayoutAndFontHelper.UpdateHotkeyButtonVisual(hk); }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"UpdateHotkeyButtonVisual for '{hk.Id}' error: {ex.Message}");
+                }
             }
 
             // 2. 模组常规设置恢复并重置控件
@@ -973,19 +1517,22 @@ namespace ProbablyUnifiedHotkeys
                             case GameOptionRegistry.Kind.Toggle:
                                 if (entry.getBool != null)
                                 {
-                                    el.SetBool(entry.getBool(), notify: false);
+                                    try { el.SetBool(entry.getBool(), notify: false); }
+                                    catch (Exception ex) { ModLogger.Debug($"DiscardAllPendingChanges Toggle '{entry.id}' error: {ex.Message}"); }
                                 }
                                 break;
                             case GameOptionRegistry.Kind.Slider:
                                 if (entry.getFloat != null)
                                 {
-                                    el.SetFloat(entry.getFloat(), notify: false);
+                                    try { el.SetFloat(entry.getFloat(), notify: false); }
+                                    catch (Exception ex) { ModLogger.Debug($"DiscardAllPendingChanges Slider '{entry.id}' error: {ex.Message}"); }
                                 }
                                 break;
                             case GameOptionRegistry.Kind.Dropdown:
                                 if (entry.getIndex != null)
                                 {
-                                    el.SetIndex(entry.getIndex(), notify: false);
+                                    try { el.SetIndex(entry.getIndex(), notify: false); }
+                                    catch (Exception ex) { ModLogger.Debug($"DiscardAllPendingChanges Dropdown '{entry.id}' error: {ex.Message}"); }
                                 }
                                 break;
                         }
@@ -1006,7 +1553,21 @@ namespace ProbablyUnifiedHotkeys
                 rebuildConflictView?.Invoke();
             }
 
+            // 4. 卡片排序与拖拽顺序恢复
+            if (BaselineCardSortMode.HasValue)
+            {
+                CurrentCardSortMode = BaselineCardSortMode.Value;
+                IsSortModeExplicitlyChosenByUser = false;
+                SyncCardSortPendingAndDropdown(isDirty: false);
+            }
+            if (BaselineVisualModIdOrder != null && BaselineVisualModIdOrder.Count > 0)
+            {
+                RestoreCardVisualOrder(BaselineVisualModIdOrder);
+            }
+
+            IsSortModeExplicitlyChosenByUser = false;
             CaptureOpenBaselineSnapshot();
+            SyncCardSortPendingAndDropdown(isDirty: false);
         }
 
         internal static void RefreshCardUI(ModOptionGroup group)
@@ -1160,7 +1721,9 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
+            IsSortModeExplicitlyChosenByUser = false;
             CaptureOpenBaselineSnapshot();
+            SyncCardSortPendingAndDropdown(isDirty: false);
         }
     }
 }

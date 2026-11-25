@@ -25,6 +25,12 @@ namespace ProbablyUnifiedHotkeys
         /// </summary>
         public static event Action? SessionResetRequested;
 
+        /// <summary>
+        /// 扫描期间是否捕获到第三方模组异常委托并执行了安全降级。
+        /// 在 Invalidate() 中复位为 false；在 ModOptionScanner.ScanAll 入口复位为 false。
+        /// </summary>
+        public static bool HasDegradedEntries { get; internal set; }
+
         static ModCatalogCache()
         {
             EnsureEventSubscriptions();
@@ -136,6 +142,7 @@ namespace ProbablyUnifiedHotkeys
                 _cachedGroups = null;
                 _cachedAllHotkeys = null;
                 _cachedScanReport = null;
+                HasDegradedEntries = false;
             }
 
             try

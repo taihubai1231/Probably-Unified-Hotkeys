@@ -19,7 +19,7 @@ namespace ProbablyUnifiedHotkeys
     {
         public const string ModId = "probably_unified_hotkeys";
         public const string LanguageConfigKey = "ui_language";
-        public const string SectionHeader = "界面语言 / UI Language";
+        public const string SectionHeader = "语言设置 / Language";
         public const string OwnDisplayName = "可能是按键统一优化 / Probably Unified Hotkeys";
 
         public const string ChoiceAuto = "auto";
@@ -276,7 +276,7 @@ namespace ProbablyUnifiedHotkeys
         {
             return new List<string>(3)
             {
-                Get("跟随游戏语言", "Follow Game Language"),
+                Get("跟随游戏语言", "Follow Game"),
                 "简体中文",
                 "English"
             };
@@ -285,14 +285,8 @@ namespace ProbablyUnifiedHotkeys
         public static string GetLanguageTooltip()
         {
             return Get(
-                "选择本模组界面显示语言：\n" +
-                "• 跟随游戏语言（默认）：自动随游戏语言切换简体中文或英文\n" +
-                "• 简体中文 / English：强制使用对应语言显示\n" +
-                "修改后点击「应用设置」立即生效。",
-                "Choose the display language for this mod's interface:\n" +
-                "• Follow Game Language (Default): Automatically follows the game's language (CN / EN)\n" +
-                "• 简体中文 / English: Force the selected display language\n" +
-                "Click Apply to take effect immediately."
+                "设置本模组界面的显示语言。",
+                "Sets the display language of this mod's interface."
             );
         }
 

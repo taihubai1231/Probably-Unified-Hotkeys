@@ -93,7 +93,7 @@ namespace ProbablyUnifiedHotkeys
             UiLayoutAndFontHelper.ConfigureStretchRowObject(builder.CurrentContainer.gameObject, 36f);
             UiLayoutAndFontHelper.AddFixedHorizontalSpace(builder, 18f);
             string clipDesc = I18n.Get(
-                "<b>剪贴板 JSON 备份</b>  <color=#99a3b0>一键导出或恢复全部快捷键、模组设置与强转表</color>",
+                "<b>剪贴板 JSON 备份</b>  <color=#99a3b0>导出或恢复全部快捷键、模组设置与强转表</color>",
                 "<b>Clipboard JSON Backup</b>  <color=#99a3b0>Export or restore all hotkeys, mod settings & forced tables</color>");
             builder.AddLabel(clipDesc, "label_profile_clipboard_row");
             UiLayoutAndFontHelper.ConfigureSingleLineRowLabel(builder.Last, clipDesc, minWidth: 220f, minHeight: 30f);
@@ -472,6 +472,89 @@ namespace ProbablyUnifiedHotkeys
                 }
             }
 
+            // 4C. 恢复原版常规设置（Toggle / Slider / Dropdown）
+            foreach (var sec in GameOptionRegistry.Sections)
+            {
+                if (sec == null || !GameOptionRegistry.IsVanillaSection(sec.id) || sec.entries == null) continue;
+                for (int i = 0; i < sec.entries.Count; i++)
+                {
+                    var entry = sec.entries[i];
+                    if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+                    if (entry.id.IndexOf("resolution", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        entry.id.IndexOf("fullscreen", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        entry.id.IndexOf("monitor", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+                    if (!snapshot.General.TryGetValue(entry.id, out string? encoded) || string.IsNullOrEmpty(encoded)) continue;
+
+                    var activeWin = UiSessionState.CurrentWindow ?? UiSessionState.VanillaStandaloneWindow;
+                    var el = activeWin?.Get(entry.id);
+
+                    if (entry.kind == GameOptionRegistry.Kind.Toggle && entry.setBool != null && encoded.StartsWith("b:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string valPart = encoded.Substring(2).Trim();
+                        bool bVal = valPart == "1" || string.Equals(valPart, "true", StringComparison.OrdinalIgnoreCase);
+                        entry.setBool(bVal);
+                        el?.SetBool(bVal);
+                        appliedGenCount++;
+                    }
+                    else if (entry.kind == GameOptionRegistry.Kind.Slider && entry.setFloat != null && encoded.StartsWith("f:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string valPart = encoded.Substring(2).Trim();
+                        if (float.TryParse(valPart, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float fVal))
+                        {
+                            entry.setFloat(fVal);
+                            el?.SetFloat(fVal);
+                            appliedGenCount++;
+                        }
+                    }
+                    else if (entry.kind == GameOptionRegistry.Kind.Dropdown && entry.setIndex != null && encoded.StartsWith("i:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string valPart = encoded.Substring(2).Trim();
+                        if (int.TryParse(valPart, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int iVal) && iVal >= 0)
+                        {
+                            entry.setIndex(iVal);
+                            el?.SetIndex(iVal);
+                            appliedGenCount++;
+                        }
+                    }
+                }
+            }
+
+            // 4B. 恢复卡片排序模式与自定义排列顺序（在 ApplyAllSettings 前执行以同步刷新界面与基准快照）
+            bool hasSnapOrder = snapshot.CardOrder != null && snapshot.CardOrder.Count > 0;
+            if (hasSnapOrder)
+            {
+                ComboKeyStore.SetSavedCustomCardOrder(snapshot.CardOrder!);
+            }
+            if (!string.IsNullOrEmpty(snapshot.CardSortMode))
+            {
+                var snapSort = ModFeatureConfig.ParseCardSortMode(snapshot.CardSortMode);
+                ModFeatureConfig.SetCardSortMode(snapSort);
+                UiSessionState.CurrentCardSortMode = snapSort;
+                UiSessionState.IsSortModeExplicitlyChosenByUser = true;
+            }
+            if (UiSessionState.CurrentCardSortMode == ModCardSortMode.CustomOrder && hasSnapOrder)
+            {
+                UiSessionState.RestoreCardVisualOrder(snapshot.CardOrder!);
+            }
+            else if (UiSessionState.ModGroups != null)
+            {
+                ComboKeyStore.SortModOptionGroups(UiSessionState.ModGroups, UiSessionState.CurrentCardSortMode);
+                for (int i = 0; i < UiSessionState.ModGroups.Count; i++)
+                {
+                    var grp = UiSessionState.ModGroups[i];
+                    if (grp != null && UiSessionState.TryGetCardParts(grp, out var cParts) && cParts.CardRootObject != null)
+                    {
+                        cParts.CardRootObject.transform.SetSiblingIndex(i);
+                    }
+                }
+            }
+            if (UiSessionState.ModCardsContainer != null && UiSessionState.ModCardsContainer.transform is RectTransform cardsRt)
+            {
+                UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(cardsRt);
+            }
+            UnifiedOptionWindow.SyncCardSortDropdownAppearance();
+
             // 5. 提交并立即生效
             if (UiSessionState.ApplyAllSettingsCallback != null)
             {
@@ -490,12 +573,15 @@ namespace ProbablyUnifiedHotkeys
             // 6. 同步刷新当前已构建的所有卡片控件显示
             using (ComboKeyStore.EnterBypass())
             {
-                for (int g = 0; g < UiSessionState.ModGroups.Count; g++)
+                if (UiSessionState.ModGroups != null)
                 {
-                    var group = UiSessionState.ModGroups[g];
-                    if (group != null && UiSessionState.TryGetCardParts(group, out var parts) && parts.IsContentBuilt)
+                    for (int g = 0; g < UiSessionState.ModGroups.Count; g++)
                     {
-                        UiSessionState.RefreshCardUI(group);
+                        var group = UiSessionState.ModGroups[g];
+                        if (group != null && UiSessionState.TryGetCardParts(group, out var parts) && parts.IsContentBuilt)
+                        {
+                            UiSessionState.RefreshCardUI(group);
+                        }
                     }
                 }
                 UiLayoutAndFontHelper.StyleVanillaKeyButtons();
@@ -545,6 +631,7 @@ namespace ProbablyUnifiedHotkeys
                 ConflictAggregationView.RefreshConflicts();
                 RefreshProfileSlotButtonAppearance();
                 TopSearchAndActionBar.RefreshExpandAllButtonState();
+                TopSearchAndActionBar.RefreshToolbarVisibilityInPlace();
             }
         }
     }

@@ -1,7 +1,7 @@
 # 模块图谱与代码归属映射 (docs/handoff/map.md)
 
-> **版本**：`v1.5.0`  
-> **文档定位**：跨阶段与跨智能代理交接三件套之「模块图谱」。记录当前 `1.5.0` 架构的分层拓扑、物理文件路径、组件职责映射及巨石解耦对照关系。
+> **版本**：`v1.5.1`  
+> **文档定位**：跨阶段与跨智能代理交接三件套之「模块图谱」。记录当前 `1.5.1` 架构的分层拓扑、物理文件路径、组件职责映射及巨石解耦对照关系。
 
 ---
 
@@ -15,7 +15,7 @@
 | **4. Persistence** | `src/ProbablyUnifiedHotkeys/Persistence/` | `ComboKeyStore.cs`<br/>`HotkeyProfileManager.cs` | Unity `PlayerPrefs` 存储契约（`combos.v1`、`forced`、`ignored`）、`KeyCode.None` 严格清空修饰位、3 套预设快照与剪贴板 JSON（`puh_profile_v1`） |
 | **5. Adapter** | `src/ProbablyUnifiedHotkeys/Adapter/` | `Scanner/ModOptionScanner.cs`<br/>`Scanner/ModCatalogCache.cs`<br/>`ExternalMods/KnownModAdapters.cs`<br/>`StaticProbe/DllKeyProbe.cs` | 扫描 `GameOptionRegistry` 与各模组 `ModConfig`、委托归属回收、主菜单空闲预热、11 款工坊模组桥接、基于 DseCecil 的可选静态热键探测 |
 | **6. Patches** | `src/ProbablyUnifiedHotkeys/Patches/` | `Lifecycle/ModEntry.cs`<br/>`Performance/PerformancePatches.cs` | 官方 `IMod` 生命周期、选项与按键捕获薄钩子（Thin Hooks）、选项开窗离线装配预热、改造件 `RowPool` 对象池复用、极速秒退旁路 |
-| **7. Client** | `src/ProbablyUnifiedHotkeys/Client/` | `State/UiSessionState.cs`<br/>`I18n/I18n.cs`<br/>`I18n/SectionLocalizer.cs`<br/>`UI/`（10 个正交子组件） | **运行时 UI 句柄集中承载**、`BaselineSnapshot` 基准快照、三层模组分区本地化、正交拆解后的 10 个 UGUI/TMP 表现层视图 |
+| **7. Client** | `src/ProbablyUnifiedHotkeys/Client/` | `State/UiSessionState.cs`<br/>`I18n/I18n.cs`<br/>`I18n/SectionLocalizer.cs`<br/>`UI/`（11 个正交子组件） | **运行时 UI 句柄集中承载**、`BaselineSnapshot` 基准快照、三层模组分区本地化、正交拆解后的 11 个 UGUI/TMP 表现层视图 |
 
 ---
 
@@ -36,6 +36,7 @@
 | 模组排查诊断子视图 | L3530-L4150 | `src/ProbablyUnifiedHotkeys/Client/UI/ModDiagnosticView.cs` | 四分类视图（疑难/未配官方/正常/纯资源）、设为按键绑定、忽略、复制汇总 |
 | 3 槽位方案快照卡片 | L4160-L4600 | `src/ProbablyUnifiedHotkeys/Client/UI/ProfilePresetCardView.cs` | 方案一~三切换与保存按钮、剪贴板 JSON 一键导出/导入交互界面 |
 | TMP 字体与排版辅助工具 | L4610-L5137 | `src/ProbablyUnifiedHotkeys/Client/UI/UiLayoutAndFontHelper.cs` | `FittedFontSizeCache` 单次字号拟合、`AddFixedHorizontalSpace` 锁定布局 |
+| 卡片拖拽自由排序控制器 | 新增独立组件 | `src/ProbablyUnifiedHotkeys/Client/UI/CardDragReorderController.cs` | 卡片右侧 `≡` 拖动手柄事件驱动、插入指示线轻量渲染、视口平滑滚屏与 8px 防误触阈值 |
 
 ---
 
@@ -203,3 +204,93 @@
 - `AGENTS.md`：
   - **定位**：工程协作宪章。
   - **核心内容**：在第二章正式植入第 2.3 节「对外文案去 AI 化（去人机味）铁律」，强制关联上述指南与技能，确立零禁词、零伪深刻对比句、零机械加粗列表、审阅净版与代码分离等强制性验收标准。
+
+---
+
+## 8. v1.5.1 第三方异常隔离与稳定性加固图谱 (Fault Isolation & Stability)
+
+> **状态**：针对工坊模组「物品堆叠增强」（Workshop ID: `3830647974`）及动态委托类模组在主菜单空引用导致选项界面回退原版缺陷，已完成四级故障隔离网与脱机回归单测落地。
+
+### 8.1 加固模块与职责映射
+1. `src/ProbablyUnifiedHotkeys/Adapter/Scanner/ModCatalogCache.cs`：
+   - 新增 `HasDegradedEntries` 静态标志：在扫描捕获到第三方异常降级时置为 `true`，在 `Invalidate()` 与 `ScanAll` 入口复位。
+2. `src/ProbablyUnifiedHotkeys/Adapter/Scanner/SectionLocalizer.cs`：
+   - `TryResolveFromModLocalization`：补充查询 `"section_" + rawSection` 分区键；
+   - 新增 `TryResolveConfigLabelFromModLocalization` 与 `TryResolveConfigTooltipFromModLocalization`：在第三方委托崩溃时，自动从模组本地化表取回中英双语规范标题与提示。
+3. `src/ProbablyUnifiedHotkeys/Adapter/Scanner/ModOptionScanner.cs`：
+   - 建立单条目独立沙盒（`SafeInvokeString`、`SafeGetBoxedValue`、`SafeGetBoxedDefault`、`SafeGetChoices`），捕获异常时记录降级标志并做模组级限流日志；
+   - 在 `ScanModConfigIntoGroup`、`IsHotkeyEntry`、`CreateHotkeyFromConfigEntry` 与 `CreateGeneralFromConfigEntry` 中全量接入安全防穿透包装，同时保留 `using (ComboKeyStore.EnterBypass())` 与 `ExplicitUnbound` 核心逻辑。
+4. `src/ProbablyUnifiedHotkeys/Client/State/UiSessionState.cs`：
+   - 在 `CaptureOpenBaselineSnapshot`、`HasAnyPendingGeneralChanged`、`HasAnyVanillaBaselineChanged` 与 `HasAnyHotkeyChanged` 中引入确定性默认值安全求值，第三方异常 Getter 不向外抛出异常且不误触发假脏弹窗。
+5. `src/ProbablyUnifiedHotkeys/Client/UI/UnifiedOptionWindow.cs` 与 `CollapsibleCardView.cs`：
+   - 增加单卡片与单行级异常隔离沙盒；
+   - 在 `BeginRow` 与 `BeginColumn` 块使用 `try-finally { builder.End(); }` 严格保护 `CustomUIBuilder` 容器栈平衡；
+   - 按键外部宽度严格锁定原版 `160f`。
+6. `src/ProbablyUnifiedHotkeys/Patches/Lifecycle/OptionAndKeyBindPatches.cs`：
+   - 显式声明 `[HarmonyPriority(Priority.First)]` 确保接管权；
+   - 新增 `Patch_ModHook_FireOnGameLoadedLate`（Postfix），在进入局内存档第三方本地化就绪后自动触发 `ModCatalogCache.Invalidate()` 热刷新。
+
+### 8.2 新增专项回归单测套件 (`FaultIsolationAndItemStackingTests.cs`)
+- `tests/ProbablyUnifiedHotkeys.Tests/FaultIsolationAndItemStackingTests.cs`（4 项用例）：
+  - `ItemStacking_NreThrowingDelegates_ScanSucceeds_And_FlagsDegraded`：1:1 模拟物品堆叠增强主菜单空引用，验证扫描零崩溃与降级标志置位；
+  - `ItemStacking_LocalizationFallback_ResolvesBilingualLabelsAndTooltips`：验证动态委托崩溃时仍能精准回退至模组本地化表中英文译文；
+  - `MultiMod_MixedScenario_FaultIsolation_NormalModsAndVanillaIntact`：验证损坏模组、异常 Getter 模组与正常模组混合场景下的故障隔离与 `HasUnsavedChanges()` 零假脏；
+  - `ModCatalogCache_Invalidate_ResetsHasDegradedEntries`：验证缓存失效时降级标志重置。
+- **全套单测最终收官状态**：63/63 项测试 100% 绿灯全量通过，0 错误 0 警告。
+
+---
+
+## 9. v1.5.1 细粒度配置、三态显示位置与卡片拖拽排序架构
+
+> **状态**：双端 7 大分组配置体系、三态显示位置模式（合并至选项页、原版左下角独立按钮、仅在改造件齿轮打开）与 6 种卡片排序策略（含鼠标拖拽自由排序与图钉置顶锚点）已全部落地完成。
+
+### 9.1 架构资产与模块职责
+1. `src/ProbablyUnifiedHotkeys/Config/ModFeatureConfig.cs`：
+   - 划分并注册 7 大配置分区：界面语言、选项页面布局、选项页顶部工具栏、快捷键绑定规则、改造件页面设置、预载及退出加速、调试日志；
+   - 细粒度拆分解耦所有子开关（如按键录入三开关、搜索防抖毫秒数、各性能补丁独立启停、冲突按键同时生效控制等），全部支持热切换。
+2. `src/ProbablyUnifiedHotkeys/Client/UI/CardDragReorderController.cs`：
+   - 卡片右侧 `≡` 手柄事件响应，8px 拖拽阈值防误折叠；
+   - 视口上下平滑滚动与动态青色插入指示线；
+   - 拖拽事务完成后同步更新 `UiSessionState.ModGroups` 并触发脏状态判定。
+3. `src/ProbablyUnifiedHotkeys/Persistence/ComboKeyStore.cs`：
+   - 扩充 `SortModOptionGroups` 支持 6 种排序模式与图钉置顶协同；
+   - 使用 PlayerPrefs 保存自定义顺序（`custom_card_order.v1`）与启用顺序（`mod_enabled_order.v1`），不产生外部文件读写权限。
+4. `src/ProbablyUnifiedHotkeys/Persistence/HotkeyProfileManager.cs`：
+   - 预设快照 Schema `puh_profile_v1` 扩充可选 `sortMode` 与 `cardOrder` 字段；
+   - 过滤本模组自身设置防污染，导入旧版预设保持向下兼容。
+5. `src/ProbablyUnifiedHotkeys/Client/State/UiSessionState.cs`：
+   - 实现卡片排序 5 大防假脏状态机保护；
+   - 拖动还原到基准顺序时自动清除脏标记；
+   - 隔离 Transform 操作避免离线单元测试触发 Unity 引擎内部调用。
+
+### 9.2 新增单元测试套件 (`V151FeatureSwitchesAndCardSortTests.cs`)
+- `tests/ProbablyUnifiedHotkeys.Tests/V151FeatureSwitchesAndCardSortTests.cs`（18 项核心用例）：
+  - `V151_ConfigSectionsAndEnumRoundTrip_Verification`：7 大分区常量、显示位置三态往返、排序模式六态往返、搜索输入延时安全钳制；
+  - `V151_ConflictScannerCache_DynamicOptionVisibility_Test`：冲突检测器缓存开关动态显隐；
+  - `V151_CardSortMode_SixSortingStrategiesAndPinToTop_Verification`：6 种排序策略与模组卡片排布逻辑；
+  - `V151_CardDrag_FiveDirtyStateGuards_Verification`：拖拽排序 5 大防假脏状态机闭环；
+  - `V151_ResetToDefaults_ExemptsCardSortMode_Verification`：恢复默认豁免卡片排序设置；
+  - `V151_ProfileSnapshot_ExpansionAndBackwardCompatibility_Verification`：预设快照扩展与旧快照向下兼容；
+  - `V151_AllowConflictingKeys_SuppressionAndBypass_Verification`：冲突按键同时生效开关与次级抑制仲裁；
+  - `V151_AntiAiWriting_StaticAssertionGuardrail`：静态扫描全量配置标题与说明，断言 0 命中人机味禁词；
+  - `ModFeatureConfig_EnsureRegistered_MultipleCalls_NoDuplicateDelegates`：连续注册委托防重与防保存卡顿；
+  - `ModFeatureConfig_HideOwnCoverInModsPanel_ToggledEventFires`：隐藏本模组封面图即时通知事件；
+  - `CardDragReorderController_InterfacesAndStateReset_Verification`：拖拽手柄 5 项事件接口与状态复原；
+  - `OptionAndKeyBindPatches_VanillaStandalone_FiltersNonVanillaSectionsAndEntries`：模组独立界面下原版纯净过滤与恢复；
+  - `UiSessionState_VanillaStandaloneEscapeAndUnsavedChanges_Verification`：独立模组页 Esc 消费标记与原版未保存检测；
+  - `SearchDebounceMs_ModGeneralEntry_ApplyPending_RoundTrip`：搜索延时毫秒数常规条目落盘与输入容错；
+  - `TopSearchAndActionBar_ToolbarVisibilityToggle_AutoResetsFilters`：顶栏按钮关闭时自动复位搜索词与冲突视图；
+  - `KeybindRules_SixteenStateCombinations_TopHintAndConflictArbitration`：四大改键规则 16 种布尔状态全排列穷举测试；
+  - `V151_CardSortMode_DropdownSyncAndDisplayLocation_Integration`：排序模式与显示位置切换事件与中英双语列表完备；
+  - `V151_CardDrag_RestrictedUnderSearchFilter_Verification`：搜索与非全部筛选模式下锁定拖拽防脏顺序；
+  - `V151_VanillaKeybindWhitelist_FiltersNonVanillaKeybinds_Verification`：原版按键 17 键及工具槽白名单拦截第三方伪装注入键；
+  - `V151_BuildSectionAndBuildEntry_InterceptsFaucetScannerInStandalone_Verification`：独立模式下 BuildSection 与 BuildEntry 双重前置拦截；
+  - `V151_UiSessionState_ActiveSessionAndBaselineSnapshot_HandlesNotLost_Verification`：活动会话期 Invalidate 防丢失与基准快照防清空引用；
+  - `V151_HotkeyProfileManager_LiveCardOrderCaptureAndRestore_Verification`：预设方案实时卡片排布顺序精准捕获与恢复；
+  - `V151_DiagnosticAndConflictView_ToolbarVisibilityAndFilterReset_Verification`：进出排查与冲突视图自动复位筛选模式且不重显已隐藏按钮；
+  - `Harmony_AllPatchMethods_FollowStandardNamingOrAttributes_Verification`：全程序集 Harmony 补丁方法标准命名与特性声明反射扫描；
+  - `OptionAndKeyBindPatches_StandalonePost_TriggersOnVanillaOptionsWindowOpened`：独立模式下 StandalonePost 确保触发原版窗口模组按钮注入；
+  - `OptionAndKeyBindPatches_PollKeyCapture_UnblocksVanillaCaptureWhenNotCapturingModHotkey`：原版按键录入与 Esc 退出轮询放行防死锁；
+  - `StandaloneModWindow_VanillaHotkeyApplyAndPresetRestore_WritesKeyAndModifiers`：独立模组窗口下原版快捷键预设恢复与修改双向落盘；
+  - `V151_VanillaStandaloneWindow_FiveAntiDirtyScenarios_Verification`：独立原版设置页单键、组合键、解绑、重绑及放弃修改 5 大防假脏场景全闭环。
+- **全套单测最终总数**：91/91 项测试 100% 绿灯全量通过，0 错误 0 警告。

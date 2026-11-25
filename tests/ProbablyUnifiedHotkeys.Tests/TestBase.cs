@@ -24,8 +24,13 @@ namespace ProbablyUnifiedHotkeys.Tests
             ComboKeyStore.EnsureInitialized();
             BilingualText.ModeOverrideForTest = null;
             BilingualText.LocaleCodeOverrideForTest = null;
-            ModFeatureConfig.OverridePinyinSearchForTests = null;
-            ModFeatureConfig.OverrideKeySuppressionForTests = null;
+            ModFeatureConfig.ResetAllTestOverrides();
+            UiSessionState.CurrentCardSortMode = ModCardSortMode.PinyinAsc;
+            UiSessionState.BaselineCardSortMode = null;
+            UiSessionState.BaselineVisualModIdOrder = null;
+            UiSessionState.IsSortModeExplicitlyChosenByUser = false;
+            UiSessionState.CardSortDropdown = null;
+            UiSessionState.ModGroups.Clear();
             HotkeyProfileManager.ActiveSlotIndex = 0;
             ModEntry.ResetApplicationQuittingForTest();
             KnownModAdapters.ResetBootSyncForTest();

@@ -1,6 +1,6 @@
 # 阶段 3 三批次拆解风险边界与应对预案 (docs/handoff/risk.md)
 
-> **版本**：`v1.5.0`  
+> **版本**：`v1.5.1`  
 > **文档定位**：跨阶段与跨智能代理交接三件套之「风险边界」。深入剖析阶段 3 源码落地过程中三大批次的实施难点、状态机时序竞态、第三方兼容性陷阱与防退化应对预案。
 
 ---
@@ -194,3 +194,47 @@ flowchart TD
 3. **退回主菜单消除 1.0s 原版人为协程死等与切场解耦**：
    - **痛点根因**：反编译发现原版 `MainMenuWithAnalytics` 在遥测后无条件 `yield return new WaitForSecondsRealtime(1.0f);` 强制死等整整 1 秒；且切回主菜单首帧若同步执行重型预热容易瞬间掉帧。
    - **闭环解法**：新增 `Patch_EscapeUIManager_OnMainMenu.Prefix`，安全上报遥测后 **100% 完整执行原版状态重置**（`NewGameData.Instance.isLoadFromMainMenu = true; PlayerStore.Instance.Reset(); EmporiumEntry.ResetData(); PlayerStore.ResetData(); StoreStation.ResetData();`），零秒等待直接加载 `EmporiumMenu` 场景，物理消除 1,000ms 空等，且绝不触碰任何存档保存逻辑；主菜单预热延后 5 帧在空闲帧分步执行；单测 `Feedback08` 锁死契约。
+
+---
+
+## 八、 v1.5.1 第三方异常隔离与物品堆叠增强兼容风险闭环 (Item Stacking Fault Isolation Hardening)
+
+针对创意工坊模组「物品堆叠增强（Item Stacking）」（Workshop ID: `3830647974`）及动态委托类模组在主菜单触发空引用导致选项界面回退原版的实机反馈，已完成全链路架构加固与脱机单测闭环：
+
+1. **主菜单动态委托空引用击穿与四级沙盒隔离**：
+   - **痛点根因**：工坊模组在 `ModConfig.Define` 中将配置项 `Label` 与 `Tooltip` 绑定为动态本地化委托，底层依赖 `OnGameLoadedLate`（存档载入）初始化语言表；在主菜单打开选项界面时，本地化未就绪导致 `table == null` 并在执行 `table.TryGetValue` 时抛出 `NullReferenceException`。旧版 `ModOptionScanner` 裸调委托导致异常穿透至最外层 `Patch_GameOptionUIManager_OpenUI.Prefix` 的 catch 块，直接返回 `true` 放行原版界面。
+   - **闭环解法**：
+     - 在 `ModOptionScanner` 中对所有第三方 `entry.Label`、`entry.Tooltip`、`entry.BoxedValue`、`entry.Choices` 实行沙盒保护，捕获异常后标记 `ModCatalogCache.HasDegradedEntries = true` 并按模组限流日志；
+     - `label` 与 `tooltip` 异常时自动调用 `SectionLocalizer.TryResolveConfigLabelFromModLocalization` 与 `TryResolveConfigTooltipFromModLocalization` 从模组已解压的 `LoadedMod.Localization` 中提取中英文译文，仍无则回退 `entryKey`；
+     - 在 `ScanAll`、`UnifiedOptionWindow` 与 `CollapsibleCardView` 中施加单模组/单卡片级异常隔离与 `try-finally { builder.End(); }` 容器栈保护；
+     - 在 `UiSessionState` 中对会话状态读取实行确定性默认值保护，异常 Getter 不误触发假脏弹窗；
+     - 显式声明 `[HarmonyPriority(Priority.First)]` 确保接管权，并通过 `Patch_ModHook_FireOnGameLoadedLate` 在局内存档加载完成后对降级条目执行 `ModCatalogCache.Invalidate()` 热刷新；
+     - 专项回归单测 `FaultIsolationAndItemStackingTests.cs`（4 项用例）全面验证主菜单空引用零崩溃、中英双语回退、多模组混合隔离与无假脏弹窗，全量单测扩充至 63/63 项全绿通过。
+
+---
+
+## 九、 v1.5.1 细粒度自由配置与卡片拖拽排序架构风险闭环
+
+针对 v1.5.1 新增的双端 7 大分组配置体系、三态显示位置模式与鼠标拖拽自由排序，建立以下风险控制与防退化护栏：
+
+1. **拖拽排序 Pending 事务与 5 大防假脏状态机闭环**：
+   - **痛点根因**：拖拽卡片调整视觉顺序时，若每次拖动立即写入磁盘或直接切入脏状态，会导致玩家反复调整时频繁产生不必要的配置落盘，甚至在拖回原位后仍误提示未保存修改。
+   - **闭环解法**：在 `UiSessionState` 中引入基准视觉顺序（`BaselineVisualModIdOrder`）与基准排序模式（`BaselineCardSortMode`）。当玩家将卡片拖回原位时，`CheckCardOrderDirtyState()` 自动识别顺序与基准一致，将当前模式还原为基准模式并撤销脏标记；退出页面放弃修改时完整恢复原排布；单模组一键恢复默认时严格豁免排序设置；单测 `V151_CardDrag_FiveDirtyStateGuards_Verification` 锁死契约。
+2. **UGUI 拖动插入指示线零重算与视口平滑滚动**：
+   - **痛点根因**：若在拖动过程中通过在卡片容器内动态插入占位元素来提示插入位置，会频繁触发整个 ScrollRect 的 `ForceRebuildLayoutImmediate` 与 TextMeshPro 文本重算，引发帧率骤降。
+   - **闭环解法**：在 `CardDragReorderController` 中采用轻量绝对定位的单色指示线（Image），仅根据目标卡片的本地坐标实时移动指示线高度，不改变父容器内的任何同级子元素结构，渲染开销低于 0.05ms；同时在视口上下边缘设置 60px 缓冲区，接近边缘时平滑自动滚屏。
+3. **零权限 `mod_enabled_order` 替代文件系统时间戳**：
+   - **痛点根因**：实现「最近启用优先」排序时，若读取模组文件夹或 DLL 文件的创建/修改时间戳，需要声明 `files` 权限，违反官方 2026-12-10 零权限标准。
+   - **闭环解法**：在 `ComboKeyStore` 中通过 PlayerPrefs 保存 `probably_unified_hotkeys.mod_enabled_order.v1` 字符串列表。每次进入选项页扫描时，将新启用的模组追加至列表末尾分配递增序号，全程使用内存与配置读写，不触碰任何文件系统 API。
+4. **.NET 8 无头单测环境避免 Unity ECall 隔离**：
+   - **痛点根因**：在非 Unity 引擎的 .NET 8 单元测试进程中，直接访问 `Component.transform` 或 `Transform.SetSiblingIndex` 会触发内部调用（InternalCall），引发 `System.Security.SecurityException: ECall methods must be packaged into a system module` 异常。
+   - **闭环解法**：在 `UiSessionState.RestoreCardVisualOrder` 与 `CardDragReorderController.ApplyCardReorder` 中，将 Unity Transform 相关的索引更新与布局计算抽离到标记了 `[MethodImpl(MethodImplOptions.NoInlining)]` 的独立私有方法，并在调用前通过 `PrefsStorage.UseInMemoryPrefsForTests` 与 `ModCardsContainer` 引用判定进行前置短路，保证在脱机测试环境下绝不触发 Unity ECall。
+5. **原版选项页注入按钮避免挤压原版居中布局**：
+   - **痛点根因**：调用 `CustomUIBuilder.AddSpace` 并不更新 `builder.Last`，若直接在原版底部行追加元素或调用 `SetAsLastSibling`，极易破坏原版 180f 应用按钮的绝对居中排版。
+   - **闭环解法**：在追加的左下角「模组设置」按钮上配置 `LayoutElement.ignoreLayout = true`，并采用绝对左中锚定（`anchor = (0, 0.5f)`，偏移 `(10f, 0f)`），彻底脱离原版横向布局计算，保障原版居中应用按钮零位移。
+6. **活动会话句柄生命周期防护与防失灵契约**：
+   - **痛点根因**：点击保存或修改配置时触发 `ModCatalogCache.Invalidate()`，若误清空了活动窗口的 `CardParts` 与顶栏控件句柄，会导致卡片点击无响应、顶栏开关无法即时联动。
+   - **闭环解法**：在 `UiSessionState.ClearModelUiBindings()` 中增加活动窗口及 `IsApplyingSettings` 守卫，仅在无活动窗口时才执行清理；`CaptureOpenBaselineSnapshot()` 仅记录数值与按键基准，绝不重置表现层句柄。
+7. **「模组独立界面」三明治拦截与白名单机制**：
+   - **痛点根因**：第三方模组通过默认 `Priority.Normal` 的 `OpenUI` 补丁或 `KeyBindHelper.Define` 伪装注入，绕过常规外部程序集检查，混入原版选项页。
+   - **闭环解法**：建立 17 个固定原版按键加 `toolbox_slot_` 前缀的硬核白名单；采用三明治补丁（`[Priority.Last] Prefix` 备份过滤、`[Priority.First] Postfix` 记录合法原版节点、`[Priority.Last] Postfix` 隐藏所有外来注入节点、`Finalizer` 兜底恢复），彻底保障原版界面纯净。

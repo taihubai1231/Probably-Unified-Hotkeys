@@ -127,7 +127,8 @@ namespace ProbablyUnifiedHotkeys.Tests
                 typeof(UiLayoutAndFontHelper),
                 typeof(UnifiedOptionWindow),
                 typeof(UnsavedConfirmDialog),
-                typeof(UiSessionState)
+                typeof(UiSessionState),
+                typeof(CardDragReorderController)
             };
 
             foreach (var type in uiComponentTypes)

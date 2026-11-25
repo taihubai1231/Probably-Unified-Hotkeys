@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
 
@@ -10,22 +11,131 @@ namespace ProbablyUnifiedHotkeys
     // 0. 全新统一按键与模组设置中心 UI 挂接补丁
     // =========================================================================
 
+    internal static class VanillaOptionProfileHelper
+    {
+        private static bool _initialized;
+
+        public static void EnsureInitialized()
+        {
+            if (_initialized) return;
+            _initialized = true;
+            HotkeyProfileManager.ExtraGeneralSettingsProvider = GetVanillaGeneralSettingsSnapshot;
+            HotkeyProfileManager.ExtraGeneralSettingApplier = ApplyVanillaGeneralSetting;
+        }
+
+        private static IEnumerable<KeyValuePair<string, string>> GetVanillaGeneralSettingsSnapshot()
+        {
+            var list = new List<KeyValuePair<string, string>>();
+            try
+            {
+                var sections = GameOptionRegistry.Sections;
+                if (sections != null)
+                {
+                    foreach (var sec in sections)
+                    {
+                        if (sec == null || !GameOptionRegistry.IsVanillaSection(sec.id) || sec.entries == null) continue;
+                        if (string.Equals(sec.id, GameOptionRegistry.SECTION_KEYBIND, StringComparison.OrdinalIgnoreCase)) continue;
+
+                        for (int i = 0; i < sec.entries.Count; i++)
+                        {
+                            var entry = sec.entries[i];
+                            if (entry == null || string.IsNullOrEmpty(entry.id)) continue;
+                            if (entry.id.IndexOf("resolution", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                entry.id.IndexOf("fullscreen", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                entry.id.IndexOf("monitor", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+                            string? encoded = null;
+                            if (entry.kind == GameOptionRegistry.Kind.Toggle && entry.getBool != null)
+                            {
+                                encoded = entry.getBool() ? "b:1" : "b:0";
+                            }
+                            else if (entry.kind == GameOptionRegistry.Kind.Slider && entry.getFloat != null)
+                            {
+                                encoded = "f:" + entry.getFloat().ToString("G7", System.Globalization.CultureInfo.InvariantCulture);
+                            }
+                            else if (entry.kind == GameOptionRegistry.Kind.Dropdown && entry.getIndex != null)
+                            {
+                                encoded = "i:" + entry.getIndex().ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            }
+
+                            if (encoded != null)
+                            {
+                                list.Add(new KeyValuePair<string, string>(entry.id, encoded));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to get vanilla general settings: {ex.Message}");
+            }
+            return list;
+        }
+
+        private static void ApplyVanillaGeneralSetting(string id, string encoded, bool applyToUnderlying)
+        {
+            if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(encoded)) return;
+            try
+            {
+                var entry = GameOptionRegistry.Find(id);
+                if (entry == null) return;
+
+                if (entry.kind == GameOptionRegistry.Kind.Toggle && entry.setBool != null && encoded.StartsWith("b:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string valPart = encoded.Substring(2).Trim();
+                    bool bVal = valPart == "1" || string.Equals(valPart, "true", StringComparison.OrdinalIgnoreCase);
+                    if (applyToUnderlying) entry.setBool(bVal);
+                }
+                else if (entry.kind == GameOptionRegistry.Kind.Slider && entry.setFloat != null && encoded.StartsWith("f:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string valPart = encoded.Substring(2).Trim();
+                    if (float.TryParse(valPart, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float fVal))
+                    {
+                        if (applyToUnderlying) entry.setFloat(fVal);
+                    }
+                }
+                else if (entry.kind == GameOptionRegistry.Kind.Dropdown && entry.setIndex != null && encoded.StartsWith("i:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string valPart = encoded.Substring(2).Trim();
+                    if (int.TryParse(valPart, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int iVal) && iVal >= 0)
+                    {
+                        if (applyToUnderlying) entry.setIndex(iVal);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to apply vanilla setting '{id}': {ex.Message}");
+            }
+        }
+    }
+
     /// <summary>
     /// 接管原版游戏设置窗口的打开流程：
     /// 当 OptionUiHost.Active 存在时打开增强版统一设置中心；
     /// 当 OptionUiHost.Active 为 null 时安全降级放行原版选项窗口。
     /// </summary>
     [HarmonyPatch(typeof(GameOptionUIManager), nameof(GameOptionUIManager.OpenUI))]
+    [HarmonyPriority(Priority.First)]
     public static class Patch_GameOptionUIManager_OpenUI
     {
+        static Patch_GameOptionUIManager_OpenUI()
+        {
+            VanillaOptionProfileHelper.EnsureInitialized();
+        }
+
         public static bool Prefix(GameOptionUIManager __instance)
         {
             try
             {
-                var bridge = OptionUiHost.Active;
-                if (bridge != null && bridge.TryOpenEnhancedUI(__instance))
+                if (ModFeatureConfig.DisplayLocation == OptionDisplayLocation.MergedInOptions)
                 {
-                    return false;
+                    var bridge = OptionUiHost.Active;
+                    if (bridge != null && bridge.TryOpenEnhancedUI(__instance))
+                    {
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -37,10 +147,253 @@ namespace ProbablyUnifiedHotkeys
         }
     }
 
+    [HarmonyPatch(typeof(GameOptionUIManager), "BuildSection", new Type[] { typeof(CustomUIBuilder), typeof(GameOptionRegistry.Section) })]
+    public static class Patch_GameOptionUIManager_BuildSection
+    {
+        public static bool Prefix(CustomUIBuilder builder, GameOptionRegistry.Section section)
+        {
+            if (ModFeatureConfig.DisplayLocation == OptionDisplayLocation.StandaloneBottomButton &&
+                !(OptionUiHost.Active?.IsEnhancedWindowOpen ?? false) &&
+                !(OptionUiHost.Active?.IsStandaloneModWindowOpen ?? false))
+            {
+                if (section == null || !GameOptionRegistry.IsVanillaSection(section.id) ||
+                    (!string.IsNullOrEmpty(section.source) && !string.Equals(section.source, "vanilla", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(GameOptionUIManager), "BuildEntry", new Type[] { typeof(CustomUIBuilder), typeof(GameOptionRegistry.Entry) })]
+    public static class Patch_GameOptionUIManager_BuildEntry
+    {
+        private static readonly HashSet<string> VanillaKeybindWhitelist = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "rotate_cw", "rotate_ccw", "flip_item", "reset_orientation", "trash_item",
+            "quick_move_inventory", "quick_move_showcase", "quick_move_storage",
+            "open_options", "control_hints", "advance_dialogue", "pin_mode",
+            "sort_menu", "call_next_customer", "menu_back", "secondary_click",
+            "flip_item_alt"
+        };
+
+        internal static bool IsVanillaKeybindId(string? keyId)
+        {
+            if (string.IsNullOrEmpty(keyId)) return false;
+            if (keyId!.StartsWith("key_", StringComparison.OrdinalIgnoreCase))
+            {
+                keyId = keyId.Substring(4);
+            }
+            return VanillaKeybindWhitelist.Contains(keyId) || keyId.StartsWith("toolbox_slot_", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static bool Prefix(CustomUIBuilder builder, GameOptionRegistry.Entry entry)
+        {
+            if (ModFeatureConfig.DisplayLocation == OptionDisplayLocation.StandaloneBottomButton &&
+                !(OptionUiHost.Active?.IsEnhancedWindowOpen ?? false) &&
+                !(OptionUiHost.Active?.IsStandaloneModWindowOpen ?? false))
+            {
+                if (entry == null) return false;
+
+                if (!string.IsNullOrEmpty(entry.source) && !string.Equals(entry.source, "vanilla", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                if (ModOptionScanner.GetEntryExternalAssembly(entry) != null)
+                {
+                    return false;
+                }
+
+                if (entry.kind == GameOptionRegistry.Kind.KeyBind)
+                {
+                    if (!IsVanillaKeybindId(entry.id))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(GameOptionUIManager), nameof(GameOptionUIManager.OpenUI))]
+    public static class Patch_GameOptionUIManager_OpenUI_StandaloneSnapshot
+    {
+        internal static readonly HashSet<GameObject> PureVanillaContentNodes = new HashSet<GameObject>();
+        internal static readonly FieldInfo? WindowField = AccessTools.Field(typeof(GameOptionUIManager), "window");
+
+        [HarmonyPostfix]
+        [HarmonyPriority(Priority.First)]
+        public static void Postfix(GameOptionUIManager __instance)
+        {
+            if (ModFeatureConfig.DisplayLocation != OptionDisplayLocation.StandaloneBottomButton)
+            {
+                return;
+            }
+
+            if (!PrefsStorage.UseInMemoryPrefsForTests)
+            {
+                SnapshotVanillaNodesSafe(__instance);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void SnapshotVanillaNodesSafe(GameOptionUIManager instance)
+        {
+            try
+            {
+                PureVanillaContentNodes.Clear();
+                CustomUIWindow? window = WindowField?.GetValue(instance) as CustomUIWindow;
+                if (window != null && window.IsAlive)
+                {
+                    var scrollRect = window.root?.GetComponentInChildren<UnityEngine.UI.ScrollRect>(true);
+                    if (scrollRect != null && scrollRect.content != null)
+                    {
+                        Transform contentTf = scrollRect.content;
+                        for (int i = 0; i < contentTf.childCount; i++)
+                        {
+                            Transform child = contentTf.GetChild(i);
+                            if (child != null)
+                            {
+                                PureVanillaContentNodes.Add(child.gameObject);
+                                for (int j = 0; j < child.childCount; j++)
+                                {
+                                    Transform sub = child.GetChild(j);
+                                    if (sub != null)
+                                    {
+                                        PureVanillaContentNodes.Add(sub.gameObject);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[StandaloneSnapshot Postfix] Snapshot vanilla nodes warning: {ex.Message}");
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(GameOptionUIManager), nameof(GameOptionUIManager.OpenUI))]
+    public static class Patch_GameOptionUIManager_OpenUI_StandalonePost
+    {
+        [HarmonyPostfix]
+        [HarmonyPriority(Priority.Last)]
+        public static void Postfix(GameOptionUIManager __instance)
+        {
+            if (ModFeatureConfig.DisplayLocation != OptionDisplayLocation.StandaloneBottomButton)
+            {
+                return;
+            }
+
+            CustomUIWindow? window = null;
+            try
+            {
+                if (!PrefsStorage.UseInMemoryPrefsForTests)
+                {
+                    window = Patch_GameOptionUIManager_OpenUI_StandaloneSnapshot.WindowField?.GetValue(__instance) as CustomUIWindow;
+                    HideForeignNodesSafe(window);
+                }
+
+                OptionUiHost.Active?.OnVanillaOptionsWindowOpened(__instance, window);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[StandalonePost Postfix] Error hiding foreign injected nodes or injecting button: {ex.Message}");
+            }
+            finally
+            {
+                Patch_GameOptionUIManager_OpenUI_StandaloneSnapshot.PureVanillaContentNodes.Clear();
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void HideForeignNodesSafe(CustomUIWindow? window)
+        {
+            if (window == null || !window.IsAlive) return;
+            var scrollRect = window.root?.GetComponentInChildren<UnityEngine.UI.ScrollRect>(true);
+            if (scrollRect != null && scrollRect.content != null && Patch_GameOptionUIManager_OpenUI_StandaloneSnapshot.PureVanillaContentNodes.Count > 0)
+            {
+                Transform contentTf = scrollRect.content;
+                for (int i = 0; i < contentTf.childCount; i++)
+                {
+                    Transform child = contentTf.GetChild(i);
+                    if (child != null && !Patch_GameOptionUIManager_OpenUI_StandaloneSnapshot.PureVanillaContentNodes.Contains(child.gameObject))
+                    {
+                        string goName = child.gameObject.name ?? string.Empty;
+                        if (!goName.StartsWith("puh_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            child.gameObject.SetActive(false);
+                        }
+                    }
+                }
+            }
+        }
+
+        [HarmonyFinalizer]
+        public static void Finalizer()
+        {
+            Patch_GameOptionUIManager_OpenUI_StandaloneSnapshot.PureVanillaContentNodes.Clear();
+        }
+    }
+
+    [HarmonyPatch(typeof(GameOptionUIManager), "OnApplySetting")]
+    public static class Patch_GameOptionUIManager_OnApplySetting
+    {
+        private static IDisposable? _bypass;
+
+        [HarmonyPrefix]
+        public static void Prefix(GameOptionUIManager __instance)
+        {
+            try
+            {
+                var bridge = OptionUiHost.Active;
+                if (bridge != null && bridge.IsVanillaStandaloneWindowOpen && __instance != null)
+                {
+                    _bypass = ComboKeyStore.EnterBypass();
+                    bridge.OnBeforeVanillaStandaloneApply(__instance);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[Patch_GameOptionUIManager_OnApplySetting Prefix] Error: {ex.Message}");
+            }
+        }
+
+        [HarmonyPostfix]
+        public static void Postfix(GameOptionUIManager __instance)
+        {
+            try
+            {
+                var bridge = OptionUiHost.Active;
+                if (bridge != null && bridge.IsVanillaStandaloneWindowOpen && __instance != null)
+                {
+                    bridge.OnAfterVanillaStandaloneApply(__instance);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[Patch_GameOptionUIManager_OnApplySetting Postfix] Error: {ex.Message}");
+            }
+        }
+
+        [HarmonyFinalizer]
+        public static void Finalizer()
+        {
+            _bypass?.Dispose();
+            _bypass = null;
+        }
+    }
+
     /// <summary>
     /// 拦截设置界面关闭：当处于按键录制期间或缓冲帧时压制关闭；当存在未保存更改时弹出防丢确认提示框。
     /// </summary>
     [HarmonyPatch(typeof(GameOptionUIManager), nameof(GameOptionUIManager.CloseUI))]
+    [HarmonyPriority(Priority.First)]
     public static class Patch_GameOptionUIManager_CloseUI
     {
         public static bool Prefix(GameOptionUIManager __instance)
@@ -50,15 +403,39 @@ namespace ProbablyUnifiedHotkeys
                 var bridge = OptionUiHost.Active;
                 if (bridge != null)
                 {
-                    if (bridge.IsCapturingAnyKey || bridge.IsSuppressingEscapeAfterCapture)
+                    if (bridge.IsCapturingModHotkey || bridge.IsSuppressingEscapeAfterCapture)
                     {
                         return false;
                     }
 
                     if (bridge.IsEnhancedWindowOpen && bridge.HasUnsavedChanges() && !bridge.IsExplicitWindowClosing)
                     {
-                        bridge.PromptUnsavedChangesBeforeClosing();
-                        return false;
+                        if (ModFeatureConfig.EnableUnsavedConfirmDialog)
+                        {
+                            bridge.PromptUnsavedChangesBeforeClosing();
+                            return false;
+                        }
+                        else
+                        {
+                            bridge.DiscardUnsavedChangesOnDirectClose();
+                        }
+                    }
+
+                    if (!bridge.IsEnhancedWindowOpen && bridge.IsVanillaStandaloneWindowOpen)
+                    {
+                        if (bridge.HasVanillaStandaloneUnsavedChanges())
+                        {
+                            bridge.MarkEscapeConsumed();
+                            if (ModFeatureConfig.EnableUnsavedConfirmDialog)
+                            {
+                                bridge.PromptVanillaStandaloneUnsavedChanges();
+                                return false;
+                            }
+                            else
+                            {
+                                bridge.DiscardVanillaStandaloneUnsavedChanges();
+                            }
+                        }
                     }
                 }
             }
@@ -80,7 +457,13 @@ namespace ProbablyUnifiedHotkeys
         {
             if (__result) return;
             var bridge = OptionUiHost.Active;
-            if (bridge != null && (bridge.IsCapturingAnyKey || bridge.IsSuppressingEscapeAfterCapture))
+            if (bridge != null && (bridge.IsCapturingModHotkey || bridge.IsSuppressingEscapeAfterCapture))
+            {
+                __result = true;
+                return;
+            }
+            int curFrame = UiSessionState.SafeGetCurrentFrame();
+            if (UiSessionState.ConsumedEscapeFrame >= 0 && Math.Abs(curFrame - UiSessionState.ConsumedEscapeFrame) <= 2)
             {
                 __result = true;
             }
@@ -92,6 +475,7 @@ namespace ProbablyUnifiedHotkeys
     /// 并在选项窗口存在未保存更改时拦截 Esc，提示未保存防丢确认弹窗。
     /// </summary>
     [HarmonyPatch(typeof(CustomUIManager), "HandleEscape")]
+    [HarmonyPriority(Priority.First)]
     public static class Patch_CustomUIManager_HandleEscape
     {
         private static readonly FieldInfo? WindowOrderField = AccessTools.Field(typeof(CustomUIManager), "windowOrder");
@@ -101,7 +485,7 @@ namespace ProbablyUnifiedHotkeys
             var bridge = OptionUiHost.Active;
             if (bridge != null)
             {
-                if (bridge.IsCapturingAnyKey || bridge.IsSuppressingEscapeAfterCapture)
+                if (bridge.IsCapturingModHotkey || bridge.IsSuppressingEscapeAfterCapture)
                 {
                     return false;
                 }
@@ -111,6 +495,63 @@ namespace ProbablyUnifiedHotkeys
                     bridge.ReleaseSearchInputFocus();
                     bridge.MarkEscapeConsumed();
                     return false;
+                }
+
+                if (bridge.IsStandaloneModWindowOpen && KeyBindHelper.GetBackDown())
+                {
+                    var windowOrder = WindowOrderField?.GetValue(__instance) as List<CustomUIWindow>;
+                    CustomUIWindow? topWin = null;
+                    if (windowOrder != null)
+                    {
+                        for (int i = windowOrder.Count - 1; i >= 0; i--)
+                        {
+                            var win = windowOrder[i];
+                            if (win != null && win.IsAlive && win.IsVisible)
+                            {
+                                topWin = win;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (topWin != null && topWin == bridge.UnsavedConfirmWindow)
+                    {
+                        bridge.MarkEscapeConsumed();
+                        return true;
+                    }
+
+                    if (topWin != null && topWin == bridge.CurrentWindow)
+                    {
+                        bridge.MarkEscapeConsumed();
+                        if (bridge.HasUnsavedChanges())
+                        {
+                            if (ModFeatureConfig.EnableUnsavedConfirmDialog)
+                            {
+                                bridge.PromptUnsavedChangesBeforeClosing();
+                                return false;
+                            }
+                        }
+                        bridge.DiscardUnsavedChangesOnDirectClose();
+                        topWin.Close();
+                        return false;
+                    }
+                }
+
+                if (!bridge.IsEnhancedWindowOpen && bridge.IsVanillaStandaloneWindowOpen && KeyBindHelper.GetBackDown())
+                {
+                    if (bridge.HasVanillaStandaloneUnsavedChanges())
+                    {
+                        bridge.MarkEscapeConsumed();
+                        if (ModFeatureConfig.EnableUnsavedConfirmDialog)
+                        {
+                            bridge.PromptVanillaStandaloneUnsavedChanges();
+                            return false;
+                        }
+                        else
+                        {
+                            bridge.DiscardVanillaStandaloneUnsavedChanges();
+                        }
+                    }
                 }
 
                 if (bridge.IsEnhancedWindowOpen && !bridge.IsExplicitWindowClosing && KeyBindHelper.GetBackDown())
@@ -138,9 +579,16 @@ namespace ProbablyUnifiedHotkeys
                         {
                             if (bridge.HasUnsavedChanges())
                             {
-                                bridge.MarkEscapeConsumed();
-                                bridge.PromptUnsavedChangesBeforeClosing();
-                                return false;
+                                if (ModFeatureConfig.EnableUnsavedConfirmDialog)
+                                {
+                                    bridge.MarkEscapeConsumed();
+                                    bridge.PromptUnsavedChangesBeforeClosing();
+                                    return false;
+                                }
+                                else
+                                {
+                                    bridge.DiscardUnsavedChangesOnDirectClose();
+                                }
                             }
                         }
                     }
@@ -160,7 +608,7 @@ namespace ProbablyUnifiedHotkeys
         public static bool Prefix()
         {
             var bridge = OptionUiHost.Active;
-            if (bridge != null && (bridge.IsEnhancedWindowOpen || bridge.IsCapturingAnyKey))
+            if (bridge != null && (bridge.IsEnhancedWindowOpen || bridge.IsStandaloneModWindowOpen || bridge.IsCapturingModHotkey))
             {
                 return false;
             }
@@ -324,6 +772,7 @@ namespace ProbablyUnifiedHotkeys
                     __result != null)
                 {
                     ModConfigUiHelper.ApplyWindowFonts(__result);
+                    OptionUiHost.Active?.OnModConfigWindowOpened(__result, mod);
                 }
             }
             catch (Exception ex)
@@ -370,6 +819,13 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
 
+            if (!ModFeatureConfig.AllowConflictingKeys &&
+                (ComboKeyStore.IsSecondaryConflictingHotkeySuppressed(id) ||
+                 ComboKeyStore.IsSecondaryConflictingHotkeySuppressed("vanilla." + id)))
+            {
+                return false;
+            }
+
             if (ComboKeyStore.IsExplicitlyUnbound(id) ||
                 ComboKeyStore.IsExplicitlyUnbound("vanilla." + id) ||
                 ComboKeyStore.IsExplicitlyUnbound("key_" + id) ||
@@ -407,6 +863,12 @@ namespace ProbablyUnifiedHotkeys
 
         internal static bool TryPollMouseButtons(out KeyCode pressed)
         {
+            if (!ModFeatureConfig.EnableMouseButtonRebind)
+            {
+                pressed = KeyCode.None;
+                return false;
+            }
+
             // Mouse1 (Right Click) -> KeyCode.Mouse1
             if (ComboKeyStore.IsKeyDownRaw(KeyCode.Mouse1))
             {
@@ -456,7 +918,7 @@ namespace ProbablyUnifiedHotkeys
             }
 
             // 优先轮询鼠标右键、中键与侧键（Mouse1 ~ Mouse6），支持直接录制绑定
-            if (KeyBindRuntimeHelper.TryPollMouseButtons(out KeyCode mouseBtn))
+            if (ModFeatureConfig.EnableMouseButtonRebind && KeyBindRuntimeHelper.TryPollMouseButtons(out KeyCode mouseBtn))
             {
                 key = mouseBtn;
                 __result = KeyBindHelper.CaptureResult.Key;
@@ -470,6 +932,13 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
 
+            // 若关闭鼠标按键改键，单击鼠标右键也视为取消录入
+            if (!ModFeatureConfig.EnableMouseButtonRebind && Input.GetMouseButtonDown(1))
+            {
+                __result = KeyBindHelper.CaptureResult.None;
+                return false;
+            }
+
             if (!Input.anyKeyDown)
             {
                 return true;
@@ -478,9 +947,18 @@ namespace ProbablyUnifiedHotkeys
             if (Input.GetKeyDown(KeyCode.Escape))
             {
                 ConsumedEscapeFrameField?.SetValue(null, Time.frameCount);
-                key = KeyCode.None;
-                __result = KeyBindHelper.CaptureResult.Key;
-                return false;
+                if (ModFeatureConfig.EnableEmptyKeyUnbind)
+                {
+                    key = KeyCode.None;
+                    __result = KeyBindHelper.CaptureResult.Key;
+                    return false;
+                }
+                else
+                {
+                    // 关闭空键解绑时：按 Esc 恢复原版行为——取消录入并保留原按键（仍吸收缓冲）
+                    __result = KeyBindHelper.CaptureResult.None;
+                    return false;
+                }
             }
 
             if (Input.GetKeyDown(KeyCode.Backspace))
@@ -593,10 +1071,14 @@ namespace ProbablyUnifiedHotkeys
                 return false;
             }
             var bridge = OptionUiHost.Active;
-            if (bridge != null && bridge.IsEnhancedWindowOpen)
+            if (bridge != null && (bridge.IsEnhancedWindowOpen || bridge.IsStandaloneModWindowOpen))
             {
-                __result = null;
-                return false;
+                // 若允许冲突按键同时生效，放行原版查重；若关闭冲突同时生效，由原版逻辑拦截并提示冲突
+                if (ModFeatureConfig.AllowConflictingKeys)
+                {
+                    __result = null;
+                    return false;
+                }
             }
             return true;
         }
@@ -643,6 +1125,30 @@ namespace ProbablyUnifiedHotkeys
                 ModLogger.Warn($"[Patch_GameOptionUIManager_StartCapture] Error routing vanilla key capture: {ex.Message}");
             }
             return true;
+        }
+    }
+
+    /// <summary>
+    /// 当游戏存档完成加载进入运行时（ModHook.FireOnGameLoadedLate）时，
+    /// 若主菜单阶段曾因第三方模组延迟初始化产生降级条目，且当前选项界面未处于开启状态，
+    /// 触发缓存失效重热重扫，实现无感热自愈（如物品堆叠增强等模组）。
+    /// </summary>
+    [HarmonyPatch(typeof(ModHook), "FireOnGameLoadedLate")]
+    public static class Patch_ModHook_FireOnGameLoadedLate
+    {
+        public static void Postfix()
+        {
+            try
+            {
+                if (ModCatalogCache.HasDegradedEntries && !(OptionUiHost.Active?.IsEnhancedWindowOpen ?? false))
+                {
+                    ModCatalogCache.Invalidate();
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[Patch_ModHook_FireOnGameLoadedLate] Error checking degraded entries: {ex.Message}");
+            }
         }
     }
 }
